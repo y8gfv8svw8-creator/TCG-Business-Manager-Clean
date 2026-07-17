@@ -1,0 +1,49 @@
+name: Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - windows-installer
+    paths:
+      - "desktop/**"
+      - ".github/workflows/windows-installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-installer:
+    name: Windows Setup erstellen
+    runs-on: windows-latest
+
+    steps:
+      - name: Quellcode auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Abhängigkeiten installieren
+        working-directory: desktop
+        run: npm ci
+
+      - name: Programmcode prüfen
+        working-directory: desktop
+        run: npm run check
+
+      - name: Windows-Installer bauen
+        working-directory: desktop
+        run: npm run dist:win
+
+      - name: Installer bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: TCG-Business-Manager-Setup-5.1.0
+          path: desktop/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -5,7 +5,7 @@ title TCG Business Manager - Installation
 cd /d "%~dp0"
 
 echo ================================================
-echo TCG Business Manager Foundation 5.0.2
+echo TCG Business Manager Market History 5.1.0
 echo Installation wird vorbereitet...
 echo ================================================
 echo.

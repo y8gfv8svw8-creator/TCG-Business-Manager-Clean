@@ -326,3 +326,22 @@ dialog::backdrop { background: rgba(16, 24, 40, .48); }
 /* 4.4.4 – konservative Kalkulation und Verlustwarnung */
 .cm-result-metric.cm-metric-critical{border-color:#e9aaaa;background:#fff4f4;box-shadow:inset 0 0 0 1px rgba(155,37,37,.04)}
 .cm-result-metric.cm-metric-critical span,.cm-result-metric.cm-metric-critical small{color:#8d3434}
+
+
+/* Market History 5.1.0 */
+.cm-history-overview-panel{margin-bottom:18px}
+.cm-history-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
+.cm-history-controls label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.cm-history-controls select{min-width:130px}
+.cm-history-overview-status{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);margin-bottom:12px}
+.cm-history-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.cm-history-summary-grid>div{border:1px solid var(--border);border-radius:10px;background:var(--surface-2);padding:10px 12px}
+.cm-history-summary-grid span{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+.cm-history-summary-grid strong{font-size:15px}
+.cm-movers-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.cm-movers-grid h3{margin:0 0 8px}
+.cm-movers-table{min-width:640px;font-size:12px}
+.cm-movers-table td{vertical-align:top}
+.cm-movers-table small{color:var(--muted)}
+.cm-history-footnote{margin:14px 0 0;line-height:1.45}
+@media(max-width:1100px){.cm-movers-grid{grid-template-columns:1fr}}

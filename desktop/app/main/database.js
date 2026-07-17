@@ -2,7 +2,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 function isoNow() {
   return new Date().toISOString();
@@ -14,6 +14,18 @@ function dateStamp(value = new Date()) {
 
 function ensureDirectory(directoryPath) {
   fs.mkdirSync(directoryPath, { recursive: true });
+}
+
+function boundedInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function normalizedProductId(value) {
+  const productId = String(value ?? '').trim();
+  if (!/^\d+$/.test(productId)) throw new TypeError('Ungültige Cardmarket-Produkt-ID.');
+  return productId;
 }
 
 class TcgDatabase {
@@ -38,6 +50,7 @@ class TcgDatabase {
 
     const schema = fs.readFileSync(this.schemaPath, 'utf8');
     this.db.exec(schema);
+    this.ensureSnapshotSummaries();
 
     this.db.prepare(`
       INSERT INTO schema_version (version, applied_at)
@@ -52,6 +65,38 @@ class TcgDatabase {
     if (!this.db) return;
     this.db.close();
     this.db = null;
+  }
+
+  ensureSnapshotSummaries() {
+    const expected = Number(this.db.prepare(`
+      SELECT COUNT(DISTINCT captured_date) AS count FROM market_prices
+    `).get()?.count || 0);
+    const existing = Number(this.db.prepare(`
+      SELECT COUNT(*) AS count FROM market_snapshot_summary
+    `).get()?.count || 0);
+    if (expected === existing) return;
+
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      this.db.exec('DELETE FROM market_snapshot_summary;');
+      this.db.exec(`
+        INSERT INTO market_snapshot_summary (
+          captured_date, row_count, source_id, first_imported_at, updated_at
+        )
+        SELECT
+          captured_date,
+          COUNT(*),
+          MAX(source_id),
+          MIN(imported_at),
+          MAX(imported_at)
+        FROM market_prices
+        GROUP BY captured_date
+      `);
+      this.db.exec('COMMIT;');
+    } catch (error) {
+      this.db.exec('ROLLBACK;');
+      throw error;
+    }
   }
 
   getStatus() {
@@ -285,7 +330,203 @@ class TcgDatabase {
       throw error;
     }
 
-    return { written, snapshotDate: normalizedDate };
+    const snapshotDates = [...new Set(rows
+      .map(row => String(row?.date || normalizedDate))
+      .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))];
+    this.updateSnapshotSummaries(snapshotDates, sourceId, importTime);
+
+    return { written, snapshotDate: normalizedDate, snapshotDates };
+  }
+
+  updateSnapshotSummaries(snapshotDates = [], sourceId = 'cardmarket_price_guide', importedAt = isoNow()) {
+    this.open();
+    const countStatement = this.db.prepare(`
+      SELECT COUNT(*) AS row_count
+      FROM market_prices
+      WHERE captured_date = ?
+    `);
+    const upsertStatement = this.db.prepare(`
+      INSERT INTO market_snapshot_summary (
+        captured_date, row_count, source_id, first_imported_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(captured_date) DO UPDATE SET
+        row_count = excluded.row_count,
+        source_id = excluded.source_id,
+        updated_at = excluded.updated_at
+    `);
+
+    for (const snapshotDate of snapshotDates) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(snapshotDate))) continue;
+      const count = Number(countStatement.get(snapshotDate)?.row_count || 0);
+      upsertStatement.run(snapshotDate, count, String(sourceId || ''), importedAt, importedAt);
+    }
+  }
+
+  getMarketHistory({ productId, limit = 400 } = {}) {
+    this.open();
+    const id = normalizedProductId(productId);
+    const safeLimit = boundedInteger(limit, 1, 2000, 400);
+    const rows = this.db.prepare(`
+      SELECT
+        captured_date AS date,
+        category_id AS categoryId,
+        avg_price AS avg,
+        low_price AS low,
+        trend_price AS trend,
+        avg_1 AS avg1,
+        avg_7 AS avg7,
+        avg_30 AS avg30,
+        avg_foil AS avgFoil,
+        low_foil AS lowFoil,
+        trend_foil AS trendFoil,
+        avg_1_foil AS avg1Foil,
+        avg_7_foil AS avg7Foil,
+        avg_30_foil AS avg30Foil,
+        source_id AS sourceId,
+        data_quality AS dataQuality,
+        collected_at AS collectedAt,
+        imported_at AS importedAt
+      FROM market_prices
+      WHERE product_id = ?
+      ORDER BY captured_date DESC
+      LIMIT ?
+    `).all(id, safeLimit);
+    return rows.reverse();
+  }
+
+  getSnapshotDates({ limit = 365 } = {}) {
+    this.open();
+    const safeLimit = boundedInteger(limit, 1, 2000, 365);
+    return this.db.prepare(`
+      SELECT
+        captured_date AS date,
+        row_count AS rowCount,
+        updated_at AS importedAt
+      FROM market_snapshot_summary
+      ORDER BY captured_date DESC
+      LIMIT ?
+    `).all(safeLimit);
+  }
+
+  getMarketOverview({ days = 30, limit = 12, minTrend = 0.05 } = {}) {
+    this.open();
+    const requestedDays = boundedInteger(days, 1, 3650, 30);
+    const safeLimit = boundedInteger(limit, 1, 50, 12);
+    const safeMinTrend = Number.isFinite(Number(minTrend)) ? Math.max(0, Number(minTrend)) : 0.05;
+
+    const summary = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(row_count), 0) AS totalPriceRows,
+        COUNT(*) AS snapshotCount,
+        MIN(captured_date) AS firstSnapshotDate,
+        MAX(captured_date) AS latestSnapshotDate
+      FROM market_snapshot_summary
+    `).get();
+    const latestDate = String(summary?.latestSnapshotDate || '');
+    const firstDate = String(summary?.firstSnapshotDate || '');
+    if (!latestDate) {
+      return {
+        requestedDays, actualDays: 0, latestDate: '', targetDate: '', firstDate: '',
+        totalPriceRows: 0, snapshotCount: 0, latestProductCount: 0, comparedCount: 0,
+        gainers: [], losers: []
+      };
+    }
+
+    const targetModifier = `-${requestedDays} days`;
+    const targetRow = this.db.prepare(`
+      SELECT MAX(captured_date) AS date
+      FROM market_prices
+      WHERE captured_date <= date(?, ?)
+    `).get(latestDate, targetModifier);
+    const targetDate = String(targetRow?.date || '');
+    const latestProductCount = Number(this.db.prepare(`
+      SELECT row_count AS count FROM market_snapshot_summary WHERE captured_date = ?
+    `).get(latestDate)?.count || 0);
+
+    if (!targetDate || targetDate === latestDate) {
+      return {
+        requestedDays, actualDays: 0, latestDate, targetDate: '', firstDate,
+        totalPriceRows: Number(summary?.totalPriceRows || 0),
+        snapshotCount: Number(summary?.snapshotCount || 0),
+        latestProductCount, comparedCount: 0, gainers: [], losers: []
+      };
+    }
+
+    const commonSelect = `
+      SELECT
+        current.product_id AS productId,
+        COALESCE(NULLIF(products.name_de, ''), NULLIF(products.name_en, ''), NULLIF(products.official_name, ''), 'CM ' || current.product_id) AS name,
+        products.name_en AS englishName,
+        products.set_name AS setName,
+        products.set_code AS setCode,
+        products.rarity AS rarity,
+        current.trend_price AS currentTrend,
+        previous.trend_price AS previousTrend,
+        current.low_price AS currentLow,
+        current.avg_7 AS currentAvg7,
+        current.avg_30 AS currentAvg30,
+        current.trend_price - previous.trend_price AS changeValue,
+        ((current.trend_price - previous.trend_price) / previous.trend_price) * 100.0 AS changePercent
+      FROM market_prices current
+      JOIN market_prices previous
+        ON previous.product_id = current.product_id
+       AND previous.captured_date = ?
+      LEFT JOIN products ON products.product_id = current.product_id
+      WHERE current.captured_date = ?
+        AND current.trend_price IS NOT NULL
+        AND previous.trend_price IS NOT NULL
+        AND previous.trend_price >= ?
+        AND current.trend_price >= ?
+    `;
+    const parameters = [targetDate, latestDate, safeMinTrend, safeMinTrend];
+    const gainers = this.db.prepare(`${commonSelect}
+      AND current.trend_price > previous.trend_price
+      ORDER BY changePercent DESC, changeValue DESC
+      LIMIT ?
+    `).all(...parameters, safeLimit);
+    const losers = this.db.prepare(`${commonSelect}
+      AND current.trend_price < previous.trend_price
+      ORDER BY changePercent ASC, changeValue ASC
+      LIMIT ?
+    `).all(...parameters, safeLimit);
+    const comparedCount = Number(this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM market_prices current
+      JOIN market_prices previous
+        ON previous.product_id = current.product_id
+       AND previous.captured_date = ?
+      WHERE current.captured_date = ?
+        AND current.trend_price IS NOT NULL
+        AND previous.trend_price IS NOT NULL
+        AND previous.trend_price >= ?
+        AND current.trend_price >= ?
+    `).get(...parameters)?.count || 0);
+
+    const actualDays = Math.max(0, Math.round((Date.parse(`${latestDate}T12:00:00Z`) - Date.parse(`${targetDate}T12:00:00Z`)) / 86400000));
+    return {
+      requestedDays, actualDays, latestDate, targetDate, firstDate,
+      totalPriceRows: Number(summary?.totalPriceRows || 0),
+      snapshotCount: Number(summary?.snapshotCount || 0),
+      latestProductCount, comparedCount, gainers, losers
+    };
+  }
+
+  clearMarketData() {
+    this.open();
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      this.db.exec('DELETE FROM analysis_metrics;');
+      this.db.exec('DELETE FROM market_liquidity;');
+      this.db.exec('DELETE FROM market_snapshot_summary;');
+      this.db.exec('DELETE FROM market_prices;');
+      this.db.exec('DELETE FROM products;');
+      this.db.exec('DELETE FROM import_runs;');
+      this.db.exec('COMMIT;');
+    } catch (error) {
+      this.db.exec('ROLLBACK;');
+      throw error;
+    }
+    return { ok: true };
   }
 
   recordImportRun(run = {}) {

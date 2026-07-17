@@ -1,0 +1,11 @@
+TCG Business Manager 5.1.0 – Market History
+
+- SQLite ist die dauerhafte Quelle für historische Preisverläufe.
+- Neue historische Marktübersicht mit wählbaren Vergleichszeiträumen.
+- Top-Gewinner und Top-Verlierer aus echten importierten Tagesständen.
+- Produktdetails zeigen zusätzlich einen 90-Tage-Vergleich.
+- Neue IPC-Abfragen für Preishistorie, Snapshot-Daten und Marktübersicht.
+- Snapshot-Zusammenfassungen in der Datenbank ergänzt.
+- Cardmarket-Backup-Wiederherstellung synchronisiert nun auch SQLite.
+- Löschen der Cardmarket-Daten bereinigt jetzt IndexedDB und SQLite.
+- Versionsanzeigen auf 5.1.0 aktualisiert.

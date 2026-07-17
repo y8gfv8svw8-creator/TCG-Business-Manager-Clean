@@ -1,4 +1,4 @@
-/* TCG Business Manager 4.5.0 – Market Intelligence Foundation
+/* TCG Business Manager 5.1.0 – Market History
  * Große Cardmarket-Datenmengen werden bewusst in IndexedDB gespeichert.
  * Dadurch bleibt der normale Warenwirtschafts-Stand in localStorage klein und stabil.
  */
@@ -36,6 +36,7 @@
   let cmLatestByIdCache = null;
   let cmSearchTimer = null;
   let cmRenderToken = 0;
+  let cmHistoryOverviewToken = 0;
   let cmOpportunityCache = {key:"", rows:[]};
   let cmLastRenderedView = "";
   const YGOPRO_EN_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php";
@@ -998,6 +999,14 @@
   }
 
   async function cmGetHistory(productId) {
+    if (window.desktopApp?.getMarketHistory) {
+      try {
+        const rows = await window.desktopApp.getMarketHistory({productId:String(productId),limit:1200});
+        if (Array.isArray(rows) && rows.length) return rows;
+      } catch (error) {
+        console.error("SQLite-Preishistorie konnte nicht gelesen werden:", error);
+      }
+    }
     const db = await cmOpenDb();
     const tx = db.transaction("priceHistory", "readonly");
     const index = tx.objectStore("priceHistory").index("productId");
@@ -1050,6 +1059,7 @@
       const delta1 = cmHistoryDeltaInfo(history,1,merged.trend,merged.dailyChange,merged.previousDate);
       const delta7 = cmHistoryDeltaInfo(history,7,merged.trend);
       const delta30 = cmHistoryDeltaInfo(history,30,merged.trend);
+      const delta90 = cmHistoryDeltaInfo(history,90,merged.trend);
       const calc = cmMarketCalculation(merged, own, {delta1:delta1.value,delta7:delta7.value,delta30:delta30.value});
       const rows = [...history].reverse().slice(0,40).map(row => `<tr><td>${fmtDate(row.date)}</td><td>${row.low !== null ? money(row.low) : "-"}</td><td>${row.trend !== null ? money(row.trend) : "-"}</td><td>${row.avg1 !== null ? money(row.avg1) : "-"}</td><td>${row.avg7 !== null ? money(row.avg7) : "-"}</td><td>${row.avg30 !== null ? money(row.avg30) : "-"}</td></tr>`).join("");
       panel.innerHTML = `<div class="panel-head"><div><h2>${escapeHtml(cmDisplayName(product))}</h2>${cmEnglishName(product) && cmNormalize(cmEnglishName(product)) !== cmNormalize(cmDisplayName(product)) ? `<p class="cm-english-name">Englisch: ${escapeHtml(cmEnglishName(product))}</p>` : ""}<p class="muted">${cmProductSubtitle(product)}</p>${cmDataQualityBadges(product,calc)}</div><div class="row-actions"><a class="secondary button-link" href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer">Cardmarket öffnen ↗</a><button class="primary" data-cm-add-watch="${escapeHtml(productId)}">Zur Watchlist</button></div></div>
@@ -1059,6 +1069,7 @@
           <div><span>Δ 1 Tag</span><strong>${delta1.value===null?"–":cmSignedMoney(delta1.value)}</strong><small>${delta1.sourceDate?`gegen ${fmtDate(delta1.sourceDate)}`:escapeHtml(delta1.reason||"")}</small></div>
           <div><span>Δ 7 Tage</span><strong>${delta7.value===null?"–":cmSignedMoney(delta7.value)}</strong><small>${delta7.sourceDate?`gegen ${fmtDate(delta7.sourceDate)}`:escapeHtml(delta7.reason||"")}</small></div>
           <div><span>Δ 30 Tage</span><strong>${delta30.value===null?"–":cmSignedMoney(delta30.value)}</strong><small>${delta30.sourceDate?`gegen ${fmtDate(delta30.sourceDate)}`:escapeHtml(delta30.reason||"")}</small></div>
+          <div><span>Δ 90 Tage</span><strong>${delta90.value===null?"–":cmSignedMoney(delta90.value)}</strong><small>${delta90.sourceDate?`gegen ${fmtDate(delta90.sourceDate)}`:escapeHtml(delta90.reason||"")}</small></div>
           <div><span>Empfohlener VK</span><strong>${calc.recommendedSell ? money(calc.recommendedSell) : "-"}</strong></div>
           <div><span>Empfohlener Max-EK</span><strong>${cmAnalysisMoney(calc.maxBuy)}</strong></div>
           <div><span>Gewinn bei Cardmarket Low</span><strong class="${calc.profitAtMarket>=0?"money-positive":"money-negative"}">${calc.marketBuy ? money(calc.profitAtMarket) : "-"}</strong></div>
@@ -1304,12 +1315,68 @@
     return cmApplyGermanNames(await englishResponse.json(),await germanResponse.json(),"YGOPRODeck API v7 (DE/EN)");
   }
 
+  function cmSignedPercent(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "–";
+    return `${number > 0 ? "+" : ""}${number.toLocaleString("de-DE",{minimumFractionDigits:1,maximumFractionDigits:1})} %`;
+  }
+
+  function cmMoverTable(rows, kind="gain") {
+    if (!Array.isArray(rows) || !rows.length) return `<div class="empty">Für diesen Zeitraum gibt es noch keine vergleichbaren Tagesstände.</div>`;
+    const body = rows.map(row => {
+      const productId=String(row.productId||"");
+      const subtitle=[row.setCode||row.setName||"Set unbekannt",row.rarity||"Seltenheit unbekannt",`CM ${productId}`].filter(Boolean).join(" · ");
+      const className=Number(row.changeValue||0)>=0?"money-positive":"money-negative";
+      return `<tr><td><strong>${escapeHtml(row.name||`CM ${productId}`)}</strong><br><small>${escapeHtml(subtitle)}</small></td><td>${money(row.previousTrend)}</td><td>${money(row.currentTrend)}</td><td class="${className}"><strong>${cmSignedMoney(row.changeValue)}</strong><br><small>${cmSignedPercent(row.changePercent)}</small></td><td><button class="icon-button" data-cm-details="${escapeHtml(productId)}">Details</button></td></tr>`;
+    }).join("");
+    return `<table class="cm-movers-table"><thead><tr><th>Karte</th><th>Vorher</th><th>Aktuell</th><th>Veränderung</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  async function cmRenderSqliteHistoryOverview() {
+    const status=document.getElementById("cmHistoryOverviewStatus");
+    const summary=document.getElementById("cmHistoryOverviewSummary");
+    const gainers=document.getElementById("cmHistoryGainers");
+    const losers=document.getElementById("cmHistoryLosers");
+    if(!status||!summary||!gainers||!losers)return;
+    const token=++cmHistoryOverviewToken;
+    if(!window.desktopApp?.getMarketOverview){
+      status.textContent="Historische SQLite-Auswertung ist nur in der Desktop-App verfügbar.";
+      return;
+    }
+    const days=Number(document.getElementById("cmHistoryPeriod")?.value||30);
+    status.textContent="Historische Tagesstände werden verglichen …";
+    try{
+      const result=await window.desktopApp.getMarketOverview({days,limit:12,minTrend:0.05});
+      if(token!==cmHistoryOverviewToken)return;
+      const firstDate=result.firstDate?fmtDate(result.firstDate):"–";
+      const targetDate=result.targetDate?fmtDate(result.targetDate):"–";
+      const latestDate=result.latestDate?fmtDate(result.latestDate):"–";
+      document.getElementById("cmHistoryFirstDate").textContent=firstDate;
+      document.getElementById("cmSqlitePriceRows").textContent=Number(result.totalPriceRows||0).toLocaleString("de-DE");
+      document.getElementById("cmHistoryCoverageStatus").textContent=result.snapshotCount?`${Number(result.snapshotCount).toLocaleString("de-DE")} Tagesstände bis ${latestDate}`:"Noch keine Tagesstände";
+      summary.innerHTML=`<div><span>Erster Preisstand</span><strong>${firstDate}</strong></div><div><span>Vergleichstag</span><strong>${targetDate}</strong></div><div><span>Aktueller Preisstand</span><strong>${latestDate}</strong></div><div><span>Tatsächlicher Abstand</span><strong>${Number(result.actualDays||0)} Tage</strong></div><div><span>Verglichene Varianten</span><strong>${Number(result.comparedCount||0).toLocaleString("de-DE")}</strong></div><div><span>Varianten im letzten Stand</span><strong>${Number(result.latestProductCount||0).toLocaleString("de-DE")}</strong></div>`;
+      if(!result.targetDate){
+        status.textContent=`Für einen ${days}-Tage-Vergleich fehlen noch ältere Preisstände. Tägliche Importe sammeln die benötigte Historie automatisch.`;
+      }else{
+        status.textContent=`Trendpreise vom ${targetDate} werden mit ${latestDate} verglichen. Tatsächlicher Abstand: ${Number(result.actualDays||0)} Tage.`;
+      }
+      gainers.innerHTML=cmMoverTable(result.gainers,"gain");
+      losers.innerHTML=cmMoverTable(result.losers,"loss");
+    }catch(error){
+      if(token!==cmHistoryOverviewToken)return;
+      status.textContent=`SQLite-Auswertung konnte nicht geladen werden: ${error.message}`;
+      summary.innerHTML="";
+      gainers.innerHTML='<div class="empty money-negative">Auswertung nicht verfügbar.</div>';
+      losers.innerHTML='<div class="empty money-negative">Auswertung nicht verfügbar.</div>';
+    }
+  }
+
   function renderCardmarketDataCenter() {
     const meta = {...CM_META_DEFAULTS,...(state.cardmarket || {})};
     const setText = (id,value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
     setText("cmProductCount", Number(meta.productCount || 0).toLocaleString("de-DE"));
     setText("cmLatestPriceCount", Number(meta.priceRowCount || 0).toLocaleString("de-DE"));
-    setText("cmSnapshotCount", Number(meta.snapshotDates?.length || 0).toLocaleString("de-DE"));
+    setText("cmSnapshotCount", Number(meta.sqliteSnapshotCount || meta.snapshotDates?.length || 0).toLocaleString("de-DE"));
     setText("cmLatestPriceDate", meta.priceDate ? fmtDate(meta.priceDate) : "Noch kein Import");
     setText("cmGermanNameCount", Number(meta.germanNameCount || 0).toLocaleString("de-DE"));
     setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")}${Number(meta.setDetailCount||0)>0?` · ${Number(meta.setDetailCount).toLocaleString("de-DE")} eindeutige Setdetails`:""}` : "Noch nicht geladen");
@@ -1324,16 +1391,33 @@
         const out=document.getElementById("cmOpportunityList");
         if(out) out.innerHTML=`<div class="empty money-negative">${escapeHtml(error.message)}</div>`;
       });
+      cmRenderSqliteHistoryOverview();
     }
   }
 
   async function cmRefreshMetadataFromDb() {
     try {
-      const [products, latest, history] = await Promise.all([cmCount("products"),cmCount("latestPrices"),cmCount("priceHistory")]);
+      const [products, latest, history, sqliteStatus, snapshotRows] = await Promise.all([
+        cmCount("products"),
+        cmCount("latestPrices"),
+        cmCount("priceHistory"),
+        window.desktopApp?.getDatabaseStatus ? window.desktopApp.getDatabaseStatus() : null,
+        window.desktopApp?.getSnapshotDates ? window.desktopApp.getSnapshotDates({limit:365}) : []
+      ]);
       let changed = false;
       if (products !== Number(state.cardmarket.productCount || 0)) { state.cardmarket.productCount=products; changed=true; }
       if (latest && !state.cardmarket.priceRowCount) { state.cardmarket.priceRowCount=latest; changed=true; }
       if (history !== Number(state.cardmarket.historyRowCount || 0)) { state.cardmarket.historyRowCount=history; changed=true; }
+      if (Array.isArray(snapshotRows) && snapshotRows.length) {
+        const dates=snapshotRows.map(row=>String(row.date||"")).filter(Boolean);
+        if (JSON.stringify(dates)!==JSON.stringify(state.cardmarket.snapshotDates||[])) { state.cardmarket.snapshotDates=dates; changed=true; }
+        const latestDate=dates[0]||"";
+        if (latestDate && latestDate!==state.cardmarket.priceDate) { state.cardmarket.priceDate=latestDate; changed=true; }
+      }
+      if (sqliteStatus?.ready) {
+        state.cardmarket.sqlitePriceRowCount=Number(sqliteStatus.marketPriceCount||0);
+        state.cardmarket.sqliteSnapshotCount=Number(sqliteStatus.snapshotCount||0);
+      }
       if (changed) saveState();
       renderCardmarketDataCenter();
     } catch (error) {
@@ -1358,9 +1442,12 @@
     if (!cmIsBackup(payload)) throw new Error("Keine gültige Cardmarket-Datensicherung erkannt.");
     cmSetProgress("<strong>Bestehende Cardmarket-Daten werden ersetzt …</strong>",5);
     await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory")]);
-    await cmWriteRows("products",payload.products,(done,total)=>cmSetProgress(`<strong>Produkte werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,5+done/Math.max(1,total)*35));
+    if(window.desktopApp?.clearMarketData) await window.desktopApp.clearMarketData();
+    await cmWriteRows("products",payload.products,(done,total)=>cmSetProgress(`<strong>Produkte werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,5+done/Math.max(1,total)*30));
     await cmWriteRows("latestPrices",payload.latestPrices || [],(done,total)=>cmSetProgress(`<strong>Aktuelle Preise werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,40+done/Math.max(1,total)*20));
-    await cmWriteRows("priceHistory",payload.priceHistory,(done,total)=>cmSetProgress(`<strong>Preishistorie wird wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,60+done/Math.max(1,total)*40));
+    await cmWriteRows("priceHistory",payload.priceHistory,(done,total)=>cmSetProgress(`<strong>Preishistorie wird wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,55+done/Math.max(1,total)*25));
+    if(window.desktopApp?.upsertProducts) await cmSyncProductsToSqlite(payload.products,(done,total)=>cmSetProgress(`<strong>SQLite-Kartenstammdaten werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,80+done/Math.max(1,total)*8));
+    if(window.desktopApp?.upsertMarketPrices) await cmSyncPricesToSqlite(payload.priceHistory,String(payload.metadata?.priceDate||""),new Date().toISOString(),(done,total)=>cmSetProgress(`<strong>SQLite-Preishistorie wird wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,88+done/Math.max(1,total)*12));
     state.cardmarket={...CM_META_DEFAULTS,...(payload.metadata||{}),productCount:payload.products.length,priceRowCount:(payload.latestPrices||[]).length,historyRowCount:payload.priceHistory.length};
     state.imports.push({id:uid(),type:"cardmarketBackup",key:`cm-backup-${Date.now()}`,file:source,date:new Date().toISOString(),rows:payload.priceHistory.length,cards:payload.products.length});
     cmInvalidateCache();saveState();renderAll();
@@ -1371,6 +1458,7 @@
   async function cmClearAll(ask=true) {
     if (ask && !confirm("Produktkatalog und komplette Cardmarket-Preishistorie wirklich löschen? Warenwirtschaft, Bestand, Käufe und Verkäufe bleiben erhalten.")) return false;
     await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory")]);
+    if(window.desktopApp?.clearMarketData) await window.desktopApp.clearMarketData();
     state.cardmarket={...CM_META_DEFAULTS};
     state.imports=state.imports.filter(record=>!["catalog","prices","cardmarketBackup"].includes(record.type));
     cmInvalidateCache();
@@ -1463,6 +1551,8 @@
     document.getElementById("cmExportBackupBtn")?.addEventListener("click",()=>cmExportBackup().catch(error=>cmSetProgress(`<strong>Export fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error")));
   document.getElementById("cmClearDataBtn")?.addEventListener("click",()=>cmClearAll(true).catch(error=>alert(error.message)));
   document.getElementById("cmRefreshOpportunitiesBtn")?.addEventListener("click",()=>{cmOpportunityCache={key:"",rows:[]};cmRenderOpportunities();});
+  document.getElementById("cmHistoryPeriod")?.addEventListener("change",()=>cmRenderSqliteHistoryOverview());
+  document.getElementById("cmRefreshHistoryBtn")?.addEventListener("click",()=>cmRenderSqliteHistoryOverview());
 
   document.addEventListener("click",event=>{
     const details=event.target.closest("[data-cm-details]");

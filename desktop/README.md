@@ -1,4 +1,4 @@
-# TCG Business Manager – Foundation 5.0.2
+# TCG Business Manager – Market History 5.1.0
 
 Diese Version aktiviert die dauerhafte lokale SQLite-Datenbank.
 
@@ -18,3 +18,13 @@ Automatische Tagesbackups liegen unter:
 2. Danach `STARTEN.bat` öffnen.
 
 Beim ersten Start wird der vorhandene lokale Programmstand automatisch in SQLite übernommen. Künftige Änderungen werden weiterhin lokal gespeichert und zusätzlich sofort in SQLite geschrieben. Cardmarket-Produkt- und Preisimporte werden für die spätere Marktanalyse ebenfalls in SQLite abgelegt.
+
+
+## Neu in 5.1.0
+
+- Historische Preisabfragen lesen direkt aus SQLite.
+- Marktübersicht mit echten 7-/30-/90-/180-/365-Tage-Vergleichen.
+- Top-Anstiege und Top-Rückgänge mit absoluter und prozentualer Veränderung.
+- Cardmarket-Sicherungen werden beim Wiederherstellen auch in SQLite übernommen.
+- „Cardmarket-Daten löschen“ entfernt nun ebenfalls die SQLite-Marktdaten.
+- Tagesstand-Zusammenfassungen bereiten spätere Datenqualitäts- und Liquiditätsanalysen vor.

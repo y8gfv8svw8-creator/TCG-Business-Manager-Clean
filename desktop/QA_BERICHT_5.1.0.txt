@@ -1,0 +1,21 @@
+TCG BUSINESS MANAGER 5.1.0 – QA-BERICHT
+
+Durchgeführte Prüfungen:
+- Syntaxprüfung aller JavaScript-Hauptdateien: erfolgreich.
+- Neue SQLite-Schema-Version 3: erfolgreich erstellt.
+- Migration einer bestehenden Datenbankstruktur: Schema bleibt kompatibel.
+- Schreiben mehrerer historischer Tagesstände: erfolgreich.
+- Lesen der Produkthistorie aus SQLite: erfolgreich.
+- 30-Tage-Vergleich mit Gewinnern und Verlierern: erfolgreich.
+- Snapshot-Zusammenfassungen: erfolgreich.
+- Löschen ausschließlich der Cardmarket-Marktdaten: erfolgreich.
+
+Nicht in dieser Umgebung geprüft:
+- Visueller Endtest unter Windows mit dem echten Datenbestand.
+- Automatischer Online-Download des Cardmarket-Price-Guides.
+
+Empfohlener Anwender-Test:
+- App starten, Cardmarket-Datencenter öffnen, Datenbestand kontrollieren.
+- Einen vorhandenen Price Guide importieren.
+- App schließen und neu starten.
+- Prüfen, ob der Tagesstand und die Marktübersicht erhalten bleiben.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 5.0.2</title>
+  <title>TCG Business Manager 5.1.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Foundation 5.0.2 · SQLite</div>
+          <div class="brand-subtitle">Market History 5.1.0 · SQLite</div>
         </div>
       </div>
 
@@ -317,11 +317,13 @@
           <article class="metric-card"><span>Gespeicherte Tagesstände</span><strong id="cmSnapshotCount">0</strong><small>gleicher Tag wird aktualisiert statt dupliziert</small></article>
           <article class="metric-card"><span>Letzter Preisstand</span><strong id="cmLatestPriceDate">Noch kein Import</strong><small>Datum aus der Cardmarket-Datei</small></article>
           <article class="metric-card"><span>Deutsche Kartennamen</span><strong id="cmGermanNameCount">0</strong><small id="cmGermanNameStatus">Noch nicht geladen</small></article>
+          <article class="metric-card"><span>Historie seit</span><strong id="cmHistoryFirstDate">–</strong><small id="cmHistoryCoverageStatus">SQLite-Historie wird geprüft</small></article>
+          <article class="metric-card"><span>SQLite-Preiszeilen</span><strong id="cmSqlitePriceRows">0</strong><small>dauerhaft im Dokumente-Ordner gespeichert</small></article>
         </div>
 
         <article class="panel cm-import-panel">
           <div class="panel-head">
-            <div><h2>Cardmarket-Datenbank</h2><p class="muted">Produktkatalog und Price Guide werden über die Produkt-ID verbunden. Große Datenmengen liegen in IndexedDB und belasten nicht den normalen Warenwirtschafts-Stand.</p></div>
+            <div><h2>Cardmarket-Datenbank</h2><p class="muted">Produktkatalog und Price Guide werden über die Produkt-ID verbunden. SQLite ist der dauerhafte Analysespeicher; IndexedDB dient zusätzlich als schneller Oberflächen-Cache.</p></div>
           </div>
           <div class="cm-import-actions">
             <label class="primary file-label">Produktkatalog importieren<input id="cmProductCatalogInput" type="file" accept=".json" hidden /></label>
@@ -334,6 +336,32 @@
           <p class="muted">Erwartete Dateien: <strong>products_singles_3.json</strong> und <strong>price_guide_3.json</strong>. Über „Deutsche Kartendaten aktualisieren“ werden deutsche Namen sowie Set- und Seltenheitsdaten erneut abgeglichen. Setnamen werden nur bei einer ausreichend eindeutigen Zuordnung zur Cardmarket-Expansion-ID übernommen; unsichere Druckvarianten bleiben bewusst als fehlend markiert.</p>
           <div class="cm-progress"><div id="cmImportProgressBar"></div></div>
           <div id="cmImportStatus" class="cm-import-status">Bereit für den ersten Import.</div>
+        </article>
+
+
+        <article class="panel cm-history-overview-panel">
+          <div class="panel-head">
+            <div><h2>Historische Marktübersicht</h2><p class="muted">Vergleicht echte, lokal gespeicherte Tagesstände. Cardmarket-Ø-Werte werden hier nicht als historische Veränderung ausgegeben.</p></div>
+            <div class="cm-history-controls">
+              <label>Zeitraum
+                <select id="cmHistoryPeriod">
+                  <option value="7">7 Tage</option>
+                  <option value="30" selected>30 Tage</option>
+                  <option value="90">90 Tage</option>
+                  <option value="180">180 Tage</option>
+                  <option value="365">365 Tage</option>
+                </select>
+              </label>
+              <button id="cmRefreshHistoryBtn" class="secondary" type="button">Neu berechnen</button>
+            </div>
+          </div>
+          <div id="cmHistoryOverviewStatus" class="cm-history-overview-status muted">SQLite-Historie wird geladen …</div>
+          <div id="cmHistoryOverviewSummary" class="cm-history-summary-grid"></div>
+          <div class="cm-movers-grid">
+            <section><h3>Stärkste Anstiege</h3><div id="cmHistoryGainers" class="table-wrap"><div class="empty">Noch keine Vergleichsdaten</div></div></section>
+            <section><h3>Stärkste Rückgänge</h3><div id="cmHistoryLosers" class="table-wrap"><div class="empty">Noch keine Vergleichsdaten</div></div></section>
+          </div>
+          <p class="muted cm-history-footnote">Die Liste bewertet nur Trendpreis-Veränderungen zwischen zwei vorhandenen Importtagen. Niedrige Ausgangspreise können hohe Prozentwerte erzeugen und sind keine automatische Kaufempfehlung.</p>
         </article>
 
         <article class="panel cm-opportunities-panel">

@@ -1,4 +1,4 @@
-TCG BUSINESS MANAGER – FOUNDATION 5.0.2
+TCG BUSINESS MANAGER – MARKET HISTORY 5.1.0
 
 1. INSTALLIEREN.bat doppelt anklicken.
 2. Warten, bis die Installation erfolgreich beendet ist.

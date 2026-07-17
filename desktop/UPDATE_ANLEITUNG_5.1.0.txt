@@ -1,0 +1,26 @@
+TCG BUSINESS MANAGER 5.1.0 – UPDATE
+
+WICHTIG
+- Die bestehende SQLite-Datenbank unter Dokumente\TCG Business Manager bleibt erhalten.
+- Vor dem Austausch den Business Manager vollständig schließen.
+- Den bisherigen desktop-Ordner im GitHub-Projekt als Sicherung behalten oder committen.
+
+UPDATE IM GITHUB-PROJEKT
+1. Diese ZIP vollständig entpacken.
+2. Den Inhalt des bisherigen Ordners
+   C:\TCG Business Manager\TCG-Business-Manager-Clean\desktop
+   durch den Inhalt des neuen desktop-Ordners ersetzen.
+3. node_modules nicht kopieren und nicht in GitHub hochladen.
+4. INSTALLIEREN.bat starten. npm aktualisiert nur die Projektdateien und Abhängigkeiten.
+5. Danach STARTEN.bat starten.
+
+PRÜFUNG NACH DEM START
+1. Bestand und Versandmaterial müssen weiterhin vorhanden sein.
+2. Cardmarket-Datencenter öffnen.
+3. Dort erscheint der neue Bereich „Historische Marktübersicht“.
+4. Bei nur einem Tagesstand ist noch kein Vergleich möglich. Das ist korrekt.
+5. Nach mehreren täglichen Preisimporten können 7-/30-/90-Tage-Vergleiche berechnet werden.
+
+DATENSCHUTZ
+- Nicht in GitHub hochladen: *.sqlite, *.sqlite3, *.db, TCG_Warenwirtschaft_Backup_*.json.
+- Diese Dateien werden durch .gitignore geschützt.

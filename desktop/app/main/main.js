@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { TcgDatabase } = require('./database');
 
-const APP_TITLE = 'TCG Business Manager – Foundation 5.0.2';
+const APP_TITLE = 'TCG Business Manager – Market History 5.1.0';
 let database = null;
 let dataRoot = '';
 
@@ -41,6 +41,10 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-status', () => database.getStatus());
   ipcMain.handle('data:upsert-products', (_event, rows) => database.upsertProducts(rows));
   ipcMain.handle('data:upsert-market-prices', (_event, payload) => database.upsertMarketPrices(payload));
+  ipcMain.handle('data:get-market-history', (_event, payload) => database.getMarketHistory(payload));
+  ipcMain.handle('data:get-market-overview', (_event, payload) => database.getMarketOverview(payload));
+  ipcMain.handle('data:get-snapshot-dates', (_event, payload) => database.getSnapshotDates(payload));
+  ipcMain.handle('data:clear-market-data', () => database.clearMarketData());
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
 }
 

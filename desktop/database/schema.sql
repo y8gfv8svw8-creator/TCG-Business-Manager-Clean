@@ -81,6 +81,19 @@ ON market_prices(product_id, captured_date DESC);
 CREATE INDEX IF NOT EXISTS idx_market_prices_trend
 ON market_prices(captured_date, trend_price);
 
+-- Zusammenfassung je Preisstand. Dient der schnellen Anzeige von Historien-
+-- abdeckung und der späteren Qualitätskontrolle von Importen.
+CREATE TABLE IF NOT EXISTS market_snapshot_summary (
+  captured_date TEXT PRIMARY KEY,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  source_id TEXT,
+  first_imported_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_summary_updated
+ON market_snapshot_summary(updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS import_runs (
   run_id TEXT PRIMARY KEY,
   source TEXT NOT NULL,

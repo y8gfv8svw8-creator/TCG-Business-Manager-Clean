@@ -19,18 +19,22 @@ jobs:
 
     steps:
       - name: Quellcode auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Node.js einrichten
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      - name: npm-Version festlegen
+        working-directory: desktop
+        run: npm install --global npm@10.9.2
+
       - name: Abhängigkeiten installieren
         working-directory: desktop
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Programmcode prüfen
         working-directory: desktop

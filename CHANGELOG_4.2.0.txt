@@ -1,0 +1,12 @@
+TCG Business Manager 4.2.1
+
+- Geführter Versand mit einem „Weiter“-Button.
+- Offen → automatisch Bezahlt und direkt Kommissionieren.
+- Ware wird bei Zahlung reserviert.
+- Kommissionierliste mit Pflicht-Abhaken aller Positionen.
+- Verpackungsansicht mit Standardbrief, Kompaktbrief, Großbrief, Maxibrief und Warensendung.
+- Verpackung beenden setzt automatisch auf Versendet und bucht Material, Porto und Einnahme.
+- Abgeschlossen erst nach manueller Empfangsbestätigung.
+- Druckbare Lieferscheine und einfache Versandlabels.
+- Lager-Details pro Kartenposition: Gesamtbestand, Reserviert, Verfügbar und Bewegungsverlauf.
+- Neues internes Bewegungsjournal als Grundlage für spätere Cardmarket-Automatisierung.

@@ -1,0 +1,22 @@
+QUALITÄTSBERICHT – TCG BUSINESS MANAGER 4.0.1
+
+Geprüft:
+- JavaScript-Syntax
+- Startstruktur und Navigation
+- Universal-Importerkennung
+- Watchlist-Abgleich über Produkt-ID sowie Name/Set/Version
+- Schutz vorhandener Werte bei leeren Importfeldern
+- Verarbeitung echter Nullwerte
+- Importhistorie und Rückgängig-Funktion
+- lokale Speicherung und Altdatenmigration
+
+Behobene Fehler:
+1. Zahlenwert 0 wurde in mehreren Watchlist-Feldern durch die Verwendung von || teilweise ignoriert.
+2. Watchlist-CSV-Importe hatten keinen Zustandsschnappschuss und konnten deshalb nicht vollständig rückgängig gemacht werden.
+3. Dokumentation und sichtbare Versionsbezeichnung waren veraltet.
+
+Noch gezielt im Praxistest zu prüfen:
+- Reale Cardmarket-Verkaufsseite mit allen Varianten.
+- Sehr große Bestände ab mehreren tausend Einzelkarten.
+- Ordnerüberwachung nach Browser-Neustart und erneuter Berechtigungsabfrage.
+- Unterschiedliche CSV-Regionaleinstellungen und Sonderzeichen.

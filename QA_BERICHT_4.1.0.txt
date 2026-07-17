@@ -1,0 +1,21 @@
+QUALITÄTSBERICHT – TCG BUSINESS MANAGER 4.1.0
+
+Geprüft
+- JavaScript-Syntaxprüfung mit Node.js: bestanden.
+- Backup-Struktur 17.07.2026: 4 Versandmaterialarten und 6 offene Verkäufe erkannt.
+- Bestehende Materialfelder stock, unitCost und minStock sind mit dem Packmodus kompatibel.
+- Bestehende Verkäufe ohne materialUsage werden korrekt als leere Packlisten behandelt.
+- Vorlagen werden nur in den Editor geladen; der Materialbestand bleibt bis zum Speichern unverändert.
+- Mehrverbrauch wird gegen den aktuell verfügbaren Bestand geprüft.
+- Materialbestand kann durch den Packvorgang nicht negativ werden.
+- Bestandsstatus der Karten bleibt bis einschließlich Versendet reserviert und wird erst bei Abgeschlossen verkauft.
+
+Für den Praxistest
+1. Backup importieren.
+2. Vier reale Bestellungen nacheinander öffnen.
+3. Karten prüfen, Material und tatsächliches Porto erfassen.
+4. „Speichern & versendet“ verwenden.
+5. Danach Materialbestand und Gewinn jeder Bestellung kontrollieren.
+
+Hinweis
+Ein vollständiger Browser-Praxistest mit den realen Klicks muss lokal erfolgen, da lokale Browserdaten und Cardmarket-Seiten nicht in der statischen Syntaxprüfung ausgeführt werden.

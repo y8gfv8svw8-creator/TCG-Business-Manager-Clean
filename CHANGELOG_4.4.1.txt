@@ -1,0 +1,16 @@
+TCG Business Manager 4.4.1 – Kaufanalyse und Such-Hotfix
+
+BEHOBEN
+- Die Kaufanalyse durchsucht jetzt direkt den vollständigen Cardmarket-Katalog in IndexedDB.
+- Deutsche Suchbegriffe können über Suchaliase englische Cardmarket-Namen finden.
+- „Antiker“ priorisiert „Ancient Gear“ und zeigt zuerst unterschiedliche Karten statt nur viele Druckvarianten derselben Karte.
+- Cardmarket-Datencenter verwendet dieselbe verbesserte Suche.
+- Markt-EK, Markt-VK, Ø 1/7/30 Tage, VK-Empfehlung, Break-even-EK und empfohlener Max-EK werden getrennt in einer kompakten Ergebnistabelle angezeigt.
+- Ein berechneter Max-EK von 0,00 € wird nicht mehr als fehlender Wert dargestellt.
+- Gewinn und ROI am aktuellen Markt-Low sind sichtbar.
+- Δ 1/7/30 Tage werden ausschließlich aus gespeicherten täglichen Preisständen berechnet.
+- Fehlende Historie wird verständlich ausgewiesen, statt Cardmarket-Durchschnittswerte als echten Verlauf auszugeben.
+- Der Verlauf einer Variante kann direkt aus der Kaufanalyse geöffnet werden.
+
+HINWEIS
+- Cardmarket Ø 7/30 Tage sind Verkaufsdurchschnitte. Ein echter 7-/30-Tage-Trend entsteht erst nach genügend täglichen Price-Guide-Importen.

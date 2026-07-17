@@ -1,0 +1,11 @@
+QA-BERICHT – VERSION 4.2.2
+
+Geprüft:
+- JavaScript-Syntax mit node --check: bestanden.
+- Direkter Cardmarket-Link wird bei vorhandener Produkt-ID als /YuGiOh/Products?idProduct=<ID> erzeugt.
+- Echte gespeicherte Produktseiten bleiben erhalten.
+- Alte Suchlinks fallen bei vorhandener Produkt-ID auf den direkten Produkt-ID-Link zurück.
+- Watchlist-Link nutzt ausschließlich den zentralen Linkgenerator.
+- Lagerdetaildialog schließt einen eventuell offenen Dialog vor erneutem Öffnen.
+- Reservierungen werden nach Bestellung zusammengefasst.
+- ZIP-Struktur enthält Anwendung, Backups, Changelog und QA-Bericht.

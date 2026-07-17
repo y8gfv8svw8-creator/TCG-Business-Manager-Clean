@@ -1,0 +1,11 @@
+TCG BUSINESS MANAGER 4.5.0 – START
+
+1. ZIP vollständig in einen eigenen Ordner entpacken.
+2. index.html mit Chrome oder Edge öffnen.
+3. Beim ersten Start werden bestehende Browserdaten weiterverwendet.
+4. Der offizielle Cardmarket-Price-Guide wird einmal täglich beim Öffnen automatisch geprüft.
+5. Im Cardmarket-Datencenter einmal „Deutsche Kartendaten aktualisieren“ anklicken.
+6. Regelmäßig im Cardmarket-Datencenter eine Datensicherung exportieren.
+
+KEINE ZUSATZINSTALLATION NÖTIG
+Die Preis- und Markthistorie wird lokal in IndexedDB gespeichert.

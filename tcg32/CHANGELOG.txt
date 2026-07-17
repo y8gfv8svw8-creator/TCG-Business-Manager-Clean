@@ -1,0 +1,21 @@
+Version 4.2.3 – Auto-Import-Hotfix
+- Automatische Ordnerüberwachung ignoriert vollständige Warenwirtschafts-Backups.
+- Verhindert, dass ein älteres Backup den aktuellen Zustand ersetzt und manuell importierte Einkäufe entfernt.
+- Automatisch unterstützte JSON-Dateien sind auf Price-Guide- und Watchlist-Update-Dateien begrenzt.
+- CSV- und HTML-Importe werden weiterhin automatisch erkannt.
+
+TCG BUSINESS MANAGER – ÄNDERUNGSPROTOKOLL
+
+4.1.0
+- Neuer Versandarbeitsplatz mit kompakter Warteschlange und Statusübersicht.
+- Neue Status Kommissioniert und Verpackt.
+- Packmodus in der Verkaufsdetailansicht ergänzt.
+- Karten-/Versionsprüfung und Empfänger-/Versandprüfung ergänzt.
+- Live-Vorschau für Porto, Materialkosten und Gewinn ergänzt.
+- Fehler behoben: Das Laden einer Versandvorlage konnte die spätere Materialabbuchung verhindern.
+- Materialbuchung atomarer gestaltet; unzureichender Bestand blockiert den Vorgang.
+- Doppelte Materialpositionen werden beim Speichern zusammengefasst.
+- Direkter Abschluss über „Speichern & versendet“ ergänzt.
+
+4.0.1
+- Watchlist-Import und Qualitätskorrekturen.

@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TCG Business Manager 5.0.2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">TCG</div>
+        <div>
+          <div class="brand-title">Business Manager</div>
+          <div class="brand-subtitle">Foundation 5.0.2 · SQLite</div>
+        </div>
+      </div>
+
+      <nav id="nav">
+        <button class="nav-item active" data-view="dashboard">Dashboard</button>
+        <button class="nav-item" data-view="inventory">Bestand</button>
+        <button class="nav-item" data-view="purchases">Einkäufe</button>
+        <button class="nav-item" data-view="sales">Verkäufe</button>
+        <button class="nav-item" data-view="materials">Versandmaterial</button>
+        <button class="nav-item" data-view="expenses">Ausgaben</button>
+        <button class="nav-item" data-view="watchlist">Marktbeobachtung</button>
+        <button class="nav-item" data-view="cardmarket">Cardmarket-Datencenter</button>
+        <button class="nav-item" data-view="partners">Händler & Kunden</button>
+        <button class="nav-item" data-view="imports">Importe</button>
+        <button class="nav-item" data-view="reports">Auswertungen</button>
+        <button class="nav-item" data-view="settings">Einstellungen</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="backupBtn" class="secondary full">Backup exportieren</button>
+        <label class="secondary full file-label">
+          Backup importieren
+          <input id="backupInput" type="file" accept=".json" hidden />
+        </label>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">Dashboard</h1>
+          <p id="pageSubtitle">Zentrale Übersicht über Bestand, Käufe, Verkäufe und Gewinn.</p>
+        </div>
+        <div class="top-actions">
+          <span id="saveStatus" class="save-status">Lokal gespeichert</span>
+          <button id="quickAddBtn" class="primary">+ Schnell erfassen</button>
+        </div>
+      </header>
+
+      <section id="view-dashboard" class="view active">
+        <div class="metric-grid">
+          <article class="metric-card"><span>Bestandskarten</span><strong id="mInventoryCount">0</strong><small>verfügbare physische Karten</small></article>
+          <article class="metric-card"><span>Bestandswert</span><strong id="mInventoryValue">0,00 €</strong><small>Summe der Inseratspreise</small></article>
+          <article class="metric-card"><span>Investiertes Kapital</span><strong id="mInvestedCapital">0,00 €</strong><small>Einstand des verfügbaren Bestands</small></article>
+          <article class="metric-card"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>bezahlte und abgeschlossene Verkäufe</small></article>
+          <article class="metric-card"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Karten, Versand, Material und Sonstiges</small></article>
+          <article class="metric-card"><span>Gewinn Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>Einnahmen minus Ausgaben</small></article>
+          <article class="metric-card"><span>Offene Einkäufe</span><strong id="mOpenPurchases">0</strong><small>bestellt / unterwegs</small></article>
+          <article class="metric-card"><span>Kaufchancen</span><strong id="mBuyOpportunities">0</strong><small>Watchlist: Kaufen / Top Deal</small></article>
+        </div>
+
+        <div class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Offene Vorgänge</h2>
+              <button class="link-button" data-view-jump="purchases">Alle anzeigen</button>
+            </div>
+            <div id="openOperations"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Top-Kaufchancen</h2>
+              <button class="link-button" data-view-jump="watchlist">Watchlist öffnen</button>
+            </div>
+            <div id="topDeals"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Lageralter</h2>
+            </div>
+            <div id="ageSummary"></div>
+          </article>
+
+          <article class="panel panel-wide">
+            <div class="panel-head">
+              <h2>Monatsübersicht</h2>
+              <span class="muted">letzte 12 Monate</span>
+            </div>
+            <div class="table-wrap compact-table">
+              <table>
+                <thead><tr><th>Monat</th><th>Einnahmen</th><th>Einkäufe</th><th>Gebühren & Material</th><th>Ausgaben gesamt</th><th>Cashflow</th></tr></thead>
+                <tbody id="monthlyOverview"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Letzte Verkäufe</h2>
+              <button class="link-button" data-view-jump="sales">Verkäufe öffnen</button>
+            </div>
+            <div id="recentSales"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-inventory" class="view">
+        <div class="toolbar">
+          <input id="inventorySearch" class="search" placeholder="Bestand durchsuchen..." />
+          <select id="inventoryStatusFilter">
+            <option value="">Alle Status</option>
+            <option>Bestellt</option>
+            <option>Unterwegs</option>
+            <option>Im Bestand</option>
+            <option>Inseriert</option>
+            <option>Nicht inseriert</option>
+            <option>Reserviert</option>
+            <option>Verkauft</option>
+            <option>Beschädigt</option>
+          </select>
+          <button id="addInventoryBtn" class="primary">+ Karte hinzufügen</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Karte</th><th>Set</th><th>Seltenheit</th><th>Menge</th><th>Inseratspreis</th><th>Status</th><th>Lagerdauer</th><th></th>
+            </tr></thead>
+            <tbody id="inventoryTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-purchases" class="view">
+        <div class="toolbar">
+          <input id="purchaseSearch" class="search" placeholder="Einkäufe durchsuchen..." />
+          <select id="purchaseStatusFilter">
+            <option value="">Alle Status</option>
+            <option>Bestellt</option>
+            <option>Unterwegs</option>
+            <option>Eingetroffen</option>
+            <option>Storniert</option>
+          </select>
+          <button id="addPurchaseBtn" class="primary">+ Einkauf erfassen</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Bestellnr.</th><th>Datum</th><th>Händler</th><th>Land</th>
+              <th>Karten</th><th>Kartenwert</th><th>Versand</th><th>Trustee/Zusatz</th><th>Gesamt</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="purchaseTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-sales" class="view">
+        <div class="shipping-workbench">
+          <div class="panel-head"><div><h2>Versandarbeitsplatz</h2><small>Offene Bestellungen in sinnvoller Pack-Reihenfolge</small></div></div>
+          <div class="shipping-summary-grid">
+            <article class="stat-card"><span>Offen</span><strong id="shippingOpenCount">0</strong><small>noch nicht vorbereitet</small></article>
+            <article class="stat-card"><span>Kommissioniert</span><strong id="shippingPickedCount">0</strong><small>Karten zusammengesucht</small></article>
+            <article class="stat-card"><span>Verpackt</span><strong id="shippingPackedCount">0</strong><small>bereit für den Versand</small></article>
+            <article class="stat-card"><span>Materialwarnungen</span><strong id="shippingMaterialWarnings">0</strong><small>Bestand reicht nicht</small></article>
+          </div>
+          <div id="shippingQueue" class="shipping-queue"></div>
+        </div>
+        <div class="toolbar">
+          <input id="salesSearch" class="search" placeholder="Verkäufe durchsuchen..." />
+          <select id="salesStatusFilter">
+            <option value="">Alle Status</option>
+            <option>Offen</option>
+            <option>Bezahlt</option>
+            <option>Kommissioniert</option>
+            <option>Verpackt</option>
+            <option>Versendet</option>
+            <option>Abgeschlossen</option>
+            <option>Storniert</option>
+          </select>
+          <button id="addSaleBtn" class="primary">+ Verkauf erfassen</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Bestellnr.</th><th>Datum</th><th>Kunde</th><th>Karten</th>
+              <th>Umsatz</th><th>Gebühren</th><th>Gewinn</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="salesTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-materials" class="view">
+        <div class="material-summary-grid">
+          <article class="stat-card"><span>Materialarten</span><strong id="materialKinds">0</strong><small>angelegte Artikel</small></article>
+          <article class="stat-card"><span>Materialwert</span><strong id="materialValue">0,00 €</strong><small>aktueller Lagerwert</small></article>
+          <article class="stat-card"><span>Niedriger Bestand</span><strong id="materialLowCount">0</strong><small>unter Mindestbestand</small></article>
+          <article class="stat-card"><span>Verbrauch Monat</span><strong id="materialMonthCost">0,00 €</strong><small>Verbrauchskosten in Verkäufen</small></article>
+        </div>
+        <div class="toolbar">
+          <input id="materialSearch" class="search" placeholder="Versandmaterial durchsuchen..." />
+          <button id="addMaterialBtn" class="primary">+ Material anlegen</button>
+          <button id="buyMaterialBtn" class="secondary">Material einkaufen</button>
+          <button id="addTemplateBtn" class="secondary">+ Versandvorlage</button>
+        </div>
+        <div class="two-col material-layout">
+          <div>
+            <div class="table-wrap"><table><thead><tr><th>Material</th><th>Bestand</th><th>Stückkosten</th><th>Wert</th><th>Mindestbestand</th><th>Status</th><th></th></tr></thead><tbody id="materialTable"></tbody></table></div>
+          </div>
+          <article class="panel">
+            <div class="panel-head"><h2>Versandvorlagen</h2><small>Bei Bestellungen auswählbar</small></div>
+            <div id="templateList" class="list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-expenses" class="view">
+        <div class="metric-grid expense-metrics">
+          <article class="metric-card"><span>Ausgaben aktueller Monat</span><strong id="expenseMonthTotal">0,00 €</strong><small>alle erfassten Ausgaben</small></article>
+          <article class="metric-card"><span>Versandmaterial-Einkäufe</span><strong id="expenseMaterialMonth">0,00 €</strong><small>aktueller Monat</small></article>
+          <article class="metric-card"><span>Sonstige Ausgaben</span><strong id="expenseOtherMonth">0,00 €</strong><small>aktueller Monat</small></article>
+        </div>
+        <div class="toolbar">
+          <input id="expenseSearch" class="search" placeholder="Ausgaben durchsuchen..." />
+          <select id="expenseCategoryFilter"><option value="">Alle Kategorien</option><option>Versandmaterial</option><option>Porto</option><option>Software</option><option>Bürobedarf</option><option>Sonstiges</option></select>
+          <button id="addExpenseBtn" class="primary">+ Ausgabe erfassen</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Datum</th><th>Kategorie</th><th>Beschreibung</th><th>Betrag</th><th>Notiz</th><th></th></tr></thead><tbody id="expenseTable"></tbody></table></div>
+      </section>
+
+      <section id="view-watchlist" class="view">
+        <div class="toolbar">
+          <input id="watchSearch" class="search" placeholder="Karte suchen – Bestand, Käufe, Verkäufe und Watchlist..." />
+          <select id="watchStatusFilter">
+            <option value="">Alle Empfehlungen</option>
+            <option>TOP DEAL</option>
+            <option>KAUFEN</option>
+            <option>BEOBACHTEN</option>
+            <option>STOP</option>
+          </select>
+          <button id="addWatchBtn" class="primary">+ Karte beobachten</button>
+        </div>
+        <section class="purchase-analysis-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Kaufanalyse</h2>
+              <p class="muted">Durchsucht den Gesamtkatalog und kombiniert Marktpreise mit deinen eigenen Einkaufs-, Verkaufs- und Bestandsdaten.</p>
+            </div>
+          </div>
+          <div id="purchaseAnalysis"></div>
+        </section>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Prio</th><th>Karte</th><th>Set / Version</th><th>Bestand</th><th>Soll</th>
+              <th>Max EK</th><th>Ziel VK</th><th>CM Trend</th><th>Ø 30 Tage</th>
+              <th>Gewinn</th><th>ROI</th><th>Empfehlung</th><th></th>
+            </tr></thead>
+            <tbody id="watchTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-partners" class="view">
+        <div class="partner-summary-grid">
+          <article class="stat-card"><span>Händler</span><strong id="partnerSellerCount">0</strong><small>gespeicherte Kontakte</small></article>
+          <article class="stat-card"><span>Kunden</span><strong id="partnerCustomerCount">0</strong><small>gespeicherte Kontakte</small></article>
+          <article class="stat-card"><span>Einkaufsvolumen</span><strong id="partnerPurchaseVolume">0,00 €</strong><small>inkl. Versand und Zusatzkosten</small></article>
+          <article class="stat-card"><span>Kundenumsatz</span><strong id="partnerCustomerRevenue">0,00 €</strong><small>alle Verkaufsbestellungen</small></article>
+        </div>
+        <div class="split-toolbar">
+          <div>
+            <h2>Händlerstamm</h2>
+            <p class="muted">Kontaktdaten, Zuverlässigkeit und automatische Einkaufsstatistik.</p>
+            <button id="addSellerBtn" class="primary">+ Händler</button>
+          </div>
+          <div>
+            <h2>Kundenstamm</h2>
+            <p class="muted">Kontaktdaten, Bewertungen und automatische Umsatzhistorie.</p>
+            <button id="addCustomerBtn" class="primary">+ Kunde</button>
+          </div>
+        </div>
+        <div class="two-col partner-columns">
+          <div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Händler</th><th>Land</th><th>Status</th><th>Bestellungen</th><th>Karten</th><th>Gesamt</th><th>Ø Versand</th><th>Bewertung</th><th></th></tr></thead>
+                <tbody id="sellerTable"></tbody>
+              </table>
+            </div>
+            <div id="sellerDetail" class="partner-detail empty">Händler auswählen, um Bestellungen und Notizen zu sehen.</div>
+          </div>
+          <div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Kunde</th><th>Land</th><th>Status</th><th>Bestellungen</th><th>Karten</th><th>Umsatz</th><th>Gewinn</th><th>Bewertung</th><th></th></tr></thead>
+                <tbody id="customerTable"></tbody>
+              </table>
+            </div>
+            <div id="customerDetail" class="partner-detail empty">Kunden auswählen, um Bestellungen und Notizen zu sehen.</div>
+          </div>
+        </div>
+      </section>
+
+
+      <section id="view-cardmarket" class="view">
+        <div class="metric-grid cm-metric-grid">
+          <article class="metric-card"><span>Produkte im Gesamtkatalog</span><strong id="cmProductCount">0</strong><small id="cmCatalogStatus">Noch kein Produktkatalog importiert</small></article>
+          <article class="metric-card"><span>Aktuelle Preiszeilen</span><strong id="cmLatestPriceCount">0</strong><small id="cmPriceStatus">Noch kein Price Guide importiert</small></article>
+          <article class="metric-card"><span>Gespeicherte Tagesstände</span><strong id="cmSnapshotCount">0</strong><small>gleicher Tag wird aktualisiert statt dupliziert</small></article>
+          <article class="metric-card"><span>Letzter Preisstand</span><strong id="cmLatestPriceDate">Noch kein Import</strong><small>Datum aus der Cardmarket-Datei</small></article>
+          <article class="metric-card"><span>Deutsche Kartennamen</span><strong id="cmGermanNameCount">0</strong><small id="cmGermanNameStatus">Noch nicht geladen</small></article>
+        </div>
+
+        <article class="panel cm-import-panel">
+          <div class="panel-head">
+            <div><h2>Cardmarket-Datenbank</h2><p class="muted">Produktkatalog und Price Guide werden über die Produkt-ID verbunden. Große Datenmengen liegen in IndexedDB und belasten nicht den normalen Warenwirtschafts-Stand.</p></div>
+          </div>
+          <div class="cm-import-actions">
+            <label class="primary file-label">Produktkatalog importieren<input id="cmProductCatalogInput" type="file" accept=".json" hidden /></label>
+            <label class="primary file-label">Price Guide importieren<input id="cmPriceGuideInput" type="file" accept=".json" hidden /></label>
+            <button id="cmLoadGermanNamesBtn" class="secondary" type="button">Deutsche Kartendaten aktualisieren</button>
+            <button id="cmExportBackupBtn" class="secondary" type="button">Cardmarket-Daten sichern</button>
+            <label class="secondary file-label">Cardmarket-Sicherung laden<input id="cmBackupInput" type="file" accept=".json" hidden /></label>
+            <button id="cmClearDataBtn" class="danger" type="button">Cardmarket-Daten löschen</button>
+          </div>
+          <p class="muted">Erwartete Dateien: <strong>products_singles_3.json</strong> und <strong>price_guide_3.json</strong>. Über „Deutsche Kartendaten aktualisieren“ werden deutsche Namen sowie Set- und Seltenheitsdaten erneut abgeglichen. Setnamen werden nur bei einer ausreichend eindeutigen Zuordnung zur Cardmarket-Expansion-ID übernommen; unsichere Druckvarianten bleiben bewusst als fehlend markiert.</p>
+          <div class="cm-progress"><div id="cmImportProgressBar"></div></div>
+          <div id="cmImportStatus" class="cm-import-status">Bereit für den ersten Import.</div>
+        </article>
+
+        <article class="panel cm-opportunities-panel">
+          <div class="panel-head"><div><h2>Interessante Karten heute</h2><p class="muted">Positive Preisentwicklung, berechnete Einkaufsspanne und eigener Bestand werden kombiniert.</p></div><button id="cmRefreshOpportunitiesBtn" class="secondary" type="button">Neu berechnen</button></div>
+          <div id="cmOpportunityList"><div class="empty">Zuerst Produktkatalog und Price Guide importieren.</div></div>
+        </article>
+
+        <article class="panel cm-search-panel">
+          <div class="panel-head"><div><h2>Marktanalyse – alle Kartenvarianten</h2><p class="muted">Suche im vollständigen lokalen Produktkatalog. Ergebnisse zeigen Marktpreis, Entwicklung, eigenen Einkauf/Verkauf, Bestand und Empfehlung.</p></div><span id="cmSearchSummary" class="muted"></span></div>
+          <div class="toolbar"><input id="cmSearch" class="search cm-search" placeholder="Kartenname, Produkt-ID, Expansion oder Seltenheit suchen …" /></div>
+          <div class="table-wrap cm-results-wrap"><table><thead><tr><th>Karte / Variante</th><th>Markt</th><th>Δ vorheriger Import</th><th>Trend–Ø 7</th><th>Trend–Ø 30</th><th>Empf. VK</th><th>Max-EK</th><th>Gewinn</th><th>Bestand / reserviert</th><th>Bewertung</th></tr></thead><tbody id="cmSearchResults"><tr><td colspan="10" class="empty">Mindestens zwei Zeichen eingeben.</td></tr></tbody></table></div>
+        </article>
+
+        <article id="cmProductDetails" class="panel cm-product-details"><div class="empty">Eine Kartenvariante über „Details“ auswählen, um Preisverlauf und eigene Kennzahlen zu sehen.</div></article>
+
+        <article class="panel cm-snapshots-panel">
+          <div class="panel-head"><div><h2>Vorhandene Preisstände</h2><p class="muted">Jeder neue Kalendertag ergänzt die Historie. Wiederholte Importe desselben Tages überschreiben nur den vorhandenen Tagesstand.</p></div></div>
+          <div id="cmSnapshotDates" class="cm-snapshot-dates"><span class="muted">Noch keine Tagesstände</span></div>
+        </article>
+      </section>
+
+      <section id="view-imports" class="view">
+        <article class="panel folder-sync-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Automatische Ordner-Synchronisierung</h2>
+              <small>Ordner einmal auswählen. Neue Cardmarket-Dateien werden während die App geöffnet ist automatisch erkannt und importiert.</small>
+            </div>
+          </div>
+          <div class="folder-sync-grid">
+            <div>
+              <strong id="syncFolderName">Kein Ordner verbunden</strong>
+              <p id="syncFolderStatus" class="muted">Unterstützt Chrome und Edge. Der Browser muss geöffnet bleiben.</p>
+            </div>
+            <div class="folder-sync-actions">
+              <button id="chooseSyncFolderBtn" class="primary" type="button">Ordner auswählen</button>
+              <button id="scanSyncFolderBtn" class="secondary" type="button">Jetzt prüfen</button>
+              <label class="switch-label"><input id="autoFolderSyncToggle" type="checkbox" checked /> automatisch alle 30 Sekunden</label>
+            </div>
+          </div>
+          <div id="folderSyncPreview" class="preview import-result-stack"></div>
+        </article>
+
+        <article class="panel price-auto-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Automatische Marktpreise</h2>
+              <small>Aktualisiert die Marktbeobachtung aus dem offiziellen öffentlichen Yu-Gi-Oh!-Price-Guide von Cardmarket.</small>
+            </div>
+          </div>
+          <div class="folder-sync-grid">
+            <div>
+              <strong id="autoPriceStatus">Noch nicht aktualisiert</strong>
+              <p class="muted">Low, Trend sowie 1-, 7- und 30-Tage-Durchschnitt werden anhand der CM-Produkt-ID übernommen.</p>
+            </div>
+            <div class="folder-sync-actions">
+              <button id="updateMarketPricesBtn" class="primary" type="button">Marktpreise jetzt aktualisieren</button>
+              <label class="switch-label"><input id="autoPriceToggle" type="checkbox" checked /> einmal täglich automatisch</label>
+            </div>
+          </div>
+          <div id="autoPricePreview" class="preview"></div>
+        </article>
+
+        <article class="panel universal-import-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Universal-Import</h2>
+              <small>Eine zentrale Stelle für Bestand, Einkäufe, Verkäufe, Preislisten, Backups, Watchlist, Händler und Kunden.</small>
+            </div>
+          </div>
+          <label id="universalDropzone" class="dropzone universal-dropzone">
+            Dateien hier ablegen oder auswählen
+            <input id="universalImportInput" type="file" accept=".csv,.json,.html,.htm" multiple hidden />
+          </label>
+          <p class="muted">Die Warenwirtschaft erkennt den Dateityp automatisch. Mehrere Dateien können gemeinsam ausgewählt werden.</p>
+          <div id="universalImportPreview" class="preview import-result-stack"></div>
+          <details class="template-box">
+            <summary>Vorlagen für eigene Datenimporte</summary>
+            <p class="muted">Vorlage herunterladen, in Excel/OpenOffice ausfüllen und anschließend oben importieren.</p>
+            <div class="template-actions">
+              <button type="button" class="secondary" data-template="inventory">Bestand</button>
+              <button type="button" class="secondary" data-template="purchase">Einkäufe</button>
+              <button type="button" class="secondary" data-template="sale">Verkäufe</button>
+              <button type="button" class="secondary" data-template="watchlist">Watchlist</button>
+              <button type="button" class="secondary" data-template="seller">Händler</button>
+              <button type="button" class="secondary" data-template="customer">Kunden</button>
+            </div>
+          </details>
+        </article>
+        <article class="panel import-help-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Automatisch erkannte Dateien</h2>
+              <small>Universal-Import und Importordner verwenden dieselbe Erkennung.</small>
+            </div>
+          </div>
+          <div class="import-type-grid">
+            <div><strong>ArticlesFromShipment*.csv</strong><span>Einkauf</span></div>
+            <div><strong>cardmarket-stock-*.csv</strong><span>Bestand & Inseratspreise</span></div>
+            <div><strong>Verkauf*.html / *.htm</strong><span>Cardmarket-Verkauf</span></div>
+            <div><strong>price_guide_3.json</strong><span>Marktpreise</span></div>
+            <div><strong>*watchlist*.csv / *.json</strong><span>Watchlist ergänzen, aktualisieren und archivieren</span></div>
+            <div><strong>andere *.json</strong><span>Backup wiederherstellen</span></div>
+          </div>
+          <p class="muted">Bei Watchlist-Dateien wird zuerst über die Produkt-ID abgeglichen. Existiert keine Produkt-ID, nutzt die App Kartenname, Set und Version. Leere Felder überschreiben keine vorhandenen Angaben. JSON-Updates können zusätzlich veraltete Versionen archivieren; Bestand, Einkäufe, Verkäufe, eigene Angebotspreise und persönliche Notizen bleiben erhalten.</p>
+        </article>
+        <article class="panel import-history-panel">
+          <div class="panel-head">
+            <div><h2>Importverlauf</h2><small>Rückgängig entfernt die importierten Daten. „Aus Historie entfernen“ löscht nur den Verlaufseintrag.</small></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Datum</th><th>Typ</th><th>Datei</th><th>Positionen</th><th>Karten</th><th>Schlüssel</th><th></th></tr></thead>
+              <tbody id="importHistoryTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="view-reports" class="view">
+        <div class="metric-grid">
+          <article class="metric-card"><span>Gesamtumsatz</span><strong id="rRevenue">0,00 €</strong></article>
+          <article class="metric-card"><span>Gesamtgewinn</span><strong id="rProfit">0,00 €</strong></article>
+          <article class="metric-card"><span>Ø ROI</span><strong id="rRoi">0,0 %</strong></article>
+          <article class="metric-card"><span>Ø Lagerdauer</span><strong id="rDays">0 Tage</strong></article>
+        </div>
+        <div class="dashboard-grid">
+          <article class="panel">
+            <h2>Gewinn nach Monat</h2>
+            <div id="monthlyReport"></div>
+          </article>
+          <article class="panel">
+            <h2>Stärkste Karten</h2>
+            <div id="topCardsReport"></div>
+          </article>
+          <article class="panel">
+            <h2>Langsamdreher</h2>
+            <div id="slowCardsReport"></div>
+          </article>
+          <article class="panel">
+            <h2>Händlervergleich</h2>
+            <div id="sellerReport"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="settings-grid">
+          <label>Cardmarket-Gebühr (%)
+            <input id="settingFee" type="number" min="0" step="0.1" />
+          </label>
+          <label>Verpackung pro Karte (€)
+            <input id="settingPackaging" type="number" min="0" step="0.01" />
+          </label>
+          <label>Mindestgewinn (€)
+            <input id="settingMinProfit" type="number" min="0" step="0.01" />
+          </label>
+          <label>Mindest-ROI (%)
+            <input id="settingMinRoi" type="number" min="0" step="1" />
+          </label>
+          <label>Preiswarnung nach Tagen
+            <input id="settingPriceAge" type="number" min="1" step="1" />
+          </label>
+          <label>Standardzustand
+            <select id="settingCondition">
+              <option>NM</option><option>EX</option><option>GD</option><option>LP</option>
+            </select>
+          </label>
+          <label>Bevorzugte Sprachen
+            <input id="settingLanguages" />
+          </label>
+          <label>Standard-Sollbestand
+            <input id="settingTargetStock" type="number" min="0" step="1" />
+          </label>
+          <label>Sicherheitsabschlag Marktpreis (%)
+            <input id="settingSafetyPercent" type="number" min="0" max="50" step="0.5" />
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" class="primary">Einstellungen speichern</button>
+          <button id="resetDemoBtn" class="danger">Alle Daten löschen</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="modal">
+    <form method="dialog" id="modalForm">
+      <div class="modal-head">
+        <h2 id="modalTitle">Eintrag</h2>
+        <button type="button" id="modalClose" class="icon-button">×</button>
+      </div>
+      <div id="modalFields" class="form-grid"></div>
+      <div class="modal-actions">
+        <button type="button" id="modalCancel" class="secondary">Abbrechen</button>
+        <button type="submit" class="primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="orderDetailDialog" class="order-detail-dialog">
+    <div class="modal-head">
+      <h2 id="orderDetailTitle">Bestellung</h2>
+      <button type="button" id="orderDetailClose" class="icon-button">×</button>
+    </div>
+    <div id="orderDetailContent"></div>
+    <div class="modal-actions"><button type="button" id="orderDetailCloseBottom" class="primary">Schließen</button></div>
+  </dialog>
+
+  <script>
+    (() => {
+      const DB_KEY = "tcgWawiState_v31";
+      const UPDATED_KEY = "tcgWawiState_v31_updatedAt";
+
+      function loadScript(source) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = source;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`${source} konnte nicht geladen werden.`));
+          document.body.appendChild(script);
+        });
+      }
+
+      async function prepareDesktopState() {
+        if (!window.desktopApp?.loadState) return;
+        try {
+          const databaseState = await window.desktopApp.loadState();
+          const localRaw = localStorage.getItem(DB_KEY);
+          const localUpdatedAt = localStorage.getItem(UPDATED_KEY) || "";
+          const databaseUpdatedAt = databaseState?.updatedAt || "";
+
+          if (databaseState?.state && (!localRaw || databaseUpdatedAt >= localUpdatedAt)) {
+            localStorage.setItem(DB_KEY, JSON.stringify(databaseState.state));
+            localStorage.setItem(UPDATED_KEY, databaseUpdatedAt);
+          } else if (localRaw && (!databaseState?.state || localUpdatedAt > databaseUpdatedAt)) {
+            await window.desktopApp.saveState(JSON.parse(localRaw));
+          }
+        } catch (error) {
+          console.error("SQLite-Startabgleich fehlgeschlagen:", error);
+        }
+      }
+
+      (async () => {
+        await prepareDesktopState();
+        await loadScript("app.js");
+        await loadScript("cardmarket-data-center.js");
+      })().catch(error => {
+        console.error(error);
+        const status = document.getElementById("saveStatus");
+        if (status) status.textContent = "Startfehler – Details in der Konsole";
+      });
+    })();
+  </script>
+</body>
+</html>

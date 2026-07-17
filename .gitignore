@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+Thumbs.db
+
+# Private Geschäfts- und Datenbankdateien
+TCG_Warenwirtschaft_Backup_*.json
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+.env
+Private Backups/

@@ -1,0 +1,21 @@
+QA-BERICHT – TCG Business Manager 4.4.0
+=======================================
+
+Geprüft:
+- JavaScript-Syntax von app.js und cardmarket-data-center.js
+- HTML-Struktur und vorhandene Ziel-IDs
+- Erkennung des offiziellen Product Catalog (products[])
+- Erkennung des offiziellen Price Guide (priceGuides[])
+- idProduct-Normalisierung und Verknüpfung
+- Same-Day-Upsert-Schlüssel Datum|Produkt-ID
+- getrennte IndexedDB-Stores für Produkte, aktuelle Preise und Historie
+- Migration bestehender 4.3.x-State-Daten
+- Importhistorie und Watchlist-Aktualisierung
+- Datenlöschung und separate Cardmarket-Sicherung
+
+Praxistest durch Nutzer erforderlich:
+- Importzeit im verwendeten Chrome/Edge-System
+- Speicherplatzfreigabe des Browsers für mehrere tägliche Vollimporte
+- Suchgeschwindigkeit auf dem Ziel-PC
+- CORS-Verhalten beim automatischen offiziellen Download
+- Preisformeln anhand realer Händlerentscheidungen feinjustieren

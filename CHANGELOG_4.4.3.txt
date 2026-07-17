@@ -1,0 +1,16 @@
+TCG Business Manager 4.4.3 – Datenqualität & nachvollziehbare Kaufanalyse
+
+BEHOBEN
+- „KEINE PREISDATEN“ trotz vorhandener Price-Guide-Werte.
+- Unrealistisch hoher Score bei fehlender Historie und Max-EK 0,00 €.
+- Missverständliche Bezeichnungen Low = EK und Trend = VK.
+- Pseudo-7-/30-Tage-Trends aus Trend minus Durchschnitt.
+- Unklare Anzeige fehlender Set-, Seltenheits- und deutscher Namensdaten.
+
+NEU
+- Status „MINDESTZIEL VERFEHLT“ mit verständlicher Begründung.
+- Datenqualitäts-Badges für Preiswerte, Druckvariante und deutschen Namen.
+- Score mit Datenbasis niedrig/mittel/hoch und harten Obergrenzen.
+- Vollständige Einkaufsrechnung mit getrennten Zwischenwerten.
+- Direktes Laden deutscher Kartendaten aus der Kaufanalyse.
+- Eindeutige Setdetails werden ergänzt; mehrdeutige Zuordnungen werden nicht geraten.

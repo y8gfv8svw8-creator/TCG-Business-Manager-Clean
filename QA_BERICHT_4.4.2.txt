@@ -1,0 +1,8 @@
+QA-BERICHT 4.4.2
+
+- JavaScript-Syntax mit Node.js geprüft.
+- Deutsche Namensfelder werden beim Produktimport erhalten und in den Suchindex aufgenommen.
+- Online-Abgleich verarbeitet getrennte englische/deutsche YGOPRODeck-Datensätze und ordnet über Karten-ID plus englischen Namen zu.
+- Kaufanalyse erzeugt eindeutige Produktanker für stabile Scrollpositionen.
+- Aktualisierung verkleinert den Ergebnisbereich nicht mehr auf einen Ladehinweis.
+- Versionsangaben und ZIP-Struktur geprüft.

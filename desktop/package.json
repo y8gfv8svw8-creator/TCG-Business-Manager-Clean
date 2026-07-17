@@ -1,0 +1,21 @@
+{
+  "name": "tcg-business-manager",
+  "productName": "TCG Business Manager",
+  "version": "5.0.2",
+  "private": true,
+  "description": "Offline-Warenwirtschaft und Market-Intelligence-Grundlage für den europäischen TCG-Handel.",
+  "main": "app/main/main.js",
+  "author": "Stefan",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check app/main/main.js && node --check app/main/database.js && node --check app/main/preload.js && node --check app/renderer/app.js && node --check app/renderer/cardmarket-data-center.js",
+    "verify": "npm run check && electron --version"
+  },
+  "devDependencies": {
+    "electron": "37.10.3"
+  },
+  "allowScripts": {
+    "electron@37.10.3": true
+  }
+}

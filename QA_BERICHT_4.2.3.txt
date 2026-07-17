@@ -1,0 +1,18 @@
+QA-Bericht 4.2.3
+
+Fehlerbild:
+Ein manuell importierter Cardmarket-Einkauf verschwand nach einer automatischen Ordneraktualisierung.
+
+Ursache:
+Die Ordnerüberwachung importierte auch Warenwirtschafts-Backups. Ein Backup-Import ersetzt absichtlich den kompletten Zustand und konnte deshalb neuere manuelle Einkäufe überschreiben.
+
+Korrektur:
+- Backup-/Sicherungsdateien werden von der automatischen Ordnerüberwachung ausgeschlossen.
+- JSON-Autoimporte sind nur noch für price_guide_3.json und Watchlist-Update-Dateien zulässig.
+- Manuelle Backup-Importe bleiben unverändert möglich.
+
+Prüfungen:
+- JavaScript-Syntaxprüfung bestanden.
+- CSV/HTML bleiben Auto-Import-Kandidaten.
+- Backup-JSON wird nicht mehr als Auto-Import-Kandidat erkannt.
+- Price-Guide-JSON bleibt Auto-Import-Kandidat.

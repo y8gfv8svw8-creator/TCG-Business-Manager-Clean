@@ -1,0 +1,16 @@
+TCG Business Manager 4.2.2
+
+FEHLERBEHEBUNGEN
+- Watchlist-Klick öffnet nun anhand der Cardmarket-Produkt-ID direkt die exakte Produktvariante.
+- Alte gespeicherte Cardmarket-Suchlinks überschreiben die eindeutige Produkt-ID nicht mehr.
+- Lagerdetails öffnen robuster; bereits geöffnete Dialoge werden sauber zurückgesetzt.
+- Verständliche Fehlermeldung, falls eine Bestandsgruppe nach einer Aktualisierung nicht mehr existiert.
+
+VERBESSERUNGEN
+- Tooltip in der Watchlist mit Produkt-ID, Set und Version.
+- Lagerdetails zeigen Reservierungen gruppiert nach Bestellung und Menge.
+- Direkter Cardmarket-Button im Lagerdetailfenster.
+- Bestellreferenzen in Reservierungen sind anklickbar.
+
+KOMPATIBILITÄT
+- Vorhandene Backups und Datenstrukturen bleiben unverändert nutzbar.

@@ -1,0 +1,13 @@
+TCG Business Manager 4.3.0 – Kaufanalyse
+
+Neu:
+- Suchfunktion in der Marktbeobachtung durchsucht Watchlist, Bestand, Einkäufe und Verkäufe.
+- Zeigt pro Kartenvariante: aktueller CM-Preis, Max EK, bester EK, Durchschnitts-EK,
+  bester VK, Durchschnitts-VK, Gesamtbestand, reserviert und verfügbar.
+- Zeigt gekaufte und verkaufte Mengen sowie einen geschätzten realisierten Gewinn.
+- Automatische Einkaufsempfehlung auf Basis von Max EK bzw. bisherigem Durchschnitts-EK.
+- Aufklappbare Einkaufs- und Verkaufshistorie mit Datum, Menge, Preis und Bestellung.
+
+Hinweis:
+- Historische Verkaufswerte sind am genauesten, wenn Verkaufspositionen oder verknüpfte Bestandskarten vorhanden sind.
+- Bei älteren Sammelbestellungen ohne Einzelpositionen wird der Verkaufspreis anteilig aus dem Bestellumsatz geschätzt.

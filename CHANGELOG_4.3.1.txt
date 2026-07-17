@@ -1,0 +1,9 @@
+TCG Business Manager 4.3.1 – Gesamtkatalog-Einkaufsrechner
+
+- Kaufanalyse durchsucht jetzt den gesamten vorhandenen Produktkatalog.
+- Cardmarket-Price-Guide speichert Preiswerte für alle Katalogprodukte, nicht nur Watchlist-Karten.
+- Berechnet empfohlenen VK, empfohlenen Max-EK, Gewinn und Marge.
+- Berücksichtigt Gebühren, Verpackung, Mindestgewinn, Mindest-ROI und Sicherheitsabschlag.
+- Zeigt eigene EK-/VK-Historie und Bestand parallel zu den berechneten Katalogwerten.
+- Katalogkarten können direkt zur Watchlist hinzugefügt werden.
+- Bestehender lokaler Datenbankschlüssel bleibt unverändert; vorhandene Daten werden nicht zurückgesetzt.

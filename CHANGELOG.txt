@@ -1,0 +1,79 @@
+TCG Business Manager 4.4.4 – Kalkulations- und Setdaten-Hotfix
+
+KORRIGIERT
+- Negative Nettoerlöse werden vollständig weitergerechnet und nicht mehr auf 0 begrenzt.
+- Gewinn, ROI und Marge enthalten nun Sicherheits-VK, Gebühren, Verpackung und Karten-EK konsistent.
+- Verkäufe, deren Sicherheits-VK nicht einmal Gebühren und Verpackung deckt, werden als „NICHT KOSTENDECKEND“ markiert.
+- Statt eines irreführenden Break-even-EK von 0,00 € wird der Fehlbetrag vor Karteneinkauf angezeigt.
+- Max-EK nach Mindestgewinn, Mindest-ROI und finaler Max-EK werden konservativ auf volle Cent abgerundet.
+- Nicht kostendeckende Karten erhalten Score 0; Verlustgeschäfte werden auf maximal 5 Punkte begrenzt.
+
+VERBESSERT
+- Ziel-VK und Sicherheits-VK verwenden dieselbe sichtbare centgenaue Rechenbasis.
+- Die Marge wird auf den tatsächlich verwendeten Sicherheits-VK bezogen.
+- Setnamen werden über eine vorsichtige Mehrheitszuordnung zwischen Cardmarket-Expansion-ID und YGOPRODeck-Sets ergänzt.
+- Seltenheiten werden nur übernommen, wenn innerhalb des zugeordneten Sets genau eine eindeutige Seltenheit zur Karte passt.
+- Unsichere Set-/Seltenheitszuordnungen bleiben weiterhin leer, statt geraten zu werden.
+
+NACH DEM UPDATE
+- Im Cardmarket-Datencenter einmal „Deutsche Kartendaten aktualisieren“ ausführen, um die neue Set-Zuordnung anzuwenden.
+
+
+Version 4.4.3 – Datenqualität & nachvollziehbare Kaufanalyse
+- Falscher Status „KEINE PREISDATEN“ bei vorhandenen Low-/Trend-/Durchschnittswerten behoben.
+- Neuer Status „MINDESTZIEL VERFEHLT“, wenn Mindestgewinn oder Mindest-ROI keinen positiven Max-EK erlauben.
+- Score vollständig überarbeitet: keine hohen Bewertungen mehr ohne echten Preisverlauf oder bei Max-EK 0,00 €.
+- Score zeigt jetzt die Datenbasis (niedrig/mittel/hoch) und wird bei fehlenden Daten sichtbar begrenzt.
+- Cardmarket Low und Trend werden nicht mehr fälschlich als eigener EK/VK bezeichnet.
+- Einkaufsrechnung zeigt Berechnungs-EK, Sicherheits-VK, Gebühren, Break-even, Gewinn-Limit, ROI-Limit und finalen Max-EK getrennt.
+- Δ 1/7/30 verwendet ausschließlich gespeicherte Tagesstände; Trend minus Durchschnitt wird separat bezeichnet.
+- Set-/Seltenheitslücken werden deutlich markiert und nicht mehr als vollständige Druckvariante ausgegeben.
+- Deutsche Kartendaten können direkt aus der Kaufanalyse geladen werden; deutscher und englischer Name werden gemeinsam angezeigt und durchsucht.
+- Eindeutige Setdetails aus der Kartendatenbank werden ergänzt, mehrdeutige Druckvarianten bleiben bewusst ungeraten.
+- Scrollposition bleibt weiterhin beim Aktualisieren erhalten.
+
+Version 4.4.2
+- Deutsche Kartennamen laden, anzeigen und durchsuchen
+- Kaufanalyse größer und deutlich lesbarer aufgebaut
+- Scrollposition bleibt bei Aktualisierungen erhalten
+
+4.4.1 – Kaufanalyse und Such-Hotfix
+- Vollständiger IndexedDB-Katalog direkt in der Kaufanalyse
+- Deutsche Suchaliase, u. a. Antiker Antrieb → Ancient Gear
+- Vollständige EK-/VK-Aufschlüsselung
+- Echte Δ-1-/7-/30-Tage-Anzeige aus Preisständen
+- Verständliche Hinweise bei fehlender Historie und Max-EK 0,00 €
+
+Version 4.2.3 – Auto-Import-Hotfix
+- Automatische Ordnerüberwachung ignoriert vollständige Warenwirtschafts-Backups.
+- Verhindert, dass ein älteres Backup den aktuellen Zustand ersetzt und manuell importierte Einkäufe entfernt.
+- Automatisch unterstützte JSON-Dateien sind auf Price-Guide- und Watchlist-Update-Dateien begrenzt.
+- CSV- und HTML-Importe werden weiterhin automatisch erkannt.
+
+TCG BUSINESS MANAGER – ÄNDERUNGSPROTOKOLL
+
+4.1.0
+- Neuer Versandarbeitsplatz mit kompakter Warteschlange und Statusübersicht.
+- Neue Status Kommissioniert und Verpackt.
+- Packmodus in der Verkaufsdetailansicht ergänzt.
+- Karten-/Versionsprüfung und Empfänger-/Versandprüfung ergänzt.
+- Live-Vorschau für Porto, Materialkosten und Gewinn ergänzt.
+- Fehler behoben: Das Laden einer Versandvorlage konnte die spätere Materialabbuchung verhindern.
+- Materialbuchung atomarer gestaltet; unzureichender Bestand blockiert den Vorgang.
+- Doppelte Materialpositionen werden beim Speichern zusammengefasst.
+- Direkter Abschluss über „Speichern & versendet“ ergänzt.
+
+4.0.1
+- Watchlist-Import und Qualitätskorrekturen.
+
+4.3.0
+- Kaufanalyse in der Marktbeobachtung ergänzt.
+- Suche über Watchlist, Bestand, Einkäufe und Verkäufe.
+- Bester/Ø EK, bester/Ø VK, Bestand, Reservierungen, Gewinn und Historie.
+
+4.4.0 – Cardmarket Data Center
+- Vollständiger Produktkatalog in IndexedDB
+- Tägliche Price-Guide-Historie ohne Duplikate pro Datum
+- Einkaufsrechner und Marktanalyse mit Euro-Trends
+- Händler-Dashboard und vollständige Variantensuche
+- Separate Cardmarket-Datensicherung

@@ -1,0 +1,27 @@
+TCG BUSINESS MANAGER 4.2.1 – QA-BERICHT
+
+Geprüfter Umfang: Sprint 1 / Versand-Workflow
+
+BESTANDENE PRÜFUNGEN
+- JavaScript-Syntaxprüfung mit `node --check app.js` bestanden.
+- Materialzeilen können über die ×-Schaltfläche entfernt werden; der Kosten-Vorschaubereich wird anschließend aktualisiert.
+- Statusfolge ist technisch fest vorgegeben:
+  Offen → Bezahlt → Kommissioniert → Verpackt → Versandlabel erstellt → Versendet → Abgeschlossen.
+- Schnellaktionen im Versandarbeitsplatz bieten nur den jeweils nächsten zulässigen Schritt an.
+- Bestehende Verkäufe können im allgemeinen Bearbeitungsdialog nicht mehr auf einen beliebigen Versandstatus gesetzt werden.
+- Packdaten können erst ab Status „Kommissioniert“ gespeichert werden.
+- Das Speichern der Packdaten setzt „Kommissioniert“ auf „Verpackt“.
+- „Versandlabel erstellt“ ist nur mit gespeicherten Materialien und bestätigter Kartenprüfung möglich.
+- „Speichern & versenden“ ist nur aus „Versandlabel erstellt“ möglich.
+- Nach erfolgreichem Versand wird das Bestellfenster automatisch geschlossen.
+- Negativer Materialbestand bleibt blockiert.
+
+KOMPATIBILITÄT
+- Bestehende Backups aus Version 4.1.0 bleiben importierbar.
+- Bereits vorhandene Statuswerte werden nicht verändert.
+- Der neue Status „Versandlabel erstellt“ wird erst bei neuen Workflow-Schritten verwendet.
+
+OFFEN FÜR DEN PRAXISTEST
+- Bedienung mit einer echten neuen Cardmarket-Bestellung.
+- Prüfung, ob die Reihenfolge im realen Packprozess passend ist.
+- Danach: Bewegungsjournal, Bestellhistorie und Rückgängig-System.

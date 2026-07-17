@@ -1,0 +1,27 @@
+TCG Business Manager 4.4.0 – Cardmarket Data Center
+====================================================
+
+NEU
+- Vollständiger offizieller Cardmarket-Produktkatalog in einer eigenen IndexedDB-Datenbank.
+- Import von products_singles_3.json mit Product-ID, Kartenname, Expansion-ID und Metacard-ID.
+- Import von price_guide_3.json mit Low, Trend, Avg, Avg1, Avg7, Avg30 und Foil-Werten.
+- Tägliche Preishistorie: derselbe Kalendertag wird aktualisiert, neue Tage werden ergänzt.
+- Zusammenführung von Produkt- und Preisdaten über idProduct.
+- Cardmarket-Datencenter mit vollständiger Variantensuche, Preisverlauf und Tagesständen.
+- Berechnungsengine für empfohlenen Verkaufspreis, maximalen Einkaufspreis, Gewinn und ROI.
+- Marktanalyse mit Euro-Entwicklung, 7-/30-Tage-Vergleich, Analysescore und Kaufempfehlung.
+- Händlerübersicht „Interessante Karten heute“.
+- Eigene Einkaufs-, Verkaufs-, Bestands- und Reservierungsdaten werden in der Analyse berücksichtigt.
+- Separate Sicherung und Wiederherstellung der großen Cardmarket-Datenbank.
+
+VERBESSERT
+- Price-Guide-Feld priceGuides wird korrekt erkannt.
+- Große Price Guides werden nicht mehr vollständig in localStorage geschrieben.
+- Universalimport und Ordnerüberwachung erkennen jetzt auch products_singles_3.json.
+- Importverlauf unterscheidet Produktkatalog, Price Guide und Cardmarket-Sicherung.
+- Bestehende Warenwirtschaftsdaten aus 4.3.x bleiben erhalten.
+
+HINWEIS
+- Der offizielle Product Catalog liefert keine vollständigen Setcodes/Seltenheiten als eigene Felder.
+  Version und Seltenheit werden soweit möglich aus dem Produktnamen abgeleitet; bekannte lokale Setdaten bleiben erhalten.
+- Eine echte Tagesänderung entsteht ab dem zweiten Preisstand eines anderen Kalendertages.

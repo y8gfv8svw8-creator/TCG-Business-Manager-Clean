@@ -1,0 +1,16 @@
+TCG BUSINESS MANAGER 4.5.0 – MARKET INTELLIGENCE FOUNDATION
+
+NEU
+- IndexedDB-Datenmodell auf Version 2 erweitert.
+- Neue technische Tabellen: collectionRuns, dataSources und analysisMetrics.
+- Jeder Preisstand erhält Quelle, Quellentyp, Datenqualität und Erfassungszeitpunkt.
+- Offizielle Cardmarket-Preisimporte werden als Sammlungsläufe protokolliert.
+- Automatische tägliche Aktualisierung beim ersten Programmstart des Tages.
+- Bestehende Preis- und Produkthistorie bleibt erhalten.
+- Struktur ist für eine spätere Cardmarket-API vorbereitet.
+
+WICHTIG
+- Es ist keine zusätzliche Datenbank-Software nötig.
+- Die Daten liegen lokal im Browserprofil von Chrome/Edge in IndexedDB.
+- Die automatische Aktualisierung funktioniert, sobald der Business Manager geöffnet wird und Internetzugriff besteht.
+- Für Updates bei geschlossenem Programm wäre später ein separates Windows-Hilfsprogramm erforderlich.

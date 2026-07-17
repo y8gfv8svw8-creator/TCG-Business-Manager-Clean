@@ -1,0 +1,14 @@
+QA-BERICHT 4.4.3
+
+GEPRÜFT
+- JavaScript-Syntax von app.js und cardmarket-data-center.js.
+- Berechnungsfall aus dem Nutzer-Screenshot: Low 0,02 €, Trend 0,33 €, Ø1 0,59 €, Ø7 0,26 €, Ø30 0,30 €.
+- Erwartetes Ergebnis: Preiswerte vorhanden, Empfehlung MINDESTZIEL VERFEHLT, Max-EK 0,00 €, Score 14/100 statt 83/100.
+- Leerer Preisdatensatz: KEINE PREISDATEN und kein numerischer Score.
+- Positiver Testfall mit vollständiger Datenbasis: TOP DEAL und hohe Datenkonfidenz.
+- ZIP-Inhalt und Dateistruktur.
+
+HINWEIS
+- Echte Δ-7-/30-Tage-Werte benötigen gespeicherte Preisstände mit entsprechendem Zeitabstand.
+- Der Cardmarket-Produktkatalog enthält bei vielen Produkten nur Expansion-ID und keine Setnamen/Seltenheit. Diese Angaben werden deshalb nur bei eindeutiger Zuordnung ergänzt.
+- Der Online-Abgleich deutscher Kartendaten muss im Nutzerbrowser mit Internetzugang ausgeführt werden.

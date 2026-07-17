@@ -1,0 +1,8 @@
+TCG BUSINESS MANAGER – FOUNDATION 5.0.2
+
+1. INSTALLIEREN.bat doppelt anklicken.
+2. Warten, bis die Installation erfolgreich beendet ist.
+3. STARTEN.bat doppelt anklicken.
+
+Nach dem Start muss oben kurz „SQLite bereit“ erscheinen.
+Die Datenbank wird automatisch in deinem Dokumente-Ordner angelegt.

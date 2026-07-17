@@ -1,0 +1,10 @@
+TCG Business Manager – Foundation 5.0.2
+
+- SQLite-Datenbank ist jetzt aktiv.
+- Programmstand wird automatisch zusätzlich in SQLite gespeichert.
+- Beim Start wird der letzte SQLite-Stand automatisch geladen.
+- Tägliches automatisches JSON-Backup unter Dokumente\TCG Business Manager\Backups\Automatisch.
+- Cardmarket-Produktkatalog wird für spätere Analysen in SQLite gespiegelt.
+- Jeder importierte Price Guide wird als dauerhafte Tageshistorie in SQLite gespeichert.
+- Tabellen für spätere Liquiditäts- und Score-Analysen vorbereitet.
+- Bestehende Browser-/Electron-Daten werden beim ersten Start übernommen.

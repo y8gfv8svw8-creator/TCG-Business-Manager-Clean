@@ -1,0 +1,15 @@
+TCG Business Manager 4.4.2 – Deutsche Namen & lesbare Kaufanalyse
+
+NEU
+- Deutsche Kartennamen können über die YGOPRODeck-API geladen und dauerhaft lokal gespeichert werden.
+- Anzeige und Suche funktionieren danach mit deutschen und englischen Kartennamen.
+- Deutsche Namen bleiben bei einem erneuten Cardmarket-Katalogimport erhalten.
+
+VERBESSERT
+- Kaufanalyse vollständig als große, lesbare Kartenansicht neu aufgebaut.
+- Marktpreise, 1-/7-/30-Tage-Werte, echte Preisänderungen, EK/VK-Rechnung und eigene Daten sind klar getrennt.
+- Größere Schriften, stärkere Kontraste und kein unübersichtlicher 1.400-Pixel-Breittisch mehr.
+
+BEHOBEN
+- Scrollposition und aktuelle Ergebnisposition bleiben bei Aktualisierungen erhalten.
+- Während einer Neuberechnung bleibt die alte Ergebnisfläche stehen, damit die Seite nicht mehr nach oben springt.

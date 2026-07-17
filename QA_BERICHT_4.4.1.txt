@@ -1,0 +1,10 @@
+QA-BERICHT – TCG Business Manager 4.4.1
+
+Prüfungen
+- JavaScript-Syntax von app.js und cardmarket-data-center.js geprüft.
+- Suchalias „Antiker“ gegen den bereitgestellten Gesamtkatalog getestet.
+- Treffer enthalten Ancient Gear Golem und weitere unterschiedliche Ancient-Gear-Karten.
+- Ergebnis-Diversifizierung nach Metacard geprüft.
+- Preisfelder Low, Trend, Avg1, Avg7 und Avg30 aus dem Price Guide berücksichtigt.
+- Max-EK 0,00 € wird als Berechnungsergebnis dargestellt.
+- Echte Verlaufswerte verwenden nur gespeicherte Tagesstände.

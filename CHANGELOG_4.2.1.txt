@@ -1,0 +1,9 @@
+TCG Business Manager 4.2.1 – Lagerdetails-Hotfix
+
+Behoben:
+- Der Details-Button im Lager reagiert jetzt zuverlässig, auch wenn direkt auf die Zahl oder den Text „Details“ geklickt wird.
+- Die zentrale Klickverarbeitung erkennt nun das vollständige Schaltflächenelement statt nur das unmittelbar angeklickte Kindelement.
+
+Technik:
+- Event-Delegation auf Element.closest(...) umgestellt.
+- JavaScript-Syntaxprüfung durchgeführt.

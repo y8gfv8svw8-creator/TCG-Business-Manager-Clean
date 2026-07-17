@@ -1,0 +1,6 @@
+Version 4.2.3 – Auto-Import-Hotfix
+- Automatische Ordnerüberwachung ignoriert vollständige Warenwirtschafts-Backups.
+- Verhindert, dass ein älteres Backup den aktuellen Zustand ersetzt und manuell importierte Einkäufe entfernt.
+- Automatisch unterstützte JSON-Dateien sind auf Price-Guide- und Watchlist-Update-Dateien begrenzt.
+- CSV- und HTML-Importe werden weiterhin automatisch erkannt.
+

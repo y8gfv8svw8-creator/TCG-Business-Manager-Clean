@@ -1,0 +1,19 @@
+TCG Business Manager 4.4.4 – Kalkulations- und Setdaten-Hotfix
+
+KORRIGIERT
+- Negative Nettoerlöse werden vollständig weitergerechnet und nicht mehr auf 0 begrenzt.
+- Gewinn, ROI und Marge enthalten nun Sicherheits-VK, Gebühren, Verpackung und Karten-EK konsistent.
+- Verkäufe, deren Sicherheits-VK nicht einmal Gebühren und Verpackung deckt, werden als „NICHT KOSTENDECKEND“ markiert.
+- Statt eines irreführenden Break-even-EK von 0,00 € wird der Fehlbetrag vor Karteneinkauf angezeigt.
+- Max-EK nach Mindestgewinn, Mindest-ROI und finaler Max-EK werden konservativ auf volle Cent abgerundet.
+- Nicht kostendeckende Karten erhalten Score 0; Verlustgeschäfte werden auf maximal 5 Punkte begrenzt.
+
+VERBESSERT
+- Ziel-VK und Sicherheits-VK verwenden dieselbe sichtbare centgenaue Rechenbasis.
+- Die Marge wird auf den tatsächlich verwendeten Sicherheits-VK bezogen.
+- Setnamen werden über eine vorsichtige Mehrheitszuordnung zwischen Cardmarket-Expansion-ID und YGOPRODeck-Sets ergänzt.
+- Seltenheiten werden nur übernommen, wenn innerhalb des zugeordneten Sets genau eine eindeutige Seltenheit zur Karte passt.
+- Unsichere Set-/Seltenheitszuordnungen bleiben weiterhin leer, statt geraten zu werden.
+
+NACH DEM UPDATE
+- Im Cardmarket-Datencenter einmal „Deutsche Kartendaten aktualisieren“ ausführen, um die neue Set-Zuordnung anzuwenden.

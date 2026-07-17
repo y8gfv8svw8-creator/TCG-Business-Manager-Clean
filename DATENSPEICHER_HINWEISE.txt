@@ -1,0 +1,18 @@
+WO LIEGEN DIE DATEN?
+
+Der TCG Business Manager 4.5.0 speichert große Cardmarket-Daten lokal in IndexedDB.
+IndexedDB gehört zu Chrome/Edge und muss nicht separat installiert werden.
+
+Wichtig:
+- Möglichst immer denselben Browser und dasselbe Windows-Benutzerprofil verwenden.
+- Browserdaten für die Datei nicht löschen.
+- Inkognito-/InPrivate-Modus nicht verwenden.
+- Regelmäßig über das Cardmarket-Datencenter eine Sicherung exportieren.
+
+AUTOMATISCHE AKTUALISIERUNG
+Beim ersten Öffnen des Programms pro Kalendertag versucht Version 4.5.0,
+den offiziellen Yu-Gi-Oh!-Price-Guide von Cardmarket zu laden und als neuen Tagesstand zu speichern.
+
+Grenze der Browser-Version:
+Ist der Business Manager geschlossen, kann er nicht selbstständig laufen.
+Für eine feste Uhrzeit bei geschlossenem Browser wäre später ein separates Windows-Hilfsprogramm nötig.

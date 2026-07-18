@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { TcgDatabase } = require('./database');
 
-const APP_TITLE = 'TCG Business Manager – Market History 5.1.0';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 5.2.0';
 let database = null;
 let dataRoot = '';
 

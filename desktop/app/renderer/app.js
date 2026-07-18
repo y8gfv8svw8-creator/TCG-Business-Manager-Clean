@@ -398,6 +398,68 @@ function escapeHtml(v) {
   return String(v??"").replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 }
 
+
+function normalizeSearchTerm(value) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("de-DE")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function catalogCardData(item={}) {
+  const productId = cleanProductId(item.productId);
+  return productId ? (state.productCatalog?.[productId] || BUILTIN_PRODUCT_CATALOG[productId] || {}) : {};
+}
+
+function cardDisplayNames(item={}) {
+  const catalog = catalogCardData(item);
+  const german = String(item.germanName || catalog.germanName || item.name || catalog.name || "Unbekannte Karte").trim();
+  const english = String(item.englishName || catalog.officialBaseName || catalog.officialName || catalog.name || "").trim();
+  return {
+    primary: german || english || "Unbekannte Karte",
+    secondary: english && normalizeSearchTerm(english) !== normalizeSearchTerm(german) ? english : ""
+  };
+}
+
+function cardRecordSearchValues(record={}) {
+  if (!record || typeof record !== "object") return [];
+  const catalog = catalogCardData(record);
+  const values = [];
+  const directFields = [
+    "name","germanName","englishName","officialName","officialBaseName",
+    "set","setName","rarity","version","collectorNumber","cardNumber",
+    "productId","orderNo","seller","customer","country","status","note",
+    "articleId","location","source","category","recommendation","reason"
+  ];
+  directFields.forEach(key => {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") values.push(String(value));
+  });
+  [
+    catalog.germanName, catalog.name, catalog.officialName, catalog.officialBaseName,
+    catalog.set, catalog.setName, catalog.rarity, catalog.variant,
+    catalog.collectorNumber, catalog.productId
+  ].forEach(value => { if (value !== undefined && value !== null && value !== "") values.push(String(value)); });
+
+  ["pendingItems","items"].forEach(key => {
+    if (Array.isArray(record[key])) record[key].forEach(item => values.push(...cardRecordSearchValues(item)));
+  });
+  if (Array.isArray(record.itemIds)) {
+    const ids = new Set(record.itemIds);
+    state.inventory.filter(item => ids.has(item.id)).forEach(item => values.push(...cardRecordSearchValues(item)));
+  }
+  return values;
+}
+
+function cardRecordMatchesSearch(record, query) {
+  const normalizedQuery = normalizeSearchTerm(query);
+  if (!normalizedQuery) return true;
+  const haystack = normalizeSearchTerm(cardRecordSearchValues(record).join(" "));
+  return normalizedQuery.split(/\s+/).every(term => haystack.includes(term));
+}
+
 function isCardmarketSearchUrl(url) {
   return /cardmarket\.com\/(?:de|en|fr|es|it)\/YuGiOh\/Products\/Search/i.test(String(url || ""));
 }
@@ -670,21 +732,17 @@ function getInventoryGroups() {
 }
 
 function renderInventory() {
-  const q = document.getElementById("inventorySearch").value.toLowerCase();
+  const q = document.getElementById("inventorySearch").value;
   const f = document.getElementById("inventoryStatusFilter").value;
   const rows = getInventoryGroups().filter(group => {
     const i = group.first;
     const displayStatus = inventoryDisplayStatus(i);
-    const searchable = JSON.stringify({
-      name:i.name, productId:i.productId, set:i.set, rarity:i.rarity,
-      language:i.language, condition:i.condition, status:displayStatus,
-      listingPrice:i.listingPrice, quantity:group.quantity
-    }).toLowerCase();
-    return (!q || searchable.includes(q)) && (!f || displayStatus === f || i.status === f);
+    return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q) && (!f || displayStatus === f || i.status === f);
   });
 
   document.getElementById("inventoryTable").innerHTML = rows.length ? rows.map(group => {
     const i = group.first;
+    const names = cardDisplayNames(i);
     const displayStatus = inventoryDisplayStatus(i);
     const price = i.listed && Number(i.listingPrice || 0) > 0
       ? money(i.listingPrice)
@@ -692,7 +750,7 @@ function renderInventory() {
     const url = cardmarketUrl(i);
     const exactLink = /^https?:\/\//i.test(String(i.productUrl || state.productCatalog?.[cleanProductId(i.productId)]?.productUrl || ""));
     return `<tr>
-      <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(i.name)}</strong><span class="external-link">↗</span></a><br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
+      <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
       <td>${escapeHtml(i.set || "-")}</td>
       <td>${escapeHtml(i.rarity || "-")}</td>
       <td><button class="stock-detail-button" data-inventory-details="${escapeHtml(group.key)}"><strong>${group.quantity}</strong><span>Details</span></button></td>
@@ -735,9 +793,9 @@ function editInventoryGroup(groupKey) {
 }
 
 function renderPurchases() {
-  const q = document.getElementById("purchaseSearch").value.toLowerCase();
+  const q = document.getElementById("purchaseSearch").value;
   const f = document.getElementById("purchaseStatusFilter").value;
-  const rows = state.purchases.filter(p=>(!q || JSON.stringify(p).toLowerCase().includes(q)) && (!f || p.status===f));
+  const rows = state.purchases.filter(p=>cardRecordMatchesSearch(p,q) && (!f || p.status===f));
   document.getElementById("purchaseTable").innerHTML = rows.length ? rows.map(p=>`
     <tr><td><strong>${escapeHtml(p.orderNo)}</strong></td><td>${fmtDate(p.date)}</td><td>${escapeHtml(p.seller||"")}</td>
     <td>${escapeHtml(p.country||"")}</td><td>${Number(p.items||0)}</td><td>${money(p.cardValue)}</td><td>${money(p.shipping)}</td>
@@ -746,9 +804,9 @@ function renderPurchases() {
 }
 
 function renderSales() {
-  const q = document.getElementById("salesSearch").value.toLowerCase();
+  const q = document.getElementById("salesSearch").value;
   const f = document.getElementById("salesStatusFilter").value;
-  const rows = state.sales.filter(s=>(!q || JSON.stringify(s).toLowerCase().includes(q)) && (!f || s.status===f));
+  const rows = state.sales.filter(s=>cardRecordMatchesSearch(s,q) && (!f || s.status===f));
   document.getElementById("salesTable").innerHTML = rows.length ? rows.map(s=>{const calc=calculateSaleProfit(s); return `
     <tr><td><strong>${escapeHtml(s.orderNo)}</strong></td><td>${fmtDate(s.date)}</td><td>${escapeHtml(s.customer||"")}</td>
     <td>${Number(s.quantity||0)}</td><td>${money(s.revenue)}</td><td>${money(calc.fee)}</td>
@@ -997,15 +1055,16 @@ function cardAnalysis(card) {
 }
 function renderPurchaseAnalysis() {
   const el=document.getElementById("purchaseAnalysis"); if(!el)return;
-  const q=String(document.getElementById("watchSearch")?.value||"").trim().toLowerCase();
+  const q=String(document.getElementById("watchSearch")?.value||"").trim();
   if(q.length<2){el.innerHTML='<div class="purchase-analysis-empty"><strong>Gesamtkatalog durchsuchen</strong><br>Mindestens zwei Zeichen eingeben. Eigene Daten und berechnete Einkaufswerte werden zusammen angezeigt.</div>';return;}
-  const cards=collectAnalysisCards().filter(c=>JSON.stringify(c).toLowerCase().includes(q)).slice(0,40);
+  const cards=collectAnalysisCards().filter(c=>cardRecordMatchesSearch(c,q)).slice(0,40);
   if(!cards.length){el.innerHTML='<div class="purchase-analysis-empty">Keine passende Karte im Gesamtkatalog gefunden. Für weitere Karten zuerst einen aktuellen Produktkatalog importieren.</div>';return;}
   el.innerHTML=`<div class="analysis-grid">${cards.map(card=>{
     const a=cardAnalysis(card), cls=a.recommendation==="KAUFEN"?"money-positive":a.recommendation==="NICHT KAUFEN"?"money-negative":"";
+    const names=cardDisplayNames(card);
     const purchaseRows=a.purchases.slice(0,15).map(r=>`<tr><td>${fmtDate(r.date)||"-"}</td><td>${r.quantity}×</td><td>${money(r.unitPrice)}</td><td>${escapeHtml(r.seller)}</td><td>${escapeHtml(r.reference)}</td></tr>`).join("");
     const saleRows=a.sales.slice(0,15).map(r=>`<tr><td>${fmtDate(r.date)||"-"}</td><td>${r.quantity}×</td><td>${money(r.unitPrice)}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.reference)}</td></tr>`).join("");
-    return `<article class="analysis-card"><div class="analysis-card-head"><div><h3><a class="card-link" href="${escapeHtml(cardmarketUrl(card))}" target="_blank" rel="noopener noreferrer">${escapeHtml(card.name)} <span class="external-link">↗</span></a></h3><small>${escapeHtml(card.set||"Set unbekannt")} · ${escapeHtml(card.rarity||"Version unbekannt")} · CM ${escapeHtml(card.productId||"-")}</small></div>${a.watch?statusBadge(calculateWatch(a.watch).status):`<button class="secondary" data-analysis-add-watch="${escapeHtml(card.productId||"")}">+ Watchlist</button>`}</div>
+    return `<article class="analysis-card"><div class="analysis-card-head"><div><h3><a class="card-link" href="${escapeHtml(cardmarketUrl(card))}" target="_blank" rel="noopener noreferrer">${escapeHtml(names.primary)} <span class="external-link">↗</span></a></h3>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small><br>`:""}<small>${escapeHtml(card.set||"Set unbekannt")} · ${escapeHtml(card.rarity||"Version unbekannt")} · CM ${escapeHtml(card.productId||"-")}</small></div>${a.watch?statusBadge(calculateWatch(a.watch).status):`<button class="secondary" data-analysis-add-watch="${escapeHtml(card.productId||"")}">+ Watchlist</button>`}</div>
       <div class="analysis-metrics">
         <div class="analysis-metric"><span>Aktueller Marktpreis</span><strong>${a.marketPrice?money(a.marketPrice):"-"}</strong></div><div class="analysis-metric"><span>Empfohlener VK</span><strong>${a.expectedSell?money(a.expectedSell):"-"}</strong></div><div class="analysis-metric"><span>Empfohlener Max-EK</span><strong>${a.calculatedMaxBuy?money(a.calculatedMaxBuy):"-"}</strong></div>
         <div class="analysis-metric"><span>Eigene Kaufgrenze</span><strong>${a.watch?.maxBuy?money(a.watch.maxBuy):"-"}</strong></div><div class="analysis-metric"><span>Bester eigener EK</span><strong>${a.bestBuy?money(a.bestBuy):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Ø eigener EK</span><strong>${a.avgBuy?money(a.avgBuy):"Keine Daten"}</strong></div>
@@ -1017,15 +1076,15 @@ function renderPurchaseAnalysis() {
 }
 function renderWatchlist() {
   renderPurchaseAnalysis();
-  const q = document.getElementById("watchSearch").value.toLowerCase();
+  const q = document.getElementById("watchSearch").value;
   const f = document.getElementById("watchStatusFilter").value;
-  const rows = state.watchlist.filter(w=>!w.archived).map(w=>({...w,...calculateWatch(w)})).filter(w=>(!q || JSON.stringify(w).toLowerCase().includes(q)) && (!f || w.status===f));
-  document.getElementById("watchTable").innerHTML = rows.length ? rows.map(w=>`
-    <tr><td>${escapeHtml(w.priority)}</td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(w))}" title="${escapeHtml(`Cardmarket öffnen · Produkt-ID ${w.productId||"nicht vorhanden"} · ${w.set||"Set unbekannt"} · ${w.version||w.rarity||"Version unbekannt"}`)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(w.name)}</strong><span class="external-link">↗</span></a><br><small>CM ${escapeHtml(w.productId||"-")}</small></td>
+  const rows = state.watchlist.filter(w=>!w.archived).map(w=>({...w,...calculateWatch(w)})).filter(w=>cardRecordMatchesSearch(w,q) && (!f || w.status===f));
+  document.getElementById("watchTable").innerHTML = rows.length ? rows.map(w=>{ const names=cardDisplayNames(w); return `
+    <tr><td>${escapeHtml(w.priority)}</td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(w))}" title="${escapeHtml(`Cardmarket öffnen · Produkt-ID ${w.productId||"nicht vorhanden"} · ${w.set||"Set unbekannt"} · ${w.version||w.rarity||"Version unbekannt"}`)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(w.productId||"-")}</small></td>
     <td>${escapeHtml(w.set||"")}<br><small>${escapeHtml(w.version||"")}</small></td><td>${w.stock}</td><td>${w.target}</td>
     <td>${money(w.maxBuy)}</td><td>${money(w.targetSell)}</td><td>${w.trend!==""?money(w.trend):"-"}</td><td>${w.avg30!==""?money(w.avg30):"-"}</td>
     <td>${w.currentBuy!==""?money(w.profit):"-"}</td><td>${w.currentBuy!==""?pct(w.roi):"-"}</td><td>${statusBadge(w.status)}</td>
-    <td><div class="row-actions"><button class="icon-button" data-edit-watch="${w.id}">Bearbeiten</button><button class="icon-button" data-delete-watch="${w.id}">Löschen</button></div></td></tr>`).join("") : `<tr><td colspan="13" class="empty">Keine Karten gefunden</td></tr>`;
+    <td><div class="row-actions"><button class="icon-button" data-edit-watch="${w.id}">Bearbeiten</button><button class="icon-button" data-delete-watch="${w.id}">Löschen</button></div></td></tr>`;}).join("") : `<tr><td colspan="13" class="empty">Keine Karten gefunden</td></tr>`;
 }
 
 
@@ -1033,8 +1092,8 @@ function orderItemTable(items=[], kind="purchase") {
   if(!items.length) return `<div class="empty">Für diese ältere Bestellung sind noch keine Einzelpositionen gespeichert.</div>`;
   return `<div class="order-items"><table><thead><tr><th>Menge</th><th>Karte</th><th>Set</th><th>Seltenheit</th><th>Sprache</th><th>Zustand</th><th>Stückpreis</th><th>Gesamt</th></tr></thead><tbody>${items.map(item=>{
     const qty=Number(item.quantity||item.amount||1); const price=Number(item.unitPrice||item.price||0);
-    const url=cardmarketUrl(item);
-    return `<tr><td><strong>${qty}×</strong></td><td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(item.name||"Unbekannte Karte")}</strong><span class="external-link">↗</span></a>${item.collectorNumber?`<br><small>#${escapeHtml(item.collectorNumber)}</small>`:""}</td><td>${escapeHtml(item.set||"-")}</td><td>${escapeHtml(item.rarity||"-")}</td><td>${escapeHtml(item.language||"-")}</td><td>${escapeHtml(item.condition||"-")}</td><td>${money(price)}</td><td>${money(qty*price)}</td></tr>`;
+    const url=cardmarketUrl(item); const names=cardDisplayNames(item);
+    return `<tr><td><strong>${qty}×</strong></td><td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}${item.collectorNumber?`<br><small>#${escapeHtml(item.collectorNumber)}</small>`:""}</td><td>${escapeHtml(item.set||"-")}</td><td>${escapeHtml(item.rarity||"-")}</td><td>${escapeHtml(item.language||"-")}</td><td>${escapeHtml(item.condition||"-")}</td><td>${money(price)}</td><td>${money(qty*price)}</td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
 

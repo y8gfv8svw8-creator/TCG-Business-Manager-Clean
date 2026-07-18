@@ -1,7 +1,7 @@
 {
   "name": "tcg-business-manager",
   "productName": "TCG Business Manager",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "private": true,
   "description": "Offline-Warenwirtschaft und Market-Intelligence-Grundlage für den europäischen TCG-Handel.",
   "main": "app/main/main.js",

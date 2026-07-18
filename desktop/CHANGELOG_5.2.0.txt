@@ -1,0 +1,13 @@
+TCG Business Manager 5.2.0 – Analysecenter
+
+Entwicklungsschritt 1: Zweisprachige Kartensuche
+
+- Bestand durchsucht deutsche und englische Kartennamen.
+- Einkäufe durchsuchen auch Kartenpositionen auf Deutsch und Englisch.
+- Verkäufe durchsuchen auch verknüpfte Bestandskarten auf Deutsch und Englisch.
+- Marktbeobachtung und Kaufanalyse akzeptieren beide Kartennamen.
+- Produkt-ID, Set, Seltenheit und Kartennummer bleiben durchsuchbar.
+- Umlaute, Akzente und Sonderzeichen werden bei der Suche tolerant behandelt.
+- In Bestands-, Watchlist-, Analyse- und Bestelldetails werden beide Namen angezeigt, wenn verfügbar.
+
+Weitere 5.2.0-Schritte folgen im Branch version-5.2-analysis.

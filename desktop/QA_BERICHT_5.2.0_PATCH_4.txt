@@ -1,0 +1,18 @@
+TCG Business Manager 5.2.0 – QA Patch 4
+
+Geprüft:
+- JavaScript-Syntax von cardmarket-data-center.js erfolgreich.
+- IndexedDB-Migration von Version 2 auf Version 3 ergänzt.
+- Neuer Store germanAliases mit Karten-ID, deutschem Namen und englischen Aliasnamen.
+- Suchabfrage kombiniert direkte Produktfelder mit dem zweisprachigen Aliasindex.
+- Aliasindex wird nach jeder manuellen oder automatischen deutschen Datenaktualisierung neu aufgebaut.
+- Cardmarket-Datenlöschung entfernt auch den Aliasindex.
+- Statuszahlen wurden verständlicher getrennt.
+
+Bei Stefan zu testen:
+1. Patch installieren.
+2. Deutsche Kartendaten einmal manuell aktualisieren.
+3. Manager neu starten.
+4. Nach „Hyperbeschworener Äon“ und „Hyperinvoked Aeon“ suchen.
+5. Beide Suchen müssen dieselben Cardmarket-Varianten liefern.
+6. Zusätzlich zwei ältere deutsche Kartennamen stichprobenartig prüfen.

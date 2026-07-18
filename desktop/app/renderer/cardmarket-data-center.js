@@ -6,8 +6,8 @@
   "use strict";
 
   const CM_DB_NAME = "tcgBusinessManagerCardmarket";
-  const CM_DB_VERSION = 2;
-  const CM_GERMAN_NAME_REVISION = 4;
+  const CM_DB_VERSION = 3;
+  const CM_GERMAN_NAME_REVISION = 5;
   const CM_GERMAN_NAME_REFRESH_DAYS = 7;
   const CM_VERIFIED_GERMAN_NAME_PAIRS = Object.freeze([
     ["Fiendsmith Engraver", "Unterweltlerschmied Graveur"],
@@ -20,7 +20,8 @@
     ["Fiendsmith's Sequence", "Sequenz des Unterweltlerschmieds"],
     ["Fiendsmith's Tract", "Tract des Unterweltlerschmieds"],
     ["Fiendsmith in Paradise", "Unterweltlerschmied im Paradies"],
-    ["Lacrima the Crimson Tears", "Lacrima, die blutroten Tränen"]
+    ["Lacrima the Crimson Tears", "Lacrima, die blutroten Tränen"],
+    ["Hyperinvoked Aeon", "Hyperbeschworener Äon"]
   ]);
   const CM_META_DEFAULTS = {
     catalogImportedAt: "",
@@ -41,6 +42,8 @@
     germanNameCoveragePercent: 0,
     germanApiEnglishCount: 0,
     germanApiGermanCount: 0,
+    germanAliasCount: 0,
+    germanUniqueCardCount: 0,
     germanNamesAutoUpdate: true,
     germanNamesLastAutoAttemptDate: "",
     germanNamesLastAutoSuccessDate: "",
@@ -62,6 +65,7 @@
   let cmMergedCache = null;
   let cmProductByIdCache = null;
   let cmLatestByIdCache = null;
+  let cmGermanAliasCache = null;
   let cmSearchTimer = null;
   let cmRenderToken = 0;
   let cmHistoryOverviewToken = 0;
@@ -314,6 +318,11 @@
           metrics.createIndex("productId", "productId", {unique:false});
           metrics.createIndex("date", "date", {unique:false});
         }
+        if (!db.objectStoreNames.contains("germanAliases")) {
+          const aliases = db.createObjectStore("germanAliases", {keyPath:"key"});
+          aliases.createIndex("germanName", "germanName", {unique:false});
+          aliases.createIndex("cardId", "cardId", {unique:false});
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error("Cardmarket-Datenbank konnte nicht geöffnet werden."));
@@ -427,6 +436,7 @@
     cmMergedCache = null;
     cmProductByIdCache = null;
     cmLatestByIdCache = null;
+    cmGermanAliasCache = null;
     cmOpportunityCache = {key:"", rows:[]};
   }
 
@@ -1292,6 +1302,75 @@
     return keys;
   }
 
+  function cmBuildGermanAliasRows(englishRows=[], germanRows=[]) {
+    const germanById = new Map(germanRows.map(row => [String(row?.id || ""), String(row?.name || "").trim()]).filter(([id,name]) => id && name));
+    const rows = [];
+    const seen = new Set();
+    for (const englishRow of englishRows) {
+      const cardId = String(englishRow?.id || "").trim();
+      const germanName = cmGermanNameCandidate(germanById.get(cardId) || "", englishRow?.name || "");
+      if (!cardId || !germanName) continue;
+      const germanKey = cmNormalize(germanName);
+      const englishKeys = cmYgoNameKeys(englishRow);
+      const englishNames = [englishRow?.name, englishRow?.beta_name, ...(Array.isArray(englishRow?.misc_info) ? englishRow.misc_info.flatMap(info => [info?.beta_name, info?.treated_as]) : [])]
+        .map(value => String(value || "").trim())
+        .filter(Boolean);
+      if (!germanKey || !englishKeys.length) continue;
+      const key = `${germanKey}|${cardId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        key,
+        cardId,
+        germanName,
+        germanKey,
+        englishNames:[...new Set(englishNames)],
+        englishKeys:[...new Set(englishKeys)],
+        updatedAt:new Date().toISOString()
+      });
+    }
+    for (const [englishName,germanName] of CM_VERIFIED_GERMAN_NAME_PAIRS) {
+      const germanKey = cmNormalize(germanName);
+      const englishKey = cmNormalize(englishName);
+      if (!germanKey || !englishKey) continue;
+      const key = `${germanKey}|verified:${englishKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({key,cardId:"",germanName,germanKey,englishNames:[englishName],englishKeys:[englishKey],updatedAt:new Date().toISOString(),verified:true});
+    }
+    return rows;
+  }
+
+  async function cmLoadGermanAliasCache() {
+    if (cmGermanAliasCache) return cmGermanAliasCache;
+    const rows = await cmGetAll("germanAliases");
+    cmGermanAliasCache = rows.map(row => ({
+      ...row,
+      germanKey:cmNormalize(row.germanKey || row.germanName || ""),
+      englishKeys:[...new Set((row.englishKeys || row.englishNames || []).map(cmNormalize).filter(Boolean))]
+    }));
+    return cmGermanAliasCache;
+  }
+
+  function cmGermanAliasQueryVariants(rawQuery="", aliasRows=[]) {
+    const query = cmNormalize(rawQuery);
+    if (!query) return [];
+    const variants = [];
+    const add = value => { const normalized=cmNormalize(value); if (normalized && !variants.includes(normalized)) variants.push(normalized); };
+    for (const row of aliasRows) {
+      const germanKey = row.germanKey || cmNormalize(row.germanName || "");
+      if (!germanKey) continue;
+      const terms = query.split(/\s+/).filter(Boolean);
+      const exact = germanKey === query;
+      const phrase = germanKey.includes(query) || query.includes(germanKey);
+      const allTerms = terms.length >= 2 && terms.every(term => germanKey.includes(term));
+      if (!exact && !phrase && !allTerms) continue;
+      (row.englishKeys || []).forEach(add);
+      if (exact) break;
+    }
+    return variants;
+  }
+
   function cmSetCodeDetails(value="") {
     const fullCode = String(value || "").trim().toUpperCase();
     if (!fullCode) return {fullCode:"",prefix:"",language:"",number:"",neutralCode:""};
@@ -1435,6 +1514,7 @@
     if (!englishRows.length || !germanRows.length) throw new Error("Die englische oder deutsche Kartendatenbank enthält keine Karten.");
 
     const germanById = new Map(germanRows.map(row => [String(row.id || ""), String(row.name || "").trim()]).filter(([id,name]) => id && name));
+    const germanAliasRows = cmBuildGermanAliasRows(englishRows,germanRows);
     const cardByEnglishKey = new Map();
     for (const row of englishRows) {
       for (const key of cmYgoNameKeys(row)) {
@@ -1537,7 +1617,9 @@
     });
 
     cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>0 von ${updated.length.toLocaleString("de-DE")} Produkten`,0);
-    await cmWriteRows("products",updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,done/Math.max(1,total)*85));
+    await cmWriteRows("products",updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,done/Math.max(1,total)*75));
+    await cmClearStore("germanAliases");
+    await cmWriteRows("germanAliases",germanAliasRows,(done,total)=>cmSetProgress(`<strong>Zweisprachiger Suchindex wird aufgebaut …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Kartenaliasen`,75+done/Math.max(1,total)*10));
     await cmSyncProductsToSqlite(updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden in SQLite aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,85+done/Math.max(1,total)*15));
 
     // Der kleine Kompatibilitätskatalog versorgt Bestand, Einkäufe und Verkäufe.
@@ -1570,6 +1652,8 @@
       germanNameRevision:CM_GERMAN_NAME_REVISION,
       germanNameVerifiedFallbackCount:verifiedFallbackCount,
       germanNameCoveragePercent:Number((matched/Math.max(1,updated.length)*100).toFixed(1)),
+      germanAliasCount:germanAliasRows.length,
+      germanUniqueCardCount:new Set(germanAliasRows.map(row => row.cardId || row.germanKey)).size,
       cardDataImportedAt:importedAt,
       setDetailCount,
       setMappingCount,
@@ -1579,7 +1663,7 @@
       ambiguousPrintCount,
       lastError:""
     };
-    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,verifiedFallbacks:verifiedFallbackCount,setDetails:setDetailCount,setMappings:setMappingCount,setCodes:setCodeCount,rarities:rarityCount,exactPrints:exactPrintCount,ambiguousPrints:ambiguousPrintCount});
+    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,verifiedFallbacks:verifiedFallbackCount,setDetails:setDetailCount,setMappings:setMappingCount,setCodes:setCodeCount,rarities:rarityCount,exactPrints:exactPrintCount,ambiguousPrints:ambiguousPrintCount,germanAliases:germanAliasRows.length});
     cmInvalidateCache();
     saveState();
     renderAll();
@@ -1796,7 +1880,7 @@
     setText("cmSnapshotCount", Number(meta.sqliteSnapshotCount || meta.snapshotDates?.length || 0).toLocaleString("de-DE"));
     setText("cmLatestPriceDate", meta.priceDate ? fmtDate(meta.priceDate) : "Noch kein Import");
     setText("cmGermanNameCount", Number(meta.germanNameCount || 0).toLocaleString("de-DE"));
-    setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")} · ${Number(meta.germanNameCoveragePercent||0).toLocaleString("de-DE",{maximumFractionDigits:1})} % Namen · ${Number(meta.setCodeCount||0).toLocaleString("de-DE")} Setnummern · ${Number(meta.rarityCount||0).toLocaleString("de-DE")} Seltenheiten${Number(meta.ambiguousPrintCount||0)>0?` · ${Number(meta.ambiguousPrintCount).toLocaleString("de-DE")} mehrdeutige Varianten`:""}` : "Noch nicht geladen · wird automatisch ergänzt");
+    setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")} · ${Number(meta.germanUniqueCardCount||0).toLocaleString("de-DE")} eindeutige deutsche Karten · ${Number(meta.germanNameCount||0).toLocaleString("de-DE")} zugeordnete Druckvarianten · ${Number(meta.setCodeCount||0).toLocaleString("de-DE")} Setnummern · ${Number(meta.rarityCount||0).toLocaleString("de-DE")} Seltenheiten${Number(meta.ambiguousPrintCount||0)>0?` · ${Number(meta.ambiguousPrintCount).toLocaleString("de-DE")} mehrdeutige Varianten`:""}` : "Noch nicht geladen · wird automatisch ergänzt");
     setText("cmCatalogStatus", meta.catalogImportedAt ? `Importiert am ${new Date(meta.catalogImportedAt).toLocaleString("de-DE")} · Quelle ${meta.catalogCreatedAt ? fmtDate(meta.catalogCreatedAt) : "ohne Datum"}` : "Noch kein Produktkatalog importiert");
     setText("cmPriceStatus", meta.priceImportedAt ? `Importiert am ${new Date(meta.priceImportedAt).toLocaleString("de-DE")} · Preisstand ${fmtDate(meta.priceDate)}` : "Noch kein Price Guide importiert");
     const snapshots = document.getElementById("cmSnapshotDates");
@@ -1858,7 +1942,7 @@
   async function cmImportBackupPayload(payload,source="TCG_Cardmarket_Daten.json") {
     if (!cmIsBackup(payload)) throw new Error("Keine gültige Cardmarket-Datensicherung erkannt.");
     cmSetProgress("<strong>Bestehende Cardmarket-Daten werden ersetzt …</strong>",5);
-    await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory")]);
+    await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory"),cmClearStore("germanAliases")]);
     if(window.desktopApp?.clearMarketData) await window.desktopApp.clearMarketData();
     await cmWriteRows("products",payload.products,(done,total)=>cmSetProgress(`<strong>Produkte werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,5+done/Math.max(1,total)*30));
     await cmWriteRows("latestPrices",payload.latestPrices || [],(done,total)=>cmSetProgress(`<strong>Aktuelle Preise werden wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,40+done/Math.max(1,total)*20));
@@ -1874,7 +1958,7 @@
 
   async function cmClearAll(ask=true) {
     if (ask && !confirm("Produktkatalog und komplette Cardmarket-Preishistorie wirklich löschen? Warenwirtschaft, Bestand, Käufe und Verkäufe bleiben erhalten.")) return false;
-    await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory")]);
+    await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory"),cmClearStore("germanAliases")]);
     if(window.desktopApp?.clearMarketData) await window.desktopApp.clearMarketData();
     state.cardmarket={...CM_META_DEFAULTS};
     state.imports=state.imports.filter(record=>!["catalog","prices","cardmarketBackup"].includes(record.type));
@@ -2156,9 +2240,10 @@
       el.innerHTML='<div class="purchase-analysis-empty">Vollständiger Cardmarket-Katalog und Preishistorie werden durchsucht …</div>';
     }
     try{
-      const all=await cmLoadMergedCache();
+      const [all,germanAliases]=await Promise.all([cmLoadMergedCache(),cmLoadGermanAliasCache()]);
       if(token!==cmPurchaseAnalysisToken)return;
-      const variants=cmAnalysisQueryVariants(queryRaw);
+      const variants=[...cmAnalysisQueryVariants(queryRaw)];
+      cmGermanAliasQueryVariants(queryRaw,germanAliases).forEach(variant=>{ if(!variants.includes(variant)) variants.push(variant); });
       const matches=[];
       for(const product of all){
         const rank=cmAnalysisMatchRank(product,variants);

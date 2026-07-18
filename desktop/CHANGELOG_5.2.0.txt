@@ -37,3 +37,10 @@ Patch 3 – Deutscher Karten- und Druckdatenkatalog
 - Eindeutige Drucke werden als vollständig markiert.
 - Wenn Cardmarket mehrere Seltenheiten unter derselben Expansion führt und der öffentliche Produktkatalog keine sichere Unterscheidung erlaubt, wird die Variante ausdrücklich als mehrdeutig markiert statt eine Seltenheit zu raten.
 - Setnummern und deutsche/englische Namen sind anschließend ebenfalls durchsuchbar.
+
+Patch 4 – Zweisprachiger Suchindex
+- Deutschen Gesamtkatalog nicht mehr nur direkt in Produktvarianten eintragen, sondern zusätzlich als eigenen Aliasindex speichern.
+- Deutsche Suchbegriffe werden über Karten-ID und alle bekannten englischen Namen auf Cardmarket-Druckvarianten zurückgeführt.
+- Umbenannte oder sehr neue Karten bleiben dadurch auch dann auffindbar, wenn der direkte Produktabgleich noch keine deutsche Bezeichnung eingetragen hat.
+- Beispiel ergänzt: Hyperinvoked Aeon / Hyperbeschworener Äon.
+- Statusanzeige unterscheidet jetzt eindeutige deutsche Karten von zugeordneten Druckvarianten.

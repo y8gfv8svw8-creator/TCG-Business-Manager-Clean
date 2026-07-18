@@ -608,6 +608,7 @@
 
       (async () => {
         await prepareDesktopState();
+        await loadScript("../shared/card-search.js");
         await loadScript("app.js");
         await loadScript("cardmarket-data-center.js");
       })().catch(error => {

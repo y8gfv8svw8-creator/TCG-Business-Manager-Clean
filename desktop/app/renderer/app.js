@@ -47,6 +47,10 @@ const defaultState = {
 
 let state = loadState();
 let modalHandler = null;
+let cardNameLookup = new Map();
+let cardNameByNormalizedName = new Map();
+let cardNameLookupSignature = "";
+let cardNameLookupPromise = null;
 
 const views = {
   dashboard: ["Dashboard", "Zentrale Übersicht über Bestand, Käufe, Verkäufe und Gewinn."],
@@ -67,16 +71,90 @@ function cleanProductId(value) {
   return match ? match[0] : "";
 }
 
+function collectUserProductIds() {
+  const ids = new Set();
+  const visit = (value, depth = 0) => {
+    if (!value || depth > 5) return;
+    if (Array.isArray(value)) {
+      value.forEach(item => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== "object") return;
+    const productId = cleanProductId(value.productId);
+    if (productId) ids.add(productId);
+    ["pendingItems", "items"].forEach(key => visit(value[key], depth + 1));
+  };
+  [state.inventory, state.purchases, state.sales, state.watchlist].forEach(value => visit(value));
+  return [...ids].sort((a, b) => Number(a) - Number(b));
+}
+
+async function refreshCardNameLookup(force = false) {
+  if (!window.desktopApp?.getCardNamesForProducts) return 0;
+  const productIds = collectUserProductIds();
+  const signature = productIds.join(",");
+  if (!force && signature === cardNameLookupSignature) return cardNameLookup.size;
+  if (cardNameLookupPromise) return cardNameLookupPromise;
+  cardNameLookupPromise = (async () => {
+    const [rows,backup] = await Promise.all([
+      window.desktopApp.getCardNamesForProducts({productIds}),
+      window.desktopApp.getCardNameBackup ? window.desktopApp.getCardNameBackup() : null
+    ]);
+    cardNameLookup = new Map((rows || []).map(row => [String(row.productId), row]));
+    const mappingsByMetacard = new Map((backup?.mappings || []).map(row => [String(row.metacardId),{
+      metacardId:String(row.metacardId),
+      germanName:String(row.nameDe || ""),
+      englishName:String(row.nameEn || ""),
+      aliases:[]
+    }]));
+    for (const row of backup?.aliases || []) {
+      const mapping=mappingsByMetacard.get(String(row.metacardId));
+      if (mapping && row.alias) mapping.aliases.push({language:row.language,alias:String(row.alias)});
+    }
+    const nameCandidates = new Map();
+    for (const mapping of mappingsByMetacard.values()) {
+      const names=[mapping.germanName,mapping.englishName,...mapping.aliases.map(row => row.alias)];
+      for (const name of names) {
+        const key=window.TcgCardSearch?.normalizeSpaced(name) || String(name || "").toLocaleLowerCase("de-DE").trim();
+        if (!key) continue;
+        if (!nameCandidates.has(key)) nameCandidates.set(key,new Map());
+        nameCandidates.get(key).set(mapping.metacardId,mapping);
+      }
+    }
+    cardNameByNormalizedName = new Map([...nameCandidates].flatMap(([key,candidates]) =>
+      candidates.size === 1 ? [[key,[...candidates.values()][0]]] : []
+    ));
+    cardNameLookupSignature = signature;
+    return cardNameLookup.size;
+  })();
+  try {
+    return await cardNameLookupPromise;
+  } finally {
+    cardNameLookupPromise = null;
+  }
+}
+
+function scheduleCardNameLookupRefresh() {
+  clearTimeout(scheduleCardNameLookupRefresh.timer);
+  scheduleCardNameLookupRefresh.timer = setTimeout(() => {
+    refreshCardNameLookup(false).then(count => {
+      if (count) renderAll();
+    }).catch(error => console.error("Zweisprachige Kartennamen konnten nicht geladen werden:", error));
+  }, 0);
+}
+
 function mergeCatalog(base={}, extra={}) {
   return {...base, ...extra};
 }
 
 function resolveProduct(productId, fallback={}) {
   const id = cleanProductId(productId);
-  const c = state?.productCatalog?.[id] || BUILTIN_PRODUCT_CATALOG[id] || {};
+  const c = catalogCardData({productId:id});
   return {
     productId: id,
-    name: c.name || fallback.name || (id ? `Unbekannte Karte (CM ${id})` : "Unbekannte Karte"),
+    metacardId: c.metacardId || fallback.metacardId || "",
+    name: c.germanName || c.name || fallback.name || (id ? `Unbekannte Karte (CM ${id})` : "Unbekannte Karte"),
+    germanName: c.germanName || fallback.germanName || "",
+    englishName: c.englishName || c.officialBaseName || c.officialName || fallback.englishName || "",
     set: c.set || fallback.set || "",
     setName: c.setName || fallback.setName || "",
     rarity: c.rarity || fallback.rarity || "",
@@ -351,6 +429,7 @@ function saveState() {
   const serialized = JSON.stringify(state);
   localStorage.setItem(DB_KEY, serialized);
   localStorage.setItem(DESKTOP_UPDATED_KEY, savedAt);
+  scheduleCardNameLookupRefresh();
 
   const el = document.getElementById("saveStatus");
   const sequence = (saveState.sequence || 0) + 1;
@@ -400,17 +479,32 @@ function escapeHtml(v) {
 
 
 function normalizeSearchTerm(value) {
-  return String(value ?? "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("de-DE")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return window.TcgCardSearch?.normalizeSpaced(value) || String(value ?? "").toLocaleLowerCase("de-DE").trim();
 }
 
 function catalogCardData(item={}) {
   const productId = cleanProductId(item.productId);
-  return productId ? (state.productCatalog?.[productId] || BUILTIN_PRODUCT_CATALOG[productId] || {}) : {};
+  const nameValues=[item.germanName,item.englishName,item.officialName,item.officialBaseName,item.name].flatMap(value => {
+    const raw=String(value || "").trim();
+    const base=raw.replace(/\s*\(V\.?\s*\d+\s*[-–—]\s*[^)]+\)\s*$/i,"").trim();
+    return raw === base ? [raw] : [raw,base];
+  });
+  let bilingualByName={};
+  for (const value of nameValues) {
+    const key=normalizeSearchTerm(value);
+    if (key && cardNameByNormalizedName.has(key)) { bilingualByName=cardNameByNormalizedName.get(key); break; }
+  }
+  if (!productId) return bilingualByName;
+  const legacy = state.productCatalog?.[productId] || BUILTIN_PRODUCT_CATALOG[productId] || {};
+  const bilingual = cardNameLookup.get(productId) || {};
+  return {
+    ...legacy,
+    metacardId:bilingual.metacardId || bilingualByName.metacardId || legacy.metacardId || "",
+    germanName:bilingual.germanName || bilingualByName.germanName || legacy.germanName || "",
+    englishName:bilingual.englishName || bilingualByName.englishName || legacy.englishName || "",
+    officialBaseName:bilingual.englishName || bilingualByName.englishName || legacy.officialBaseName || legacy.officialName || "",
+    aliases:Array.isArray(bilingual.aliases) ? bilingual.aliases : (bilingualByName.aliases || [])
+  };
 }
 
 function cardDisplayNames(item={}) {
@@ -442,6 +536,10 @@ function cardRecordSearchValues(record={}) {
     catalog.set, catalog.setName, catalog.rarity, catalog.variant,
     catalog.collectorNumber, catalog.productId
   ].forEach(value => { if (value !== undefined && value !== null && value !== "") values.push(String(value)); });
+  (catalog.aliases || []).forEach(value => {
+    const alias = typeof value === "string" ? value : value?.alias;
+    if (alias) values.push(String(alias));
+  });
 
   ["pendingItems","items"].forEach(key => {
     if (Array.isArray(record[key])) record[key].forEach(item => values.push(...cardRecordSearchValues(item)));
@@ -454,10 +552,16 @@ function cardRecordSearchValues(record={}) {
 }
 
 function cardRecordMatchesSearch(record, query) {
-  const normalizedQuery = normalizeSearchTerm(query);
-  if (!normalizedQuery) return true;
-  const haystack = normalizeSearchTerm(cardRecordSearchValues(record).join(" "));
-  return normalizedQuery.split(/\s+/).every(term => haystack.includes(term));
+  if (!window.TcgCardSearch) {
+    const normalizedQuery = normalizeSearchTerm(query);
+    if (!normalizedQuery) return true;
+    const haystack = normalizeSearchTerm(cardRecordSearchValues(record).join(" "));
+    return normalizedQuery.split(/\s+/).every(term => haystack.includes(term));
+  }
+  return window.TcgCardSearch.matchesSearch(
+    window.TcgCardSearch.buildSearchDocument(cardRecordSearchValues(record)),
+    query
+  );
 }
 
 function isCardmarketSearchUrl(url) {
@@ -2040,7 +2144,8 @@ let syncDirectoryHandle = null;
 let folderSyncTimer = null;
 
 function normalizeCardName(value="") {
-  return String(value).toLowerCase().replace(/\([^)]*\)/g," ").replace(/[^a-z0-9äöüß]+/gi," ").trim();
+  const withoutVariant = String(value).replace(/\([^)]*\)/g," ");
+  return window.TcgCardSearch?.normalizeSpaced(withoutVariant) || withoutVariant.toLocaleLowerCase("de-DE").trim();
 }
 
 function inferWatchProduct(w) {
@@ -2365,6 +2470,9 @@ if (purchaseImportDateField && !purchaseImportDateField.value) purchaseImportDat
 
 showView("dashboard");
 initAutomation();
+refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
+  console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);
+});
 
 // Beim ersten Start der Desktop-Version wird der vorhandene Browserstand
 // automatisch in die dauerhafte SQLite-Datei übernommen.

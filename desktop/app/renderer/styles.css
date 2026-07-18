@@ -246,6 +246,7 @@ dialog::backdrop { background: rgba(16, 24, 40, .48); }
 .cm-results-wrap table{min-width:1450px}
 .cm-results-wrap th{position:sticky;top:0;z-index:2;background:var(--surface,#fff)}
 .cm-row-actions{margin-top:7px;display:flex;gap:5px;flex-wrap:wrap}
+.cm-search-card-group td{background:rgba(69,120,255,.09);border-top:2px solid rgba(69,120,255,.28);color:var(--text)}
 .cm-analysis-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;margin-bottom:12px;border:1px solid #b9c9ef;border-radius:10px;background:#f1f5ff}
 .cm-opportunity-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
 .cm-opportunity-card{border:1px solid var(--border,#d7deea);border-radius:12px;padding:14px;background:var(--surface,#fff);display:flex;flex-direction:column;gap:11px}

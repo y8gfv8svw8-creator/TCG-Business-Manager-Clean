@@ -20,3 +20,20 @@ Entwicklungsschritt 2: Deutsche Kartennamen vervollständigen
 - Reparierte Namen werden in IndexedDB, SQLite und dem kleinen Kompatibilitätskatalog gespeichert.
 - Die Reparatur läuft nach dem Update einmal automatisch; ein erneuter Produktkatalog-Import stößt sie beim nächsten Start erneut an.
 - Deutsche Suchbegriffe wie „Tract des Unterweltlerschmieds“ finden auch dann die englischen Cardmarket-Produkte, wenn die externe Übersetzungsquelle noch unvollständig ist.
+
+
+Patch 3 – Vollständiger deutscher Namenskatalog
+- Lädt automatisch den vollständigen verfügbaren deutschen und englischen YGOPRODeck-Kartenkatalog.
+- Verknüpft Namen über die gemeinsame Karten-ID und verteilt sie auf alle Cardmarket-Druckvarianten.
+- Speichert die Namen dauerhaft in IndexedDB und SQLite.
+- Aktualisiert den Namenskatalog beim ersten Start, nach einem neueren Produktkatalog und danach höchstens einmal pro Woche.
+- Zeigt die Abdeckung der Cardmarket-Produktvarianten an.
+- Manueller Sofortabgleich bleibt verfügbar.
+
+Patch 3 – Deutscher Karten- und Druckdatenkatalog
+- Ergänzt neben deutschen Namen auch Setname, Setkürzel, vollständige Setnummer und Seltenheit aus den YGOPRODeck-Druckdaten.
+- Zeigt Druckinformationen künftig im Format „Setname · SET-EN000 · Seltenheit · CM Produkt-ID“.
+- Setnummern und Seltenheiten werden in IndexedDB, SQLite und dem lokalen Kompatibilitätskatalog gespeichert.
+- Eindeutige Drucke werden als vollständig markiert.
+- Wenn Cardmarket mehrere Seltenheiten unter derselben Expansion führt und der öffentliche Produktkatalog keine sichere Unterscheidung erlaubt, wird die Variante ausdrücklich als mehrdeutig markiert statt eine Seltenheit zu raten.
+- Setnummern und deutsche/englische Namen sind anschließend ebenfalls durchsuchbar.

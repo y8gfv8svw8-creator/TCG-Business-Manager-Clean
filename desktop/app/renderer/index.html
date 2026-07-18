@@ -316,7 +316,7 @@
           <article class="metric-card"><span>Aktuelle Preiszeilen</span><strong id="cmLatestPriceCount">0</strong><small id="cmPriceStatus">Noch kein Price Guide importiert</small></article>
           <article class="metric-card"><span>Gespeicherte Tagesstände</span><strong id="cmSnapshotCount">0</strong><small>gleicher Tag wird aktualisiert statt dupliziert</small></article>
           <article class="metric-card"><span>Letzter Preisstand</span><strong id="cmLatestPriceDate">Noch kein Import</strong><small>Datum aus der Cardmarket-Datei</small></article>
-          <article class="metric-card"><span>Deutsche Kartennamen</span><strong id="cmGermanNameCount">0</strong><small id="cmGermanNameStatus">Noch nicht geladen</small></article>
+          <article class="metric-card"><span>Deutsche Karten- & Druckdaten</span><strong id="cmGermanNameCount">0</strong><small id="cmGermanNameStatus">Noch nicht geladen</small></article>
           <article class="metric-card"><span>Historie seit</span><strong id="cmHistoryFirstDate">–</strong><small id="cmHistoryCoverageStatus">SQLite-Historie wird geprüft</small></article>
           <article class="metric-card"><span>SQLite-Preiszeilen</span><strong id="cmSqlitePriceRows">0</strong><small>dauerhaft im Dokumente-Ordner gespeichert</small></article>
         </div>
@@ -328,12 +328,13 @@
           <div class="cm-import-actions">
             <label class="primary file-label">Produktkatalog importieren<input id="cmProductCatalogInput" type="file" accept=".json" hidden /></label>
             <label class="primary file-label">Price Guide importieren<input id="cmPriceGuideInput" type="file" accept=".json" hidden /></label>
-            <button id="cmLoadGermanNamesBtn" class="secondary" type="button">Deutsche Kartendaten aktualisieren</button>
+            <button id="cmLoadGermanNamesBtn" class="secondary" type="button">Deutsche Kartendaten jetzt aktualisieren</button>
+            <label class="switch-label"><input id="cmGermanNamesAutoUpdate" type="checkbox" checked /> Namen, Sets und Druckdaten automatisch wöchentlich ergänzen</label>
             <button id="cmExportBackupBtn" class="secondary" type="button">Cardmarket-Daten sichern</button>
             <label class="secondary file-label">Cardmarket-Sicherung laden<input id="cmBackupInput" type="file" accept=".json" hidden /></label>
             <button id="cmClearDataBtn" class="danger" type="button">Cardmarket-Daten löschen</button>
           </div>
-          <p class="muted">Erwartete Dateien: <strong>products_singles_3.json</strong> und <strong>price_guide_3.json</strong>. Über „Deutsche Kartendaten aktualisieren“ werden deutsche Namen sowie Set- und Seltenheitsdaten erneut abgeglichen. Setnamen werden nur bei einer ausreichend eindeutigen Zuordnung zur Cardmarket-Expansion-ID übernommen; unsichere Druckvarianten bleiben bewusst als fehlend markiert.</p>
+          <p class="muted">Erwartete Dateien: <strong>products_singles_3.json</strong> und <strong>price_guide_3.json</strong>. Der vollständige verfügbare deutsche Namenskatalog sowie Setname, Setnummer und Seltenheit werden beim ersten Start und danach höchstens einmal pro Woche abgeglichen und lokal gespeichert. Über „Deutsche Kartendaten jetzt aktualisieren“ kann der Abgleich jederzeit manuell erzwungen werden. Exakte Druckdaten werden nur bei einer eindeutigen Zuordnung übernommen; wenn mehrere Seltenheiten zu derselben Cardmarket-Variante passen, zeigt die App dies ausdrücklich an und rät nicht.</p>
           <div class="cm-progress"><div id="cmImportProgressBar"></div></div>
           <div id="cmImportStatus" class="cm-import-status">Bereit für den ersten Import.</div>
         </article>

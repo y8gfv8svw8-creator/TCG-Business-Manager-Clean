@@ -1,0 +1,20 @@
+TCG Business Manager 5.2.0 – QA Patch 3 (kombiniert)
+
+Ziel:
+Den vollständigen verfügbaren deutschen Namenskatalog sowie belastbare Set- und Druckdaten automatisch laden und lokal speichern.
+
+Prüfungen:
+- JavaScript-Syntax: bestanden
+- HTML-IDs für Schalter/Button: vorhanden
+- Automatik: erster Start, neuerer Produktkatalog oder älter als 7 Tage
+- Schutz vor parallelen API-Abfragen: vorhanden
+- Lokale Speicherung: IndexedDB und SQLite über vorhandenen Importpfad
+- Manuelle Aktualisierung: erzwingt neuen Abgleich
+- Suchindex: deutscher Name, englischer Name, Setname, Setkürzel, Setnummer, Seltenheit und Produkt-ID
+- Anzeige: Setname, vollständige Setnummer/Kartennummer und Seltenheit
+- Datenqualität: mehrdeutige Druckvarianten werden markiert und nicht geraten
+
+Datenquellen und Grenzen:
+YGOPRODeck liefert pro Karte set_name, set_code und set_rarity. Der öffentliche Cardmarket-Produktkatalog liefert dagegen nur Produkt-ID, Kartenname und Expansion-ID. Deshalb kann die App exakte Druckdaten für eindeutige Varianten und bereits bestätigte lokale Einträge übernehmen. Wenn mehrere Cardmarket-Produkte derselben Karte und Expansion verschiedenen Seltenheiten entsprechen und keine eindeutige Zuordnung vorliegt, bleibt die Seltenheit bewusst als mehrdeutig gekennzeichnet.
+
+Noch nicht offiziell übersetzte/neue Karten können bis zur Veröffentlichung der Übersetzung englisch bleiben.

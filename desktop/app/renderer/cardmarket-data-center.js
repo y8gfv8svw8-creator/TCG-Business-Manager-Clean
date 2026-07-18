@@ -7,7 +7,8 @@
 
   const CM_DB_NAME = "tcgBusinessManagerCardmarket";
   const CM_DB_VERSION = 2;
-  const CM_GERMAN_NAME_REVISION = 2;
+  const CM_GERMAN_NAME_REVISION = 4;
+  const CM_GERMAN_NAME_REFRESH_DAYS = 7;
   const CM_VERIFIED_GERMAN_NAME_PAIRS = Object.freeze([
     ["Fiendsmith Engraver", "Unterweltlerschmied Graveur"],
     ["Fiendsmith's Agnumday", "Agnumday des Unterweltlerschmieds"],
@@ -37,9 +38,20 @@
     germanNameSource: "",
     germanNameRevision: 0,
     germanNameVerifiedFallbackCount: 0,
+    germanNameCoveragePercent: 0,
+    germanApiEnglishCount: 0,
+    germanApiGermanCount: 0,
+    germanNamesAutoUpdate: true,
+    germanNamesLastAutoAttemptDate: "",
+    germanNamesLastAutoSuccessDate: "",
+    germanNamesLastError: "",
     cardDataImportedAt: "",
     setDetailCount: 0,
     setMappingCount: 0,
+    setCodeCount: 0,
+    rarityCount: 0,
+    exactPrintCount: 0,
+    ambiguousPrintCount: 0,
     lastError: "",
     lastAutoAttemptDate: "",
     lastAutoSuccessDate: "",
@@ -55,6 +67,7 @@
   let cmHistoryOverviewToken = 0;
   let cmOpportunityCache = {key:"", rows:[]};
   let cmLastRenderedView = "";
+  let cmGermanNamesUpdatePromise = null;
   const YGOPRO_EN_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php";
   const YGOPRO_DE_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?language=de";
 
@@ -173,7 +186,7 @@
   function cmSearchTextForProduct(product={}) {
     return cmNormalize([
       product.productId, product.germanName, product.name, product.officialName, product.officialBaseName,
-      product.set, product.setName, product.rarity, product.variant,
+      product.set, product.setName, product.setCode, product.collectorNumber, product.rarity, product.variant,
       product.expansionId ? `expansion ${product.expansionId}` : "",
       product.metacardId ? `metacard ${product.metacardId}` : ""
     ].filter(Boolean).join(" "));
@@ -528,6 +541,7 @@
       catalogVersion: String(payload?.version ?? ""),
       productCount: prepared.length,
       germanNameRevision: 0,
+      germanNamesLastAutoAttemptDate: "",
       lastError: ""
     };
     state.imports.push({
@@ -538,7 +552,8 @@
     cmInvalidateCache();
     saveState();
     renderAll();
-    cmSetProgress(`<strong>Produktkatalog importiert</strong><br>${prepared.length.toLocaleString("de-DE")} Produkte gespeichert${sqliteProducts ? ` · ${sqliteProducts.toLocaleString("de-DE")} in SQLite` : ""}${skipped ? ` · ${skipped} Zeilen übersprungen` : ""}.`, 100, "success");
+    cmSetProgress(`<strong>Produktkatalog importiert</strong><br>${prepared.length.toLocaleString("de-DE")} Produkte gespeichert${sqliteProducts ? ` · ${sqliteProducts.toLocaleString("de-DE")} in SQLite` : ""}${skipped ? ` · ${skipped} Zeilen übersprungen` : ""}. Deutsche Namen werden anschließend automatisch ergänzt.`, 100, "success");
+    if (state.cardmarket?.germanNamesAutoUpdate !== false) window.setTimeout(()=>cmRunGermanNamesAutoUpdate({force:true}),500);
     return {type:"catalog", rows:rows.length, cards:prepared.length, sqliteProducts, skipped};
   }
 
@@ -829,15 +844,15 @@
   function cmProductQuality(product={}) {
     const hasGermanName = Boolean(cmGermanName(product));
     const hasSet = Boolean(String(product.set || product.setName || "").trim());
+    const hasPrintCode = Boolean(String(product.collectorNumber || product.setCode || "").trim().includes("-"));
     const hasVariant = Boolean(String(product.variant || product.rarity || "").trim());
-    const exactVariant = hasSet && hasVariant;
-    return {
-      hasGermanName,
-      hasSet,
-      hasVariant,
-      exactVariant,
-      label: exactVariant ? "Druckvariante vollständig" : hasSet ? "Seltenheit/Version fehlt" : "Set und Seltenheit fehlen"
-    };
+    const exactVariant = hasSet && hasPrintCode && hasVariant && !product.printMetadataAmbiguous;
+    let label = "Set, Nummer und Seltenheit fehlen";
+    if (exactVariant) label = "Druckvariante vollständig";
+    else if (hasSet && hasPrintCode && !hasVariant) label = product.printMetadataAmbiguous ? "Seltenheit nicht eindeutig" : "Seltenheit/Version fehlt";
+    else if (hasSet && !hasPrintCode) label = "Setnummer fehlt";
+    else if (hasSet) label = "Druckdaten unvollständig";
+    return {hasGermanName,hasSet,hasPrintCode,hasVariant,exactVariant,label};
   }
 
   function cmMarketCalculation(product, own={}, trendSignals={}) {
@@ -1041,9 +1056,11 @@
       : product.expansionId
         ? `Setname fehlt (Expansion-ID ${product.expansionId})`
         : "Setname fehlt";
+    const printCode = String(product.collectorNumber || product.setCode || product.set || "").trim();
+    const printPart = printCode && printCode !== setText ? printCode : "Setnummer fehlt";
     const versionText = [product.variant, product.rarity].filter(Boolean).join(" · ");
-    const versionPart = versionText || "Seltenheit/Version fehlt";
-    return `${escapeHtml(setPart)} · ${escapeHtml(versionPart)} · CM ${escapeHtml(product.productId)}`;
+    const versionPart = versionText || (product.printMetadataAmbiguous ? `Seltenheit nicht eindeutig (${Number(product.printMetadataCandidates||2)} mögliche Drucke)` : "Seltenheit/Version fehlt");
+    return `${escapeHtml(setPart)} · ${escapeHtml(printPart)} · ${escapeHtml(versionPart)} · CM ${escapeHtml(product.productId)}`;
   }
 
   function cmDataQualityBadges(product, calc) {
@@ -1275,10 +1292,93 @@
     return keys;
   }
 
+  function cmSetCodeDetails(value="") {
+    const fullCode = String(value || "").trim().toUpperCase();
+    if (!fullCode) return {fullCode:"",prefix:"",language:"",number:"",neutralCode:""};
+    const localized = fullCode.match(/^([A-Z0-9/]{2,12})-([A-Z]{2})([0-9]{1,4}[A-Z]?)$/);
+    if (localized) {
+      return {
+        fullCode,
+        prefix:localized[1],
+        language:localized[2],
+        number:localized[3],
+        neutralCode:`${localized[1]}-${localized[3]}`
+      };
+    }
+    const neutral = fullCode.match(/^([A-Z0-9/]{2,12})-([0-9]{1,4}[A-Z]?)$/);
+    if (neutral) {
+      return {fullCode,prefix:neutral[1],language:"",number:neutral[2],neutralCode:fullCode};
+    }
+    const prefix = fullCode.match(/^([A-Z0-9/]{2,12})-/)?.[1] || fullCode;
+    return {fullCode,prefix,language:"",number:"",neutralCode:fullCode};
+  }
+
   function cmSetCodePrefix(value="") {
-    const code = String(value || "").trim().toUpperCase();
-    const match = code.match(/^([A-Z0-9]{2,8})-/);
-    return match ? match[1] : code;
+    return cmSetCodeDetails(value).prefix;
+  }
+
+  function cmRarityKey(value="") {
+    return cmNormalize(String(value || "")
+      .replace(/quarter century secret rare/gi,"qcsr")
+      .replace(/prismatic secret rare/gi,"prismatic secret")
+      .replace(/platinum secret rare/gi,"platinum secret"));
+  }
+
+  function cmRowsForMappedSet(ygoSets=[], mappedSet=null) {
+    if (!mappedSet) return [];
+    return (Array.isArray(ygoSets) ? ygoSets : []).filter(row => {
+      const nameMatches = mappedSet.setName && cmNormalize(row?.set_name) === cmNormalize(mappedSet.setName);
+      const codeMatches = mappedSet.setCode && cmSetCodePrefix(row?.set_code) === cmSetCodePrefix(mappedSet.setCode);
+      return nameMatches || codeMatches;
+    });
+  }
+
+  function cmResolvePrintMetadata(product={}, matchingRows=[]) {
+    const rows = (Array.isArray(matchingRows) ? matchingRows : []).filter(Boolean);
+    if (!rows.length) return {ambiguous:false,exact:false};
+    const known = cmKnownCatalogEntry(product.productId);
+    const collectorHint = String(product.collectorNumber || known.collectorNumber || "").trim().toUpperCase();
+    const rarityHint = String(product.rarity || known.rarity || cmExtractIdentity(product.officialName || product.name || "").rarity || "").trim();
+    let candidates = rows.slice();
+
+    if (collectorHint) {
+      const hintDetails = cmSetCodeDetails(collectorHint);
+      const byCode = candidates.filter(row => {
+        const details = cmSetCodeDetails(row?.set_code);
+        return details.fullCode === hintDetails.fullCode || (hintDetails.neutralCode && details.neutralCode === hintDetails.neutralCode);
+      });
+      if (byCode.length) candidates = byCode;
+    }
+    if (rarityHint) {
+      const key = cmRarityKey(rarityHint);
+      const byRarity = candidates.filter(row => cmRarityKey(row?.set_rarity) === key);
+      if (byRarity.length) candidates = byRarity;
+    }
+
+    const uniqueCodes = new Map();
+    const uniqueRarities = new Map();
+    for (const row of candidates) {
+      const code = String(row?.set_code || "").trim().toUpperCase();
+      const rarity = String(row?.set_rarity || "").trim();
+      if (code) uniqueCodes.set(code,row);
+      if (rarity) uniqueRarities.set(cmRarityKey(rarity),rarity);
+    }
+    const codeRow = uniqueCodes.size === 1 ? [...uniqueCodes.values()][0] : null;
+    const fullCode = codeRow ? String(codeRow.set_code || "").trim().toUpperCase() : "";
+    const codeDetails = cmSetCodeDetails(fullCode);
+    const rarity = uniqueRarities.size === 1 ? [...uniqueRarities.values()][0] : "";
+    const exact = candidates.length === 1 || Boolean(fullCode && rarity && (collectorHint || rarityHint));
+    return {
+      setName:String((candidates[0] || rows[0])?.set_name || "").trim(),
+      setPrefix:codeDetails.prefix || cmSetCodePrefix((candidates[0] || rows[0])?.set_code),
+      fullCode,
+      neutralCode:codeDetails.neutralCode,
+      collectorNumber:fullCode,
+      rarity,
+      exact,
+      ambiguous:candidates.length > 1 && !(fullCode && rarity),
+      candidateCount:candidates.length
+    };
   }
 
   function cmBuildExpansionSetMap(products, cardByEnglishKey) {
@@ -1357,6 +1457,10 @@
     let verifiedFallbackCount = 0;
     let setDetailCount = 0;
     let setMappingCount = 0;
+    let setCodeCount = 0;
+    let rarityCount = 0;
+    let exactPrintCount = 0;
+    let ambiguousPrintCount = 0;
     let updated = products.map(product => {
       const englishBase = cmExtractIdentity(product.officialBaseName || product.officialName || product.name || "").baseName;
       const englishKey = cmNormalize(englishBase);
@@ -1374,36 +1478,42 @@
         unchanged++;
       }
 
-      // Set und Seltenheit werden anhand der Expansion-ID ergänzt, aber nur bei dominanter Zuordnung.
+      // Set, Kartennummer und Seltenheit werden aus den Druckdaten ergänzt.
+      // Cardmarket veröffentlicht im Produktkatalog nur die Expansion-ID. Deshalb werden
+      // nur eindeutige oder bereits lokal bestätigte Zuordnungen als exakte Druckvariante markiert.
       const ygoSets = Array.isArray(ygoCard?.card_sets) ? ygoCard.card_sets.filter(Boolean) : [];
       const mappedSet = expansionSetMap.get(String(product.expansionId || ""));
-      if (mappedSet && (!product.set || !product.setName || !product.rarity)) {
-        if (!product.setName && mappedSet.setName) patch.setName = mappedSet.setName;
-        if (!product.set && mappedSet.setCode) { patch.set = mappedSet.setCode; patch.setCode = mappedSet.setCode; }
-        const matchingRows=ygoSets.filter(row => {
-          const nameMatches=mappedSet.setName && cmNormalize(row?.set_name)===cmNormalize(mappedSet.setName);
-          const codeMatches=mappedSet.setCode && cmSetCodePrefix(row?.set_code)===mappedSet.setCode;
-          return nameMatches || codeMatches;
-        });
-        const uniqueRarities=new Set(matchingRows.map(row=>String(row?.set_rarity||"").trim()).filter(Boolean));
-        if (!product.rarity && uniqueRarities.size===1) patch.rarity=[...uniqueRarities][0];
-        patch.setMatchConfidence=Number(mappedSet.coverage.toFixed(3));
-        patch.setDataSource="Expansion-ID-Abgleich";
-        if (patch.setName || patch.set || patch.rarity) { setDetailCount++; setMappingCount++; }
-      } else if (!product.set && !product.setName && ygoSets.length===1) {
-        const only=ygoSets[0];
-        patch.setName=String(only.set_name||"").trim();
-        patch.set=cmSetCodePrefix(only.set_code);
-        patch.setCode=patch.set;
-        if (!product.rarity) patch.rarity=String(only.set_rarity||"").trim();
-        patch.setMatchConfidence=1;
-        patch.setDataSource="Eindeutiger Kartendruck";
-        if (patch.setName || patch.set || patch.rarity) setDetailCount++;
+      let matchingRows = cmRowsForMappedSet(ygoSets,mappedSet);
+      if (!matchingRows.length && ygoSets.length === 1) matchingRows = ygoSets.slice();
+      const printMeta = cmResolvePrintMetadata(product,matchingRows);
+      if (mappedSet || printMeta.setName) {
+        const setName = printMeta.setName || mappedSet?.setName || "";
+        const setPrefix = printMeta.setPrefix || mappedSet?.setCode || "";
+        if (!product.setName && setName) patch.setName = setName;
+        if (!product.set && setPrefix) patch.set = setPrefix;
+        if (!String(product.setCode || "").includes("-") && printMeta.fullCode) patch.setCode = printMeta.fullCode;
+        else if (!product.setCode && setPrefix) patch.setCode = setPrefix;
+        if (!product.collectorNumber && printMeta.collectorNumber) patch.collectorNumber = printMeta.collectorNumber;
+        if (!product.rarity && printMeta.rarity) patch.rarity = printMeta.rarity;
+        patch.setMatchConfidence = Number((mappedSet?.coverage ?? (printMeta.exact ? 1 : 0)).toFixed(3));
+        patch.setDataSource = printMeta.exact ? "Eindeutiger Druckdaten-Abgleich" : "Expansion-ID-Abgleich";
+        patch.printMetadataExact = Boolean(printMeta.exact);
+        patch.printMetadataAmbiguous = Boolean(printMeta.ambiguous);
+        patch.printMetadataCandidates = Number(printMeta.candidateCount || 0);
+        if (patch.setName || patch.set || patch.setCode || patch.collectorNumber || patch.rarity) {
+          setDetailCount++;
+          setMappingCount++;
+        }
       }
 
       const merged = {...product,...patch};
       return {...merged,searchText:cmSearchTextForProduct(merged)};
     });
+
+    setCodeCount = updated.reduce((sum,product) => sum + (String(product.collectorNumber || product.setCode || "").includes("-") ? 1 : 0),0);
+    rarityCount = updated.reduce((sum,product) => sum + (String(product.rarity || "").trim() ? 1 : 0),0);
+    exactPrintCount = updated.reduce((sum,product) => sum + (product.printMetadataExact ? 1 : 0),0);
+    ambiguousPrintCount = updated.reduce((sum,product) => sum + (product.printMetadataAmbiguous ? 1 : 0),0);
 
     // Alle Druckversionen derselben Metacard erhalten denselben deutschen Kartennamen,
     // aber nur wenn für die Metacard exakt eine eindeutige Übersetzung vorliegt.
@@ -1440,7 +1550,13 @@
         germanName:product.germanName || state.productCatalog[productId].germanName || "",
         officialName:product.officialName || state.productCatalog[productId].officialName || "",
         officialBaseName:product.officialBaseName || state.productCatalog[productId].officialBaseName || "",
-        metacardId:product.metacardId || state.productCatalog[productId].metacardId || ""
+        metacardId:product.metacardId || state.productCatalog[productId].metacardId || "",
+        set:product.set || state.productCatalog[productId].set || "",
+        setName:product.setName || state.productCatalog[productId].setName || "",
+        setCode:product.setCode || state.productCatalog[productId].setCode || "",
+        collectorNumber:product.collectorNumber || state.productCatalog[productId].collectorNumber || "",
+        rarity:product.rarity || state.productCatalog[productId].rarity || "",
+        variant:product.variant || state.productCatalog[productId].variant || ""
       };
     }
 
@@ -1453,17 +1569,22 @@
       germanNameSource:source,
       germanNameRevision:CM_GERMAN_NAME_REVISION,
       germanNameVerifiedFallbackCount:verifiedFallbackCount,
+      germanNameCoveragePercent:Number((matched/Math.max(1,updated.length)*100).toFixed(1)),
       cardDataImportedAt:importedAt,
       setDetailCount,
       setMappingCount,
+      setCodeCount,
+      rarityCount,
+      exactPrintCount,
+      ambiguousPrintCount,
       lastError:""
     };
-    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,verifiedFallbacks:verifiedFallbackCount,setDetails:setDetailCount,setMappings:setMappingCount});
+    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,verifiedFallbacks:verifiedFallbackCount,setDetails:setDetailCount,setMappings:setMappingCount,setCodes:setCodeCount,rarities:rarityCount,exactPrints:exactPrintCount,ambiguousPrints:ambiguousPrintCount});
     cmInvalidateCache();
     saveState();
     renderAll();
-    cmSetProgress(`<strong>Deutsche Kartendaten gespeichert</strong><br>${matched.toLocaleString("de-DE")} Namen zugeordnet${verifiedFallbackCount?` · ${verifiedFallbackCount.toLocaleString("de-DE")} verifizierte Ergänzungen`:""}${setDetailCount?` · ${setDetailCount.toLocaleString("de-DE")} Set-/Seltenheitsdetails ergänzt`:""}.`,100,"success");
-    return {matched,unmatched:unchanged,verifiedFallbackCount,setDetailCount,setMappingCount};
+    cmSetProgress(`<strong>Deutsche Karten- und Druckdaten gespeichert</strong><br>${matched.toLocaleString("de-DE")} Namen · ${setCodeCount.toLocaleString("de-DE")} Setnummern · ${rarityCount.toLocaleString("de-DE")} Seltenheiten${ambiguousPrintCount?` · ${ambiguousPrintCount.toLocaleString("de-DE")} Varianten bewusst als mehrdeutig markiert`:""}.`,100,"success");
+    return {matched,unmatched:unchanged,verifiedFallbackCount,setDetailCount,setMappingCount,setCodeCount,rarityCount,exactPrintCount,ambiguousPrintCount};
   }
 
   async function cmRepairKnownGermanNames() {
@@ -1537,17 +1658,76 @@
     return {changed:changedRows.length,germanNameCount,verifiedFallbackCount};
   }
 
-  async function cmLoadGermanNamesOnline() {
+  function cmDaysSinceIso(value="") {
+    const time = Date.parse(String(value || ""));
+    if (!Number.isFinite(time)) return Infinity;
+    return Math.max(0,(Date.now()-time)/86400000);
+  }
+
+  function cmShouldRefreshGermanNames(force=false) {
+    if (force) return true;
+    if (state.cardmarket?.germanNamesAutoUpdate === false) return false;
+    if (Number(state.cardmarket?.productCount || 0) <= 0) return false;
+    const importedAt=String(state.cardmarket?.germanNamesImportedAt || "");
+    const catalogAt=String(state.cardmarket?.catalogImportedAt || "");
+    if (!importedAt || Number(state.cardmarket?.germanNameCount || 0) <= 0) return true;
+    if (catalogAt && Date.parse(catalogAt) > Date.parse(importedAt)) return true;
+    return cmDaysSinceIso(importedAt) >= CM_GERMAN_NAME_REFRESH_DAYS;
+  }
+
+  async function cmLoadGermanNamesOnline(options={}) {
+    const {automatic=false,force=false}=options || {};
+    if (!cmShouldRefreshGermanNames(force) && automatic) return {skipped:true,reason:"aktuell"};
     if (Number(state.cardmarket?.productCount || 0) <= 0) throw new Error("Bitte zuerst den Cardmarket-Produktkatalog importieren.");
-    cmSetProgress("<strong>Deutsche Kartendaten werden geladen …</strong><br>Namen, Sets und Seltenheiten werden erneut abgeglichen.",8);
-    const [englishResponse,germanResponse] = await Promise.all([
-      fetch(YGOPRO_EN_URL,{cache:"no-store"}),
-      fetch(YGOPRO_DE_URL,{cache:"no-store"})
-    ]);
-    if (!englishResponse.ok) throw new Error(`Englische Kartendatenbank konnte nicht geladen werden (${englishResponse.status}).`);
-    if (!germanResponse.ok) throw new Error(`Deutsche Kartendatenbank konnte nicht geladen werden (${germanResponse.status}).`);
-    cmSetProgress("<strong>Kartendaten werden abgeglichen …</strong><br>Namen werden nach Karten-ID verbunden; Sets zusätzlich vorsichtig über die Expansion-ID zugeordnet.",20);
-    return cmApplyGermanNames(await englishResponse.json(),await germanResponse.json(),"YGOPRODeck API v7 (DE/EN)");
+    if (cmGermanNamesUpdatePromise) return cmGermanNamesUpdatePromise;
+    cmGermanNamesUpdatePromise=(async()=>{
+      cmSetProgress(`<strong>Vollständiger deutscher Namenskatalog wird geladen …</strong><br>Englische und deutsche Karten werden über ihre gemeinsame Karten-ID verbunden.`,8);
+      const [englishResponse,germanResponse] = await Promise.all([
+        fetch(YGOPRO_EN_URL,{cache:"no-store"}),
+        fetch(YGOPRO_DE_URL,{cache:"no-store"})
+      ]);
+      if (!englishResponse.ok) throw new Error(`Englische Kartendatenbank konnte nicht geladen werden (${englishResponse.status}).`);
+      if (!germanResponse.ok) throw new Error(`Deutsche Kartendatenbank konnte nicht geladen werden (${germanResponse.status}).`);
+      const englishPayload=await englishResponse.json();
+      const germanPayload=await germanResponse.json();
+      const englishCount=cmYgoRows(englishPayload).length;
+      const germanCount=cmYgoRows(germanPayload).length;
+      cmSetProgress(`<strong>Alle verfügbaren deutschen Kartennamen werden abgeglichen …</strong><br>${germanCount.toLocaleString("de-DE")} deutsche Karten · ${englishCount.toLocaleString("de-DE")} englische Karten`,20);
+      const result=await cmApplyGermanNames(englishPayload,germanPayload,automatic?"YGOPRODeck API v7 (DE/EN, automatisch)":"YGOPRODeck API v7 (DE/EN, manuell)");
+      const productCount=Math.max(1,Number(state.cardmarket?.productCount || 0));
+      const coverage=Math.min(100,Number(result.matched || 0)/productCount*100);
+      state.cardmarket={
+        ...CM_META_DEFAULTS,
+        ...state.cardmarket,
+        germanNameCoveragePercent:Number(coverage.toFixed(1)),
+        germanApiEnglishCount:englishCount,
+        germanApiGermanCount:germanCount,
+        germanNamesLastAutoSuccessDate:automatic?todayISO():String(state.cardmarket?.germanNamesLastAutoSuccessDate || ""),
+        germanNamesLastError:""
+      };
+      saveState();
+      renderAll();
+      return {...result,englishCount,germanCount,coverage};
+    })();
+    try { return await cmGermanNamesUpdatePromise; }
+    finally { cmGermanNamesUpdatePromise=null; }
+  }
+
+  async function cmRunGermanNamesAutoUpdate(options={}) {
+    const force=Boolean(options?.force);
+    const today=todayISO();
+    if (!cmShouldRefreshGermanNames(force)) return {skipped:true,reason:"aktuell"};
+    if (!force && String(state.cardmarket?.germanNamesLastAutoAttemptDate || "")===today) return {skipped:true,reason:"heute bereits versucht"};
+    state.cardmarket.germanNamesLastAutoAttemptDate=today;
+    saveState();
+    try {
+      return await cmLoadGermanNamesOnline({automatic:true,force});
+    } catch(error) {
+      state.cardmarket.germanNamesLastError=String(error?.message || error || "Deutsche Kartennamen konnten nicht aktualisiert werden");
+      saveState();
+      console.error("Automatische Aktualisierung deutscher Kartennamen fehlgeschlagen:",error);
+      return {skipped:false,error:state.cardmarket.germanNamesLastError};
+    }
   }
 
   function cmSignedPercent(value) {
@@ -1609,12 +1789,14 @@
   function renderCardmarketDataCenter() {
     const meta = {...CM_META_DEFAULTS,...(state.cardmarket || {})};
     const setText = (id,value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
+    const germanAuto=document.getElementById("cmGermanNamesAutoUpdate");
+    if (germanAuto) germanAuto.checked=meta.germanNamesAutoUpdate !== false;
     setText("cmProductCount", Number(meta.productCount || 0).toLocaleString("de-DE"));
     setText("cmLatestPriceCount", Number(meta.priceRowCount || 0).toLocaleString("de-DE"));
     setText("cmSnapshotCount", Number(meta.sqliteSnapshotCount || meta.snapshotDates?.length || 0).toLocaleString("de-DE"));
     setText("cmLatestPriceDate", meta.priceDate ? fmtDate(meta.priceDate) : "Noch kein Import");
     setText("cmGermanNameCount", Number(meta.germanNameCount || 0).toLocaleString("de-DE"));
-    setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")}${Number(meta.setDetailCount||0)>0?` · ${Number(meta.setDetailCount).toLocaleString("de-DE")} eindeutige Setdetails`:""}` : "Noch nicht geladen");
+    setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")} · ${Number(meta.germanNameCoveragePercent||0).toLocaleString("de-DE",{maximumFractionDigits:1})} % Namen · ${Number(meta.setCodeCount||0).toLocaleString("de-DE")} Setnummern · ${Number(meta.rarityCount||0).toLocaleString("de-DE")} Seltenheiten${Number(meta.ambiguousPrintCount||0)>0?` · ${Number(meta.ambiguousPrintCount).toLocaleString("de-DE")} mehrdeutige Varianten`:""}` : "Noch nicht geladen · wird automatisch ergänzt");
     setText("cmCatalogStatus", meta.catalogImportedAt ? `Importiert am ${new Date(meta.catalogImportedAt).toLocaleString("de-DE")} · Quelle ${meta.catalogCreatedAt ? fmtDate(meta.catalogCreatedAt) : "ohne Datum"}` : "Noch kein Produktkatalog importiert");
     setText("cmPriceStatus", meta.priceImportedAt ? `Importiert am ${new Date(meta.priceImportedAt).toLocaleString("de-DE")} · Preisstand ${fmtDate(meta.priceDate)}` : "Noch kein Price Guide importiert");
     const snapshots = document.getElementById("cmSnapshotDates");
@@ -1782,7 +1964,7 @@
     try{await cmImportBackupPayload(JSON.parse(await file.text()),file.name);}catch(error){cmSetProgress(`<strong>Wiederherstellung fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error");}
   });
   document.getElementById("cmSearch")?.addEventListener("input",cmScheduleSearch);
-  document.getElementById("cmLoadGermanNamesBtn")?.addEventListener("click",()=>cmLoadGermanNamesOnline().catch(error=>cmSetProgress(`<strong>Deutsche Kartennamen konnten nicht geladen werden</strong><br>${escapeHtml(error.message)}<br><small>Internetverbindung prüfen und erneut versuchen.</small>`,100,"error")));
+  document.getElementById("cmLoadGermanNamesBtn")?.addEventListener("click",()=>cmLoadGermanNamesOnline({automatic:false,force:true}).catch(error=>cmSetProgress(`<strong>Deutsche Kartennamen konnten nicht geladen werden</strong><br>${escapeHtml(error.message)}<br><small>Internetverbindung prüfen und erneut versuchen.</small>`,100,"error")));
     document.getElementById("cmExportBackupBtn")?.addEventListener("click",()=>cmExportBackup().catch(error=>cmSetProgress(`<strong>Export fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error")));
   document.getElementById("cmClearDataBtn")?.addEventListener("click",()=>cmClearAll(true).catch(error=>alert(error.message)));
   document.getElementById("cmRefreshOpportunitiesBtn")?.addEventListener("click",()=>{cmOpportunityCache={key:"",rows:[]};cmRenderOpportunities();});
@@ -1850,7 +2032,7 @@
   }
 
   function cmAnalysisMatchRank(product,variants) {
-    const haystack=product.searchText||cmNormalize([product.germanName,product.name,product.officialName,product.set,product.setName,product.rarity,product.productId].join(" "));
+    const haystack=product.searchText||cmNormalize([product.germanName,product.name,product.officialName,product.set,product.setName,product.setCode,product.collectorNumber,product.rarity,product.productId].join(" "));
     let best=999;
     variants.forEach((variant,index)=>{
       const terms=variant.split(/\s+/).filter(Boolean);
@@ -2089,7 +2271,7 @@
     target.disabled=true;
     target.textContent="Deutsche Namen werden geladen …";
     try{
-      const result=await cmLoadGermanNamesOnline();
+      const result=await cmLoadGermanNamesOnline({automatic:false,force:true});
       alert(`${Number(result.matched||0).toLocaleString("de-DE")} Produktvarianten wurden mit deutschen Kartennamen verknüpft. ${Number(result.setDetailCount||0).toLocaleString("de-DE")} Set-/Seltenheitsdetails wurden ergänzt.`);
       renderPurchaseAnalysis();
     }catch(error){
@@ -2097,6 +2279,12 @@
       target.disabled=false;
       target.textContent=oldText;
     }
+  });
+
+  document.getElementById("cmGermanNamesAutoUpdate")?.addEventListener("change",event=>{
+    state.cardmarket.germanNamesAutoUpdate=Boolean(event.target.checked);
+    saveState();
+    if (event.target.checked) window.setTimeout(()=>cmRunGermanNamesAutoUpdate({force:false}),250);
   });
 
   async function cmRunDailyAutoUpdate() {
@@ -2122,9 +2310,10 @@
   cmRefreshMetadataFromDb().then(async () => {
     try {
       await cmRepairKnownGermanNames();
+      await cmRunGermanNamesAutoUpdate({force:false});
     } catch (error) {
       console.error("Lokale Reparatur deutscher Kartennamen fehlgeschlagen:",error);
-      state.cardmarket.lastError = `Deutsche Namen: ${String(error?.message || error)}`;
+      state.cardmarket.germanNamesLastError = String(error?.message || error);
       saveState();
     }
     window.setTimeout(cmRunDailyAutoUpdate, 1200);

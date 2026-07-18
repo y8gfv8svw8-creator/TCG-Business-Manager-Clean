@@ -11,3 +11,12 @@ Entwicklungsschritt 1: Zweisprachige Kartensuche
 - In Bestands-, Watchlist-, Analyse- und Bestelldetails werden beide Namen angezeigt, wenn verfügbar.
 
 Weitere 5.2.0-Schritte folgen im Branch version-5.2-analysis.
+
+Entwicklungsschritt 2: Deutsche Kartennamen vervollständigen
+
+- Verifizierte deutsche Namen für fehlende aktuelle Karten werden lokal ergänzt.
+- Alle Druckvarianten derselben Metacard übernehmen eine eindeutige deutsche Übersetzung.
+- Bereits vorhandene deutsche Namen aus Bestand, Watchlist und Produktkatalog werden erhalten und wiederverwendet.
+- Reparierte Namen werden in IndexedDB, SQLite und dem kleinen Kompatibilitätskatalog gespeichert.
+- Die Reparatur läuft nach dem Update einmal automatisch; ein erneuter Produktkatalog-Import stößt sie beim nächsten Start erneut an.
+- Deutsche Suchbegriffe wie „Tract des Unterweltlerschmieds“ finden auch dann die englischen Cardmarket-Produkte, wenn die externe Übersetzungsquelle noch unvollständig ist.

@@ -1,4 +1,4 @@
-/* TCG Business Manager 5.1.0 – Market History
+/* TCG Business Manager 5.2.0 – Analysecenter
  * Große Cardmarket-Datenmengen werden bewusst in IndexedDB gespeichert.
  * Dadurch bleibt der normale Warenwirtschafts-Stand in localStorage klein und stabil.
  */
@@ -7,6 +7,20 @@
 
   const CM_DB_NAME = "tcgBusinessManagerCardmarket";
   const CM_DB_VERSION = 2;
+  const CM_GERMAN_NAME_REVISION = 2;
+  const CM_VERIFIED_GERMAN_NAME_PAIRS = Object.freeze([
+    ["Fiendsmith Engraver", "Unterweltlerschmied Graveur"],
+    ["Fiendsmith's Agnumday", "Agnumday des Unterweltlerschmieds"],
+    ["Fiendsmith's Desirae", "Desirae des Unterweltlerschmieds"],
+    ["Fiendsmith's Lacrima", "Lacrima des Unterweltlerschmieds"],
+    ["Fiendsmith's Requiem", "Requiem des Unterweltlerschmieds"],
+    ["Fiendsmith's Rextremende", "Rextremende des Unterweltlerschmieds"],
+    ["Fiendsmith's Sanct", "Sanct des Unterweltlerschmieds"],
+    ["Fiendsmith's Sequence", "Sequenz des Unterweltlerschmieds"],
+    ["Fiendsmith's Tract", "Tract des Unterweltlerschmieds"],
+    ["Fiendsmith in Paradise", "Unterweltlerschmied im Paradies"],
+    ["Lacrima the Crimson Tears", "Lacrima, die blutroten Tränen"]
+  ]);
   const CM_META_DEFAULTS = {
     catalogImportedAt: "",
     catalogCreatedAt: "",
@@ -21,6 +35,8 @@
     germanNamesImportedAt: "",
     germanNameCount: 0,
     germanNameSource: "",
+    germanNameRevision: 0,
+    germanNameVerifiedFallbackCount: 0,
     cardDataImportedAt: "",
     setDetailCount: 0,
     setMappingCount: 0,
@@ -64,6 +80,117 @@
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9äöüß]+/gi, " ")
       .trim();
+  }
+
+  function cmVerifiedGermanName(englishName="") {
+    const key = cmNormalize(cmExtractIdentity(englishName).baseName);
+    if (!key) return "";
+    const pair = CM_VERIFIED_GERMAN_NAME_PAIRS.find(([english]) => cmNormalize(english) === key);
+    return pair ? pair[1] : "";
+  }
+
+  function cmGermanNameCandidate(germanName="", englishName="") {
+    const german = String(germanName || "").trim();
+    const english = String(englishName || "").trim();
+    if (!german) return "";
+    if (english && cmNormalize(german) === cmNormalize(english)) return "";
+    return german;
+  }
+
+  function cmBuildLocalGermanNameMaps(products=[]) {
+    const byProductId = new Map();
+    const byMetacardCandidates = new Map();
+    const byEnglishCandidates = new Map();
+
+    const addCandidate = ({productId="", metacardId="", englishName="", germanName=""}={}) => {
+      const german = cmGermanNameCandidate(germanName, englishName);
+      if (!german) return;
+      const pid = cleanProductId(productId);
+      const mid = cleanProductId(metacardId);
+      const englishKey = cmNormalize(cmExtractIdentity(englishName).baseName);
+      if (pid && !byProductId.has(pid)) byProductId.set(pid,german);
+      if (mid) {
+        if (!byMetacardCandidates.has(mid)) byMetacardCandidates.set(mid,new Set());
+        byMetacardCandidates.get(mid).add(german);
+      }
+      if (englishKey) {
+        if (!byEnglishCandidates.has(englishKey)) byEnglishCandidates.set(englishKey,new Set());
+        byEnglishCandidates.get(englishKey).add(german);
+      }
+    };
+
+    for (const product of products) {
+      addCandidate({
+        productId:product.productId,
+        metacardId:product.metacardId,
+        englishName:product.officialBaseName || product.officialName || product.name,
+        germanName:product.germanName
+      });
+    }
+
+    for (const [productId,catalog] of Object.entries(state.productCatalog || {})) {
+      addCandidate({
+        productId,
+        metacardId:catalog?.metacardId,
+        englishName:catalog?.officialBaseName || catalog?.officialName || catalog?.englishName || catalog?.name,
+        germanName:catalog?.germanName || (catalog?.englishName ? catalog?.name : "")
+      });
+    }
+
+    const visitRecord = (record, depth=0) => {
+      if (!record || depth > 3) return;
+      if (Array.isArray(record)) { record.forEach(item => visitRecord(item,depth+1)); return; }
+      if (typeof record !== "object") return;
+      const productId = cleanProductId(record.productId);
+      const catalog = productId ? (state.productCatalog?.[productId] || {}) : {};
+      const englishName = record.englishName || catalog.officialBaseName || catalog.officialName || catalog.englishName || "";
+      const germanName = record.germanName || (englishName ? record.name : "") || catalog.germanName || "";
+      addCandidate({
+        productId,
+        metacardId:record.metacardId || catalog.metacardId,
+        englishName,
+        germanName
+      });
+      if (Array.isArray(record.items)) visitRecord(record.items,depth+1);
+      if (Array.isArray(record.pendingItems)) visitRecord(record.pendingItems,depth+1);
+    };
+
+    [state.inventory,state.purchases,state.sales,state.watchlist].forEach(rows => visitRecord(rows));
+
+    const uniqueMap = candidates => {
+      const result = new Map();
+      for (const [key,names] of candidates) if (names.size === 1) result.set(key,[...names][0]);
+      return result;
+    };
+
+    return {
+      byProductId,
+      byMetacardId:uniqueMap(byMetacardCandidates),
+      byEnglishKey:uniqueMap(byEnglishCandidates)
+    };
+  }
+
+  function cmSearchTextForProduct(product={}) {
+    return cmNormalize([
+      product.productId, product.germanName, product.name, product.officialName, product.officialBaseName,
+      product.set, product.setName, product.rarity, product.variant,
+      product.expansionId ? `expansion ${product.expansionId}` : "",
+      product.metacardId ? `metacard ${product.metacardId}` : ""
+    ].filter(Boolean).join(" "));
+  }
+
+  function cmResolveGermanName(product={}, localMaps=null, apiGermanName="") {
+    const englishBase = cmExtractIdentity(product.officialBaseName || product.officialName || product.name || "").baseName;
+    const productId = cleanProductId(product.productId);
+    const metacardId = cleanProductId(product.metacardId);
+    const englishKey = cmNormalize(englishBase);
+    return cmVerifiedGermanName(englishBase)
+      || cmGermanNameCandidate(apiGermanName,englishBase)
+      || cmGermanNameCandidate(product.germanName,englishBase)
+      || localMaps?.byProductId?.get(productId)
+      || localMaps?.byMetacardId?.get(metacardId)
+      || localMaps?.byEnglishKey?.get(englishKey)
+      || "";
   }
 
   function cmGermanName(product={}) {
@@ -348,13 +475,8 @@
       const setName = String(raw?.setName || raw?.expansionName || known.setName || existing.setName || "").trim();
       const expansionId = cleanProductId(raw?.idExpansion ?? raw?.expansionId);
       const metacardId = cleanProductId(raw?.idMetacard ?? raw?.metacardId);
-      const germanName = String(raw?.germanName || known.germanName || existingGermanNames.get(productId) || "").trim();
-      const searchText = cmNormalize([
-        productId, germanName, name, officialName, identity.baseName, set, setName, rarity, variant,
-        expansionId ? `expansion ${expansionId}` : "",
-        metacardId ? `metacard ${metacardId}` : ""
-      ].filter(Boolean).join(" "));
-      prepared.push({
+      const germanName = String(raw?.germanName || known.germanName || existingGermanNames.get(productId) || cmVerifiedGermanName(identity.baseName) || "").trim();
+      const productRow = {
         productId,
         name,
         germanName,
@@ -376,9 +498,10 @@
         collectorNumber: String(raw?.collectorNumber || known.collectorNumber || existing.collectorNumber || ""),
         productUrl: String(raw?.productUrl || known.productUrl || existing.productUrl || ""),
         archived: Boolean(raw?.archived),
-        searchText,
         updatedAt: importedAt
-      });
+      };
+      productRow.searchText = cmSearchTextForProduct(productRow);
+      prepared.push(productRow);
     }
 
     cmSetProgress(`<strong>Produktkatalog wird gespeichert …</strong><br>0 von ${prepared.length.toLocaleString("de-DE")} Produkten`, 0);
@@ -404,6 +527,7 @@
       catalogCreatedAt: String(payload?.createdAt || ""),
       catalogVersion: String(payload?.version ?? ""),
       productCount: prepared.length,
+      germanNameRevision: 0,
       lastError: ""
     };
     state.imports.push({
@@ -1218,6 +1342,11 @@
       }
     }
 
+    // Lokale Namen und bereits bekannte Produkt-/Metacard-Zuordnungen werden als zusätzliche,
+    // aber nur bei Eindeutigkeit verwendete Quelle einbezogen. So gehen manuell gepflegte Namen
+    // nicht verloren und vorhandene Übersetzungen werden auf alle Druckvarianten übertragen.
+    const localMaps = cmBuildLocalGermanNameMaps(products);
+
     // Cardmarket liefert im Produktkatalog nur die Expansion-ID.
     // Über viele Karten einer Expansion wird deshalb ein dominantes YGOPRODeck-Set ermittelt.
     // Nur ausreichend eindeutige Zuordnungen werden übernommen; unsichere Treffer bleiben leer.
@@ -1225,18 +1354,22 @@
 
     let matched = 0;
     let unchanged = 0;
+    let verifiedFallbackCount = 0;
     let setDetailCount = 0;
     let setMappingCount = 0;
-    const updated = products.map(product => {
+    let updated = products.map(product => {
       const englishBase = cmExtractIdentity(product.officialBaseName || product.officialName || product.name || "").baseName;
       const englishKey = cmNormalize(englishBase);
       const ygoCard = cardByEnglishKey.get(englishKey);
-      const germanName = ygoCard ? germanById.get(String(ygoCard.id || "")) || "" : "";
+      const apiGermanName = ygoCard ? germanById.get(String(ygoCard.id || "")) || "" : "";
+      const verifiedGermanName = cmVerifiedGermanName(englishBase);
+      const germanName = cmResolveGermanName(product,localMaps,apiGermanName);
       const patch = {};
 
       if (germanName) {
         patch.germanName = germanName;
         matched++;
+        if (verifiedGermanName && cmNormalize(verifiedGermanName) === cmNormalize(germanName)) verifiedFallbackCount++;
       } else {
         unchanged++;
       }
@@ -1269,19 +1402,48 @@
       }
 
       const merged = {...product,...patch};
-      return {
-        ...merged,
-        searchText: cmNormalize([
-          merged.productId, merged.germanName, merged.name, merged.officialName, merged.officialBaseName,
-          merged.set, merged.setName, merged.rarity, merged.variant,
-          merged.expansionId ? `expansion ${merged.expansionId}` : "",
-          merged.metacardId ? `metacard ${merged.metacardId}` : ""
-        ].filter(Boolean).join(" "))
-      };
+      return {...merged,searchText:cmSearchTextForProduct(merged)};
+    });
+
+    // Alle Druckversionen derselben Metacard erhalten denselben deutschen Kartennamen,
+    // aber nur wenn für die Metacard exakt eine eindeutige Übersetzung vorliegt.
+    const metacardCandidates = new Map();
+    for (const product of updated) {
+      const metacardId = cleanProductId(product.metacardId);
+      const germanName = cmGermanNameCandidate(product.germanName,product.officialBaseName || product.officialName || product.name);
+      if (!metacardId || !germanName) continue;
+      if (!metacardCandidates.has(metacardId)) metacardCandidates.set(metacardId,new Set());
+      metacardCandidates.get(metacardId).add(germanName);
+    }
+    const germanByMetacard = new Map([...metacardCandidates].filter(([,names]) => names.size === 1).map(([id,names]) => [id,[...names][0]]));
+    updated = updated.map(product => {
+      if (cmGermanName(product)) return product;
+      const propagated = germanByMetacard.get(cleanProductId(product.metacardId));
+      if (!propagated) return product;
+      const merged = {...product,germanName:propagated};
+      matched++;
+      unchanged=Math.max(0,unchanged-1);
+      return {...merged,searchText:cmSearchTextForProduct(merged)};
     });
 
     cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>0 von ${updated.length.toLocaleString("de-DE")} Produkten`,0);
-    await cmWriteRows("products",updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,done/Math.max(1,total)*100));
+    await cmWriteRows("products",updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden lokal gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,done/Math.max(1,total)*85));
+    await cmSyncProductsToSqlite(updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden in SQLite aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,85+done/Math.max(1,total)*15));
+
+    // Der kleine Kompatibilitätskatalog versorgt Bestand, Einkäufe und Verkäufe.
+    // Nur bereits vorhandene Einträge werden aktualisiert, damit localStorage klein bleibt.
+    for (const product of updated) {
+      const productId = String(product.productId || "");
+      if (!state.productCatalog?.[productId]) continue;
+      state.productCatalog[productId] = {
+        ...state.productCatalog[productId],
+        germanName:product.germanName || state.productCatalog[productId].germanName || "",
+        officialName:product.officialName || state.productCatalog[productId].officialName || "",
+        officialBaseName:product.officialBaseName || state.productCatalog[productId].officialBaseName || "",
+        metacardId:product.metacardId || state.productCatalog[productId].metacardId || ""
+      };
+    }
+
     const importedAt = new Date().toISOString();
     state.cardmarket = {
       ...CM_META_DEFAULTS,
@@ -1289,17 +1451,90 @@
       germanNamesImportedAt:importedAt,
       germanNameCount:matched,
       germanNameSource:source,
+      germanNameRevision:CM_GERMAN_NAME_REVISION,
+      germanNameVerifiedFallbackCount:verifiedFallbackCount,
       cardDataImportedAt:importedAt,
       setDetailCount,
       setMappingCount,
       lastError:""
     };
-    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,setDetails:setDetailCount,setMappings:setMappingCount});
+    state.imports.push({id:uid(),type:"names",key:`german-names-${Date.now()}`,file:source,date:importedAt,rows:englishRows.length,cards:matched,unmatched:unchanged,verifiedFallbacks:verifiedFallbackCount,setDetails:setDetailCount,setMappings:setMappingCount});
     cmInvalidateCache();
     saveState();
     renderAll();
-    cmSetProgress(`<strong>Deutsche Kartendaten gespeichert</strong><br>${matched.toLocaleString("de-DE")} Namen zugeordnet${setDetailCount?` · ${setDetailCount.toLocaleString("de-DE")} Set-/Seltenheitsdetails ergänzt`:""}.`,100,"success");
-    return {matched,unmatched:unchanged,setDetailCount,setMappingCount};
+    cmSetProgress(`<strong>Deutsche Kartendaten gespeichert</strong><br>${matched.toLocaleString("de-DE")} Namen zugeordnet${verifiedFallbackCount?` · ${verifiedFallbackCount.toLocaleString("de-DE")} verifizierte Ergänzungen`:""}${setDetailCount?` · ${setDetailCount.toLocaleString("de-DE")} Set-/Seltenheitsdetails ergänzt`:""}.`,100,"success");
+    return {matched,unmatched:unchanged,verifiedFallbackCount,setDetailCount,setMappingCount};
+  }
+
+  async function cmRepairKnownGermanNames() {
+    if (Number(state.cardmarket?.productCount || 0) <= 0) return {changed:0};
+    if (Number(state.cardmarket?.germanNameRevision || 0) >= CM_GERMAN_NAME_REVISION) return {changed:0};
+
+    const products = await cmGetAll("products");
+    if (!products.length) return {changed:0};
+    const localMaps = cmBuildLocalGermanNameMaps(products);
+    let verifiedFallbackCount = 0;
+    let updated = products.map(product => {
+      const resolved = cmResolveGermanName(product,localMaps,"");
+      const verified = cmVerifiedGermanName(product.officialBaseName || product.officialName || product.name || "");
+      if (verified && resolved && cmNormalize(verified) === cmNormalize(resolved)) verifiedFallbackCount++;
+      if (!resolved || cmNormalize(resolved) === cmNormalize(product.germanName || "")) return product;
+      const merged = {...product,germanName:resolved,updatedAt:new Date().toISOString()};
+      return {...merged,searchText:cmSearchTextForProduct(merged)};
+    });
+
+    const metacardCandidates = new Map();
+    for (const product of updated) {
+      const metacardId = cleanProductId(product.metacardId);
+      const germanName = cmGermanNameCandidate(product.germanName,product.officialBaseName || product.officialName || product.name);
+      if (!metacardId || !germanName) continue;
+      if (!metacardCandidates.has(metacardId)) metacardCandidates.set(metacardId,new Set());
+      metacardCandidates.get(metacardId).add(germanName);
+    }
+    const germanByMetacard = new Map([...metacardCandidates].filter(([,names]) => names.size === 1).map(([id,names]) => [id,[...names][0]]));
+    updated = updated.map(product => {
+      if (cmGermanName(product)) return product;
+      const propagated = germanByMetacard.get(cleanProductId(product.metacardId));
+      if (!propagated) return product;
+      const merged = {...product,germanName:propagated,updatedAt:new Date().toISOString()};
+      return {...merged,searchText:cmSearchTextForProduct(merged)};
+    });
+
+    const changedRows = updated.filter((product,index) => {
+      const original = products[index];
+      return cmNormalize(product.germanName || "") !== cmNormalize(original.germanName || "")
+        || product.searchText !== original.searchText;
+    });
+
+    if (changedRows.length) {
+      await cmWriteRows("products",changedRows);
+      await cmSyncProductsToSqlite(changedRows);
+      for (const product of changedRows) {
+        const productId = String(product.productId || "");
+        if (!state.productCatalog?.[productId]) continue;
+        state.productCatalog[productId] = {
+          ...state.productCatalog[productId],
+          germanName:product.germanName || state.productCatalog[productId].germanName || "",
+          officialName:product.officialName || state.productCatalog[productId].officialName || "",
+          officialBaseName:product.officialBaseName || state.productCatalog[productId].officialBaseName || "",
+          metacardId:product.metacardId || state.productCatalog[productId].metacardId || ""
+        };
+      }
+      cmInvalidateCache();
+    }
+
+    const germanNameCount = updated.reduce((sum,product) => sum + (cmGermanName(product) ? 1 : 0),0);
+    state.cardmarket = {
+      ...CM_META_DEFAULTS,
+      ...state.cardmarket,
+      germanNameRevision:CM_GERMAN_NAME_REVISION,
+      germanNameCount,
+      germanNameVerifiedFallbackCount:verifiedFallbackCount,
+      lastError:""
+    };
+    saveState();
+    if (changedRows.length) renderAll();
+    return {changed:changedRows.length,germanNameCount,verifiedFallbackCount};
   }
 
   async function cmLoadGermanNamesOnline() {
@@ -1578,6 +1813,8 @@
   let cmPurchaseAnalysisToken=0;
 
   const CM_GERMAN_SEARCH_ALIASES = [
+    ...CM_VERIFIED_GERMAN_NAME_PAIRS.map(([english,german]) => [cmNormalize(german),cmNormalize(english)]),
+    ["unterweltlerschmied", "fiendsmith"],
     ["antiker antriebs", "ancient gear"],
     ["antike antriebs", "ancient gear"],
     ["antiker antrieb", "ancient gear"],
@@ -1882,7 +2119,14 @@
 
   saveState();
   renderAll();
-  cmRefreshMetadataFromDb().then(() => {
+  cmRefreshMetadataFromDb().then(async () => {
+    try {
+      await cmRepairKnownGermanNames();
+    } catch (error) {
+      console.error("Lokale Reparatur deutscher Kartennamen fehlgeschlagen:",error);
+      state.cardmarket.lastError = `Deutsche Namen: ${String(error?.message || error)}`;
+      saveState();
+    }
     window.setTimeout(cmRunDailyAutoUpdate, 1200);
   });
 })();

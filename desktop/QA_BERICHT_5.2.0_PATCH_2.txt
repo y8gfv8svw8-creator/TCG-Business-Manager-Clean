@@ -1,0 +1,16 @@
+TCG Business Manager 5.2.0 – Patch 2
+QA: Deutsche Kartennamen vervollständigen
+
+Geprüft:
+- JavaScript-Syntax aller Hauptdateien: erfolgreich
+- Verifizierte Zuordnung Fiendsmith's Tract -> Tract des Unterweltlerschmieds
+- 9 Cardmarket-Druckvarianten von Fiendsmith's Tract im Testkatalog erkannt
+- Metacard-basierte Weitergabe deutscher Namen implementiert
+- Aktualisierung von IndexedDB, SQLite und Kompatibilitätskatalog implementiert
+- Automatische einmalige Reparatur nach dem Update implementiert
+
+Noch auf dem Zielsystem zu prüfen:
+- Start der installierten Testversion
+- Suche nach "Tract des Unterweltlerschmieds"
+- Anzeige beider Namen bei allen 9 Varianten
+- Bestandssuche mit deutschem und englischem Namen

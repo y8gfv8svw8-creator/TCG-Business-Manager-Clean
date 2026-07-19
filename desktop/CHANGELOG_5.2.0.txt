@@ -54,3 +54,9 @@ Patch 5 – Dauerhafte Handelsdatenbank und lernende Preisempfehlungen
 - Konsolidiert den täglichen Price-Guide-Download auf einen einzigen Lauf.
 - Bereitet die Cardmarket-API v2 als sicher deaktivierte Quelle vor; Zugangsdaten werden nicht in SQLite gespeichert.
 - Erstellt vor Schema-v5-Migrationen automatisch eine vollständige SQLite-Sicherung.
+
+Patch 6 – Monatskennzahlen nachvollziehbar
+- Einnahmen und Ausgaben auf dem Dashboard sind anklickbar.
+- Einnahmen zeigen die bezahlten Verkäufe mit Kunde, Bestellung, Karten und Einzelbetrag.
+- Ausgaben gliedern Kartenkäufe, Einkaufsversand, Zusatzkosten, Verkaufsgebühren, Porto, Verpackungsmaterial und sonstige Ausgaben einzeln auf.
+- Von jeder zugeordneten Zeile kann direkt die ursprüngliche Bestellung geöffnet werden.

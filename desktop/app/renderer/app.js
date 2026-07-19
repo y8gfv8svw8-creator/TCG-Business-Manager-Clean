@@ -676,6 +676,90 @@ function monthlyBusinessFigures(year,month){
   const expenses=cardPurchases+saleCosts+other;
   return {sales,purchases,income,cardPurchases,saleCosts,other,expenses,profit:income-expenses};
 }
+
+function financeCardDescription(record, type) {
+  const rows=type==="purchase"?(record.pendingItems||[]):(record.items||[]);
+  if(rows.length){
+    const names=rows.slice(0,4).map(item=>`${Number(item.quantity||1)}× ${item.name||"Unbekannte Karte"}`);
+    if(rows.length>4)names.push(`+ ${rows.length-4} weitere Positionen`);
+    return names.join(", ");
+  }
+  if(record.cardNames)return String(record.cardNames);
+  const quantity=Number(record.quantity||record.items||0);
+  return quantity?`${quantity} Karte${quantity===1?"":"n"}`:"Keine Kartenbeschreibung hinterlegt";
+}
+
+function monthlyFinanceDetails(type,year,month){
+  const figures=monthlyBusinessFigures(year,month);
+  const rows=[];
+  const add=(date,category,reference,description,amount,orderType="",orderId="")=>{
+    const value=Number(amount||0);
+    if(!value)return;
+    rows.push({date,category,reference,description,amount:value,orderType,orderId});
+  };
+  if(type==="income"){
+    figures.sales.forEach(sale=>add(
+      sale.date,"Verkauf",`Bestellung ${sale.orderNo||"–"}`,
+      `${sale.customer||"Unbekannter Kunde"} · ${financeCardDescription(sale,"sale")}`,
+      Number(sale.revenue||0),"sale",sale.id
+    ));
+  }else{
+    figures.purchases.forEach(purchase=>{
+      const reference=`Einkauf ${purchase.orderNo||"–"}`;
+      const cards=`${purchase.seller||"Unbekannter Händler"} · ${financeCardDescription(purchase,"purchase")}`;
+      add(purchase.date,"Kartenkauf",reference,cards,purchase.cardValue,"purchase",purchase.id);
+      add(purchase.date,"Einkaufsversand",reference,`Versandkosten von ${purchase.seller||"unbekanntem Händler"}`,purchase.shipping,"purchase",purchase.id);
+      add(purchase.date,"Zusatzkosten Einkauf",reference,purchase.note||cards,purchase.extra,"purchase",purchase.id);
+    });
+    figures.sales.forEach(sale=>{
+      const costs=calculateSaleProfit(sale);
+      const reference=`Verkauf ${sale.orderNo||"–"}`;
+      const cards=financeCardDescription(sale,"sale");
+      add(sale.date,"Verkaufsgebühr",reference,cards,costs.fee,"sale",sale.id);
+      add(sale.date,"Verkaufsporto",reference,cards,costs.postage,"sale",sale.id);
+      add(sale.date,"Verpackungsmaterial",reference,cards,costs.packaging,"sale",sale.id);
+    });
+    (state.expenses||[]).filter(expense=>isSameMonth(expense.date,year,month)&&expense.status!=="Storniert").forEach(expense=>add(
+      expense.date,expense.category||"Sonstiges",expense.description||"Sonstige Ausgabe",expense.note||"Manuell erfasste Ausgabe",expense.amount
+    ));
+  }
+  rows.sort((a,b)=>new Date(b.date)-new Date(a.date)||a.category.localeCompare(b.category,"de"));
+  return {figures,rows,total:type==="income"?figures.income:figures.expenses};
+}
+
+function openMonthlyFinanceDetails(type){
+  const now=new Date();
+  const year=now.getFullYear(),month=now.getMonth();
+  const data=monthlyFinanceDetails(type,year,month);
+  const dialog=document.getElementById("monthlyFinanceDialog");
+  const isIncome=type==="income";
+  document.getElementById("monthlyFinanceTitle").textContent=isIncome?"Einnahmen im Detail":"Ausgaben im Detail";
+  document.getElementById("monthlyFinanceSubtitle").textContent=monthLabel(year,month);
+  const categoryTotals=new Map();
+  data.rows.forEach(row=>categoryTotals.set(row.category,(categoryTotals.get(row.category)||0)+row.amount));
+  const cards=isIncome
+    ? [
+        ["Gesamteinnahmen",data.total],
+        ["Bezahlte Verkäufe",data.figures.sales.length],
+        ["Verkaufte Karten",data.figures.sales.reduce((sum,sale)=>sum+Number(sale.quantity||(sale.items||[]).reduce((n,item)=>n+Number(item.quantity||1),0)||0),0)]
+      ]
+    : [["Gesamtausgaben",data.total],...Array.from(categoryTotals.entries()).sort((a,b)=>b[1]-a[1]).slice(0,5)];
+  const summary=cards.map(([label,value],index)=>`<div><small>${escapeHtml(label)}</small><strong>${index===0||!isIncome?money(value):Number(value).toLocaleString("de-DE")}</strong></div>`).join("");
+  const rows=data.rows.map(row=>`<tr>
+    <td>${fmtDate(row.date)||"–"}</td>
+    <td>${escapeHtml(row.category)}</td>
+    <td><strong>${escapeHtml(row.reference)}</strong><br><small>${escapeHtml(row.description)}</small>${row.orderId?`<br><button type="button" class="link-button finance-order-link" data-finance-order-type="${row.orderType}" data-finance-order-id="${escapeHtml(row.orderId)}">Bestellung öffnen</button>`:""}</td>
+    <td class="finance-detail-amount"><strong>${money(row.amount)}</strong></td>
+  </tr>`).join("");
+  document.getElementById("monthlyFinanceContent").innerHTML=`
+    <div class="order-summary-grid finance-detail-summary">${summary}</div>
+    <div class="order-items finance-detail-table"><table>
+      <thead><tr><th>Datum</th><th>${isIncome?"Art":"Kostenart"}</th><th>Wofür berechnet</th><th>Betrag</th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="4" class="empty">Für diesen Monat sind noch keine ${isIncome?"Einnahmen":"Ausgaben"} vorhanden.</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="3"><strong>Summe laut Monatsübersicht</strong></td><td class="finance-detail-amount"><strong>${money(data.total)}</strong></td></tr></tfoot>
+    </table></div>`;
+  dialog.showModal();
+}
 function renderDashboard() {
   const activeInv = state.inventory.filter(i=>["Im Bestand","Inseriert"].includes(i.status) || (i.status==="Im Bestand" && i.listed));
   const now = new Date();
@@ -2514,6 +2598,24 @@ document.getElementById("orderDetailContent").addEventListener("input",e=>{if(e.
 document.getElementById("orderDetailContent").addEventListener("change",e=>{if(e.target.matches("[data-material-id]"))updateSaleMaterialPreview();});
 document.getElementById("orderDetailClose").onclick=()=>document.getElementById("orderDetailDialog").close();
 document.getElementById("orderDetailCloseBottom").onclick=()=>document.getElementById("orderDetailDialog").close();
+
+const bindMonthlyFinanceCard=(id,type)=>{
+  const card=document.getElementById(id);if(!card)return;
+  card.onclick=()=>openMonthlyFinanceDetails(type);
+  card.onkeydown=event=>{
+    if(event.key!=="Enter"&&event.key!==" ")return;
+    event.preventDefault();openMonthlyFinanceDetails(type);
+  };
+};
+bindMonthlyFinanceCard("monthlyRevenueCard","income");
+bindMonthlyFinanceCard("monthlyExpensesCard","expenses");
+document.getElementById("monthlyFinanceClose").onclick=()=>document.getElementById("monthlyFinanceDialog").close();
+document.getElementById("monthlyFinanceCloseBottom").onclick=()=>document.getElementById("monthlyFinanceDialog").close();
+document.getElementById("monthlyFinanceContent").addEventListener("click",event=>{
+  const link=event.target.closest("[data-finance-order-id]");if(!link)return;
+  document.getElementById("monthlyFinanceDialog").close();
+  openOrderDetails(link.dataset.financeOrderType,link.dataset.financeOrderId);
+});
 
 
 const chooseFolderBtn=document.getElementById("chooseSyncFolderBtn");

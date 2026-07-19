@@ -58,8 +58,8 @@
           <article class="metric-card"><span>Bestandskarten</span><strong id="mInventoryCount">0</strong><small>verfügbare physische Karten</small></article>
           <article class="metric-card"><span>Bestandswert</span><strong id="mInventoryValue">0,00 €</strong><small>Summe der Inseratspreise</small></article>
           <article class="metric-card"><span>Investiertes Kapital</span><strong id="mInvestedCapital">0,00 €</strong><small>Einstand des verfügbaren Bestands</small></article>
-          <article class="metric-card"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>bezahlte und abgeschlossene Verkäufe</small></article>
-          <article class="metric-card"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Karten, Versand, Material und Sonstiges</small></article>
+          <article id="monthlyRevenueCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Einnahmen dieses Monats anzeigen"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>bezahlte und abgeschlossene Verkäufe</small><span class="metric-detail-link">Details anzeigen →</span></article>
+          <article id="monthlyExpensesCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Ausgaben dieses Monats anzeigen"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Karten, Versand, Material und Sonstiges</small><span class="metric-detail-link">Details anzeigen →</span></article>
           <article class="metric-card"><span>Gewinn Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>Einnahmen minus Ausgaben</small></article>
           <article class="metric-card"><span>Offene Einkäufe</span><strong id="mOpenPurchases">0</strong><small>bestellt / unterwegs</small></article>
           <article class="metric-card"><span>Kaufchancen</span><strong id="mBuyOpportunities">0</strong><small>Watchlist: Kaufen / Top Deal</small></article>
@@ -592,6 +592,15 @@
     </div>
     <div id="orderDetailContent"></div>
     <div class="modal-actions"><button type="button" id="orderDetailCloseBottom" class="primary">Schließen</button></div>
+  </dialog>
+
+  <dialog id="monthlyFinanceDialog" class="order-detail-dialog finance-detail-dialog">
+    <div class="modal-head">
+      <div><h2 id="monthlyFinanceTitle">Monatsdetails</h2><p id="monthlyFinanceSubtitle" class="muted"></p></div>
+      <button type="button" id="monthlyFinanceClose" class="icon-button" aria-label="Schließen">×</button>
+    </div>
+    <div id="monthlyFinanceContent"></div>
+    <div class="modal-actions"><button type="button" id="monthlyFinanceCloseBottom" class="primary">Schließen</button></div>
   </dialog>
 
   <script>

@@ -642,7 +642,7 @@ class TcgDatabase {
       const orderKey = `sale:${localId}`;
       const sourceId = recordSource(sale);
       const revenue = numberValue(sale.revenue);
-      const cardValue = numberValue(sale.cardValue || revenue);
+      const cardValue = numberValue(sale.cardValue || Math.max(0, revenue - numberValue(sale.shippingPaid)));
       const fee = sale.fee !== undefined && sale.fee !== ''
         ? numberValue(sale.fee)
         : cardValue * numberValue(settings.feePercent) / 100;

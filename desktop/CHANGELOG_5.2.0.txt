@@ -60,3 +60,5 @@ Patch 6 – Monatskennzahlen nachvollziehbar
 - Einnahmen zeigen die bezahlten Verkäufe mit Kunde, Bestellung, Karten und Einzelbetrag.
 - Ausgaben gliedern Kartenkäufe, Einkaufsversand, Zusatzkosten, Verkaufsgebühren, Porto, Verpackungsmaterial und sonstige Ausgaben einzeln auf.
 - Von jeder zugeordneten Zeile kann direkt die ursprüngliche Bestellung geöffnet werden.
+- Vom Käufer bezahlter Versand wird in den Einnahmendetails getrennt vom Kartenverkauf ausgewiesen, ohne den bereits enthaltenen Gesamtumsatz doppelt zu zählen.
+- Automatisch berechnete Verkaufsgebühren verwenden bei manuellen Verkäufen den Kartenwert ohne den vom Käufer bezahlten Versand.

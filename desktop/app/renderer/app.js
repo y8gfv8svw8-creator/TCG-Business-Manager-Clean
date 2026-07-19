@@ -611,7 +611,7 @@ function saleMaterialCost(sale){
 }
 function calculateSaleProfit(sale) {
   const gross = Number(sale.revenue||0);
-  const feeBase = Number(sale.cardValue||gross);
+  const feeBase = Number(sale.cardValue||Math.max(0,gross-Number(sale.shippingPaid||0)));
   const fee = sale.fee !== undefined && sale.fee !== "" ? Number(sale.fee) : feeBase * state.settings.feePercent/100;
   const packaging = saleMaterialCost(sale);
   const postage = Number(sale.postage||0);
@@ -698,11 +698,18 @@ function monthlyFinanceDetails(type,year,month){
     rows.push({date,category,reference,description,amount:value,orderType,orderId});
   };
   if(type==="income"){
-    figures.sales.forEach(sale=>add(
-      sale.date,"Verkauf",`Bestellung ${sale.orderNo||"–"}`,
-      `${sale.customer||"Unbekannter Kunde"} · ${financeCardDescription(sale,"sale")}`,
-      Number(sale.revenue||0),"sale",sale.id
-    ));
+    figures.sales.forEach(sale=>{
+      const totalIncome=Math.max(0,Number(sale.revenue||0));
+      // Cardmarket-Importe speichern den Käufer-Versand bereits im Gesamtumsatz.
+      // Für die Anzeige wird er abgezogen und separat ausgewiesen; die Summe
+      // bleibt dadurch unverändert und wird nicht doppelt gezählt.
+      const customerShipping=Math.min(totalIncome,Math.max(0,Number(sale.shippingPaid||0)));
+      const cardIncome=Math.max(0,totalIncome-customerShipping);
+      const reference=`Bestellung ${sale.orderNo||"–"}`;
+      const description=`${sale.customer||"Unbekannter Kunde"} · ${financeCardDescription(sale,"sale")}`;
+      add(sale.date,"Kartenverkauf",reference,description,cardIncome,"sale",sale.id);
+      add(sale.date,"Versand vom Käufer",reference,`${sale.customer||"Unbekannter Kunde"} · vom Käufer bezahlter Versand`,customerShipping,"sale",sale.id);
+    });
   }else{
     figures.purchases.forEach(purchase=>{
       const reference=`Einkauf ${purchase.orderNo||"–"}`;
@@ -739,12 +746,14 @@ function openMonthlyFinanceDetails(type){
   data.rows.forEach(row=>categoryTotals.set(row.category,(categoryTotals.get(row.category)||0)+row.amount));
   const cards=isIncome
     ? [
-        ["Gesamteinnahmen",data.total],
-        ["Bezahlte Verkäufe",data.figures.sales.length],
-        ["Verkaufte Karten",data.figures.sales.reduce((sum,sale)=>sum+Number(sale.quantity||(sale.items||[]).reduce((n,item)=>n+Number(item.quantity||1),0)||0),0)]
+        {label:"Gesamteinnahmen",value:data.total,isMoney:true},
+        {label:"Kartenverkäufe",value:categoryTotals.get("Kartenverkauf")||0,isMoney:true},
+        {label:"Versand vom Käufer",value:categoryTotals.get("Versand vom Käufer")||0,isMoney:true},
+        {label:"Bezahlte Verkäufe",value:data.figures.sales.length,isMoney:false},
+        {label:"Verkaufte Karten",value:data.figures.sales.reduce((sum,sale)=>sum+Number(sale.quantity||(sale.items||[]).reduce((n,item)=>n+Number(item.quantity||1),0)||0),0),isMoney:false}
       ]
-    : [["Gesamtausgaben",data.total],...Array.from(categoryTotals.entries()).sort((a,b)=>b[1]-a[1]).slice(0,5)];
-  const summary=cards.map(([label,value],index)=>`<div><small>${escapeHtml(label)}</small><strong>${index===0||!isIncome?money(value):Number(value).toLocaleString("de-DE")}</strong></div>`).join("");
+    : [{label:"Gesamtausgaben",value:data.total,isMoney:true},...Array.from(categoryTotals.entries()).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([label,value])=>({label,value,isMoney:true}))];
+  const summary=cards.map(card=>`<div><small>${escapeHtml(card.label)}</small><strong>${card.isMoney?money(card.value):Number(card.value).toLocaleString("de-DE")}</strong></div>`).join("");
   const rows=data.rows.map(row=>`<tr>
     <td>${fmtDate(row.date)||"–"}</td>
     <td>${escapeHtml(row.category)}</td>
@@ -1627,7 +1636,7 @@ function addSale(initial={}) {
     {name:"country",label:"Kundenland"},
     {name:"quantity",label:"Kartenanzahl",type:"number"},
     {name:"cardNames",label:"Karten",full:true},
-    {name:"revenue",label:"Verkaufspreis gesamt (€)",type:"number",step:"0.01"},
+    {name:"revenue",label:"Gesamteinnahme inkl. Käufer-Versand (€)",type:"number",step:"0.01"},
     {name:"cost",label:"Einstand verkaufter Karten (€)",type:"number",step:"0.01"},
     {name:"fee",label:"Gebühr (€) – leer = automatisch",type:"number",step:"0.01"},
     {name:"shippingPaid",label:"Versand vom Käufer (€)",type:"number",step:"0.01"},

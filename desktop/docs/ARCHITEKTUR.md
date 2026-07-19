@@ -6,4 +6,10 @@
 - `resources`: Test- und Importdaten
 - Benutzerdateien: außerhalb des Programmordners unter Dokumente/TCG Business Manager
 
-Nächster technischer Meilenstein: kontrollierte SQLite-Anbindung mit Migration aus dem bisherigen Browser-Backup.
+SQLite ist die dauerhafte Datenbasis. Neben dem vollständigen Programmstand enthält
+Schema v5 eine append-only Änderungshistorie, normalisierte Handelszeilen,
+quellengetrennte Marktbeobachtungen und berechnete EK-/VK-Empfehlungen.
+
+Die spätere Cardmarket-API wird als zusätzliche Datenquelle angebunden. Externe
+IDs bleiben dabei erhalten; Zugangsdaten gehören in einen sicheren Credential-
+Provider und ausdrücklich nicht in die SQLite-Datenbank.

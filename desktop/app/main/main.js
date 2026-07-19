@@ -39,6 +39,10 @@ function setupIpcHandlers() {
   ipcMain.handle('data:load-state', () => database.loadState());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));
   ipcMain.handle('data:get-status', () => database.getStatus());
+  ipcMain.handle('data:get-trade-database-status', () => database.getTradeDatabaseStatus());
+  ipcMain.handle('data:get-business-events', (_event, payload) => database.getBusinessEvents(payload));
+  ipcMain.handle('data:get-trade-recommendations', (_event, payload) => database.getTradeRecommendations(payload));
+  ipcMain.handle('data:get-data-sources', () => database.getDataSources());
   ipcMain.handle('data:upsert-products', (_event, rows) => database.upsertProducts(rows));
   ipcMain.handle('data:upsert-card-names', (_event, payload) => database.upsertCardNames(payload));
   ipcMain.handle('data:get-card-name-status', () => database.getCardNameStatus());

@@ -150,7 +150,7 @@ test('migriert eine bestehende v3-Datenbank verlustfrei und legt vorher eine SQL
   });
   database.open();
 
-  assert.equal(database.getStatus().schemaVersion, 4);
+  assert.equal(database.getStatus().schemaVersion, 5);
   assert.equal(database.searchCards({query:'dark mag'}).cards[0].variants[0].productId, '900001');
   assert.equal(database.searchCards({query:'dunkler'}).cards[0].variants[0].productId, '900001');
   const migrationRoot = path.join(backupRoot, 'Migrationen');

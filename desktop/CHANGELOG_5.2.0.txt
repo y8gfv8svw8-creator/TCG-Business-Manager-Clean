@@ -44,3 +44,13 @@ Patch 4 – Zweisprachiger Suchindex
 - Umbenannte oder sehr neue Karten bleiben dadurch auch dann auffindbar, wenn der direkte Produktabgleich noch keine deutsche Bezeichnung eingetragen hat.
 - Beispiel ergänzt: Hyperinvoked Aeon / Hyperbeschworener Äon.
 - Statusanzeige unterscheidet jetzt eindeutige deutsche Karten von zugeordneten Druckvarianten.
+
+Patch 5 – Dauerhafte Handelsdatenbank und lernende Preisempfehlungen
+- Protokolliert jede Erstellung, Änderung und Löschung von Einkauf, Verkauf und Bestand dauerhaft in SQLite.
+- Normalisiert kartengenaue Handelspositionen mit Cardmarket-Produkt- und Artikel-IDs, Versandanteilen, echtem EK und Nettoerlös.
+- Speichert Marktbeobachtungen quellengetrennt, sodass Price Guide und spätere API-Daten nebeneinander bestehen.
+- Berechnet automatische Max-EK- und VK-Empfehlungen mit sichtbarer Datensicherheit.
+- Zeigt Datenbankstatus, Empfehlungen und letzte Änderungen im Bericht sowie Datenbankwerte in Cardmarket-Suche und Kaufanalyse.
+- Konsolidiert den täglichen Price-Guide-Download auf einen einzigen Lauf.
+- Bereitet die Cardmarket-API v2 als sicher deaktivierte Quelle vor; Zugangsdaten werden nicht in SQLite gespeichert.
+- Erstellt vor Schema-v5-Migrationen automatisch eine vollständige SQLite-Sicherung.

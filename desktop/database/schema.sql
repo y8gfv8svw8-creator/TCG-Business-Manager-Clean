@@ -202,3 +202,201 @@ CREATE TABLE IF NOT EXISTS analysis_metrics (
   calculated_at TEXT NOT NULL,
   PRIMARY KEY(product_id, calculated_date)
 );
+
+-- Datenquellen werden getrennt verwaltet. Zugangsdaten werden bewusst nicht
+-- in SQLite gespeichert; die API-Zeile beschreibt nur die spaetere Anbindung.
+CREATE TABLE IF NOT EXISTS data_sources (
+  source_id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  read_only INTEGER NOT NULL DEFAULT 1,
+  priority INTEGER NOT NULL DEFAULT 100,
+  base_url TEXT NOT NULL DEFAULT '',
+  config_json TEXT NOT NULL DEFAULT '{}',
+  last_success_at TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_runs (
+  sync_id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  sync_type TEXT NOT NULL,
+  external_cursor TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  rows_read INTEGER NOT NULL DEFAULT 0,
+  rows_written INTEGER NOT NULL DEFAULT 0,
+  rows_skipped INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT NOT NULL DEFAULT '',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_runs_source_started
+ON sync_runs(source_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS external_entity_links (
+  source_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  local_entity_type TEXT NOT NULL,
+  local_entity_id TEXT NOT NULL,
+  external_updated_at TEXT NOT NULL DEFAULT '',
+  payload_hash TEXT NOT NULL DEFAULT '',
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY(source_id, entity_type, external_id),
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+-- Append-only Audit-Log aller Einkaufs-, Verkaufs- und Bestandsaenderungen.
+CREATE TABLE IF NOT EXISTS business_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  before_json TEXT,
+  after_json TEXT,
+  changed_fields_json TEXT NOT NULL DEFAULT '[]',
+  state_saved_at TEXT NOT NULL,
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_business_events_entity
+ON business_events(entity_type, entity_id, event_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_business_events_occurred
+ON business_events(occurred_at DESC);
+
+-- Abfragbare, normalisierte Sicht auf den aktuellen Handelsstand. Entfernte
+-- Datensaetze bleiben archiviert; ihre komplette Geschichte steht im Audit-Log.
+CREATE TABLE IF NOT EXISTS trade_orders (
+  order_key TEXT PRIMARY KEY,
+  trade_type TEXT NOT NULL,
+  local_order_id TEXT NOT NULL,
+  origin_source_id TEXT NOT NULL,
+  materialized_from TEXT NOT NULL DEFAULT 'app_state',
+  external_order_id TEXT NOT NULL DEFAULT '',
+  order_no TEXT NOT NULL DEFAULT '',
+  transaction_date TEXT NOT NULL DEFAULT '',
+  partner TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  card_value REAL NOT NULL DEFAULT 0,
+  shipping REAL NOT NULL DEFAULT 0,
+  extra REAL NOT NULL DEFAULT 0,
+  fees REAL NOT NULL DEFAULT 0,
+  postage REAL NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  revenue REAL NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(origin_source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_orders_type_date
+ON trade_orders(trade_type, transaction_date DESC, archived);
+
+CREATE TABLE IF NOT EXISTS trade_lines (
+  line_key TEXT PRIMARY KEY,
+  order_key TEXT NOT NULL,
+  trade_type TEXT NOT NULL,
+  local_order_id TEXT NOT NULL,
+  origin_source_id TEXT NOT NULL,
+  materialized_from TEXT NOT NULL DEFAULT 'app_state',
+  external_article_id TEXT NOT NULL DEFAULT '',
+  product_id TEXT NOT NULL DEFAULT '',
+  metacard_id TEXT NOT NULL DEFAULT '',
+  card_name TEXT NOT NULL DEFAULT '',
+  set_name TEXT NOT NULL DEFAULT '',
+  rarity TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT '',
+  card_condition TEXT NOT NULL DEFAULT '',
+  quantity INTEGER NOT NULL DEFAULT 1,
+  unit_price REAL NOT NULL DEFAULT 0,
+  allocated_shipping REAL NOT NULL DEFAULT 0,
+  allocated_extra REAL NOT NULL DEFAULT 0,
+  unit_cost REAL NOT NULL DEFAULT 0,
+  unit_net REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT '',
+  transaction_date TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(order_key) REFERENCES trade_orders(order_key),
+  FOREIGN KEY(origin_source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_lines_product_type
+ON trade_lines(product_id, trade_type, transaction_date DESC, archived);
+
+CREATE INDEX IF NOT EXISTS idx_trade_lines_order
+ON trade_lines(order_key, archived);
+
+-- Quellengetrennte Marktbeobachtungen. Anders als die bisherige
+-- Kompatibilitaetstabelle koennen mehrere Quellen am selben Tag nebeneinander
+-- bestehen und spaeter gemeinsam fuer Empfehlungen genutzt werden.
+CREATE TABLE IF NOT EXISTS market_observations (
+  observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  observed_date TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_record_key TEXT NOT NULL,
+  category_id INTEGER,
+  avg_price REAL,
+  low_price REAL,
+  trend_price REAL,
+  avg_1 REAL,
+  avg_7 REAL,
+  avg_30 REAL,
+  avg_foil REAL,
+  low_foil REAL,
+  trend_foil REAL,
+  avg_1_foil REAL,
+  avg_7_foil REAL,
+  avg_30_foil REAL,
+  data_quality TEXT NOT NULL DEFAULT '',
+  imported_at TEXT NOT NULL,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(source_id, source_record_key),
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_observations_product_date
+ON market_observations(product_id, observed_date DESC, source_id);
+
+CREATE INDEX IF NOT EXISTS idx_market_observations_source_date
+ON market_observations(source_id, observed_date DESC);
+
+CREATE TABLE IF NOT EXISTS market_observation_summary (
+  source_id TEXT NOT NULL,
+  observed_date TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  first_imported_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(source_id, observed_date),
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_recommendations (
+  product_id TEXT PRIMARY KEY,
+  calculated_at TEXT NOT NULL,
+  recommended_buy REAL,
+  recommended_sell REAL,
+  own_buy_average REAL,
+  own_sell_average REAL,
+  market_reference REAL,
+  buy_sample_count INTEGER NOT NULL DEFAULT 0,
+  sell_sample_count INTEGER NOT NULL DEFAULT 0,
+  market_sample_count INTEGER NOT NULL DEFAULT 0,
+  confidence_score REAL NOT NULL DEFAULT 0,
+  confidence_level TEXT NOT NULL DEFAULT 'low',
+  explanation_json TEXT NOT NULL DEFAULT '[]'
+);

@@ -64,6 +64,7 @@
   let cmOpportunityCache = {key:"", rows:[]};
   let cmLastRenderedView = "";
   let cmGermanNamesUpdatePromise = null;
+  let cmPriceUpdatePromise = null;
   const YGOPRO_EN_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?misc=yes";
   const YGOPRO_DE_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?language=de&misc=yes";
   const YGORESOURCES_EN_NAMES_URL = "https://db.ygoresources.com/data/idx/card/name/en";
@@ -1080,6 +1081,18 @@
     return 3;
   }
 
+  async function cmAttachTradeRecommendations(groups) {
+    if (!window.desktopApp?.getTradeRecommendations) return groups;
+    const ids=[...new Set(groups.flatMap(group=>group.variants||[]).map(row=>String(row.productId||"")).filter(id=>/^\d+$/.test(id)))];
+    const learnedById=new Map();
+    for(let start=0;start<ids.length;start+=400){
+      const result=await window.desktopApp.getTradeRecommendations({productIds:ids.slice(start,start+400),limit:100});
+      (result?.recommendations||[]).forEach(row=>learnedById.set(String(row.productId),row));
+    }
+    groups.forEach(group=>(group.variants||[]).forEach(product=>{product.learnedPricing=learnedById.get(String(product.productId))||null;}));
+    return groups;
+  }
+
   async function cmSearchCatalogCards(queryRaw, limit=25) {
     if (window.desktopApp?.searchCards) {
       const result = await window.desktopApp.searchCards({query:queryRaw,limit,offset:0});
@@ -1098,6 +1111,7 @@
           name:card.germanName || variant.germanName || card.englishName || variant.englishName || variant.officialName || `CM Produkt ${variant.productId}`
         }))
       }));
+      await cmAttachTradeRecommendations(groups);
       return {
         groups,
         products:groups.flatMap(group => group.variants),
@@ -1126,6 +1140,7 @@
     }
     const allGroups=[...grouped.values()];
     const groups=allGroups.slice(0,limit);
+    await cmAttachTradeRecommendations(groups);
     return {groups,products:groups.flatMap(group => group.variants),totalCards:allGroups.length,sqlite:false};
   }
 
@@ -1154,14 +1169,16 @@
         const variants=card.variants.map(product => {
           const own = ownMap.get(String(product.productId)) || {};
           const calc = cmMarketCalculation(product, own);
+          const learned=product.learnedPricing||{};
+          const learnedLevel={high:"hoch",medium:"mittel",low:"niedrig"}[learned.confidenceLevel]||"";
           return `<tr>
           <td><strong>${escapeHtml(cmDisplayName(product))}</strong>${cmEnglishName(product) && cmNormalize(cmEnglishName(product)) !== cmNormalize(cmDisplayName(product)) ? `<br><small>Englisch: ${escapeHtml(cmEnglishName(product))}</small>` : ""}<br><small>${cmProductSubtitle(product)}</small></td>
           <td>${calc.marketBuy ? money(calc.marketBuy) : "-"}<br><small>Trend ${calc.trend !== null ? money(calc.trend) : "-"}</small></td>
           <td>${cmSignedMoney(calc.dailyChange)}${product.previousDate ? `<br><small>seit ${fmtDate(product.previousDate)}</small>` : ""}</td>
           <td>${cmSignedMoney(calc.reference7)}<br><small>Trend minus Ø 7</small></td>
           <td>${cmSignedMoney(calc.reference30)}<br><small>Trend minus Ø 30</small></td>
-          <td>${calc.recommendedSell ? money(calc.recommendedSell) : "-"}</td>
-          <td><strong>${calc.maxBuy ? money(calc.maxBuy) : "-"}</strong></td>
+          <td>${calc.recommendedSell ? money(calc.recommendedSell) : "-"}${learned.recommendedSell?`<br><small>Handels-DB ${money(learned.recommendedSell)}</small>`:""}</td>
+          <td><strong>${calc.maxBuy ? money(calc.maxBuy) : "-"}</strong>${learned.recommendedBuy?`<br><small>Handels-DB ${money(learned.recommendedBuy)}${learnedLevel?` · ${learnedLevel}`:""}</small>`:""}</td>
           <td>${calc.marketBuy ? `<span class="${calc.profitAtMarket>=0?"money-positive":"money-negative"}">${money(calc.profitAtMarket)}</span><br><small>${pct(calc.roiAtMarket)} ROI</small>` : "-"}</td>
           <td>${Number(own.inventory || 0)} / ${Number(own.reserved || 0)}<br><small>${Number(own.available || 0)} verfügbar</small></td>
           <td>${cmRecommendationBadge(calc.recommendation)}<br><small>${escapeHtml(cmScoreLabel(calc))}</small><div class="row-actions cm-row-actions"><button class="icon-button" data-cm-details="${escapeHtml(product.productId)}">Details</button><button class="icon-button" data-cm-add-watch="${escapeHtml(product.productId)}">+ Watchlist</button></div></td>
@@ -2234,6 +2251,8 @@
   };
 
   updateOfficialMarketPrices = async function(manual=true) {
+    if (cmPriceUpdatePromise) return cmPriceUpdatePromise;
+    cmPriceUpdatePromise = (async () => {
     const out=document.getElementById("autoPricePreview");
     if(out) out.innerHTML='<div class="muted">Offizieller Cardmarket-Price-Guide wird geladen …</div>';
     try {
@@ -2244,8 +2263,19 @@
       return result;
     } catch(error) {
       if(out) out.innerHTML=`<div class="error"><strong>Automatischer Download nicht möglich</strong><br>${escapeHtml(error.message)}<br><small>Alternativ die Datei price_guide_3.json importieren.</small></div>`;
+      if(window.desktopApp?.recordImportRun) window.desktopApp.recordImportRun({
+        runId:`price-download-failed-${Date.now()}`,source:"cardmarket_price_guide",
+        syncType:"official_download",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),
+        status:"failed",rowsRead:0,rowsWritten:0,skippedRows:0,errorMessage:String(error?.message||error)
+      }).catch(()=>{});
       if(manual) throw error;
       return null;
+    }
+    })();
+    try {
+      return await cmPriceUpdatePromise;
+    } finally {
+      cmPriceUpdatePromise = null;
     }
   };
 
@@ -2483,6 +2513,8 @@
         const delta30=cmHistoryDeltaInfo(history,30,product.trend);
         const calc=cmMarketCalculation(product,own,{delta1:delta1.value,delta7:delta7.value,delta30:delta30.value});
         const watch=state.watchlist.find(w=>!w.archived&&cleanProductId(w.productId)===String(product.productId));
+        const learned=product.learnedPricing||{};
+        const learnedConfidence={high:"hoch",medium:"mittel",low:"niedrig"}[learned.confidenceLevel]||"niedrig";
         const maxBuyNote=calc.maxBuy>0
           ? `Der strengere Wert aus Mindestgewinn (${money(calc.maxByProfit)}) und Mindest-ROI (${money(calc.maxByRoi)}) wird verwendet.`
           : (calc.recommendedSell>0?calc.recommendationReason:"Keine ausreichenden Verkaufsreferenzen.");
@@ -2520,6 +2552,8 @@
             <div class="cm-result-metric"><span>Eigener EK</span><strong>${own.avgBuy?money(own.avgBuy):"–"}</strong><small>Ø${own.bestBuy?` · Bester ${money(own.bestBuy)}`:" · keine Käufe"}</small></div>
             <div class="cm-result-metric"><span>Eigener VK</span><strong>${own.avgSell?money(own.avgSell):"–"}</strong><small>Ø${own.bestSell?` · Bester ${money(own.bestSell)}`:" · keine Verkäufe"}</small></div>
             <div class="cm-result-metric"><span>Bestand</span><strong>${Number(own.inventory||0)}</strong><small>${Number(own.reserved||0)} reserviert · ${Number(own.available||0)} verfügbar</small></div>
+            <div class="cm-result-metric"><span>Handelsdatenbank Max-EK</span><strong>${learned.recommendedBuy?money(learned.recommendedBuy):"–"}</strong><small>${Number(learned.buySampleCount||0)} EK · ${Number(learned.sellSampleCount||0)} VK · Sicherheit ${learnedConfidence}</small></div>
+            <div class="cm-result-metric"><span>Handelsdatenbank VK</span><strong>${learned.recommendedSell?money(learned.recommendedSell):"–"}</strong><small>${Number(learned.marketSampleCount||0)} gespeicherte Marktstände berücksichtigt</small></div>
           </div></div>
           <footer class="cm-result-actions"><button class="secondary" data-cm-add-watch="${escapeHtml(product.productId)}">+ Watchlist</button><button class="primary" data-cm-analysis-details="${escapeHtml(product.productId)}" data-cm-analysis-name="${escapeHtml(displayName)}">Preisverlauf öffnen</button></footer>
         </article>`;
@@ -2586,7 +2620,7 @@
 
   async function cmRunDailyAutoUpdate() {
     const today = todayISO();
-    if (state.cardmarket?.autoDailyUpdate === false) return;
+    if (state.sync?.autoPrices === false) return;
     if (String(state.cardmarket?.lastAutoAttemptDate || "") === today) return;
     state.cardmarket.lastAutoAttemptDate = today;
     saveState();

@@ -424,6 +424,9 @@ function loadState() {
   }
 }
 
+let tradeInsightsCache = null;
+let tradeInsightsPromise = null;
+
 function saveState() {
   const savedAt = new Date().toISOString();
   const serialized = JSON.stringify(state);
@@ -444,6 +447,8 @@ function saveState() {
 
   if (el) el.textContent = "Speichere in SQLite …";
   window.desktopApp.saveState(state).then(result => {
+    tradeInsightsCache = null;
+    if (document.getElementById("view-reports")?.classList.contains("active")) renderTradeDatabaseInsights(true);
     if (sequence !== saveState.sequence) return;
     const confirmedAt = result?.updatedAt || savedAt;
     localStorage.setItem(DESKTOP_UPDATED_KEY, confirmedAt);
@@ -1340,6 +1345,65 @@ function renderReports() {
   const sellers={};
   state.purchases.forEach(p=>{const k=p.seller||"Unbekannt"; sellers[k]??={orders:0,total:0}; sellers[k].orders++; sellers[k].total+=Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0);});
   document.getElementById("sellerReport").innerHTML = Object.keys(sellers).length ? `<div class="list">${Object.entries(sellers).sort((a,b)=>b[1].orders-a[1].orders).map(([k,v])=>`<div class="list-row"><div><span>${escapeHtml(k)}</span><br><small>${v.orders} Bestellungen</small></div><strong>${money(v.total)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
+  renderTradeDatabaseInsights();
+}
+
+function paintTradeDatabaseInsights(data) {
+  const summary=document.getElementById("tradeDatabaseSummary");
+  const table=document.getElementById("tradeRecommendationTable");
+  const events=document.getElementById("businessEventList");
+  if(!summary||!table||!events)return;
+  const status=data?.status||{};
+  const sources=Array.isArray(status.dataSources)?status.dataSources:[];
+  const priceGuide=sources.find(source=>source.sourceId==="cardmarket_price_guide");
+  const api=sources.find(source=>source.sourceId==="cardmarket_api");
+  summary.innerHTML=`
+    <div><span>Handelsaufträge</span><strong>${Number(status.orderCount||0).toLocaleString("de-DE")}</strong></div>
+    <div><span>Kartengenaue Zeilen</span><strong>${Number(status.tradeLineCount||0).toLocaleString("de-DE")}</strong></div>
+    <div><span>Änderungsereignisse</span><strong>${Number(status.eventCount||0).toLocaleString("de-DE")}</strong></div>
+    <div><span>Marktbeobachtungen</span><strong>${Number(status.marketObservationCount||0).toLocaleString("de-DE")}</strong></div>
+    <div><span>Price Guide</span><strong>${priceGuide?.enabled?"aktiv":"inaktiv"}</strong><small>${status.latestMarketDate?`Stand ${fmtDate(status.latestMarketDate)}`:"noch ohne Daten"}</small></div>
+    <div><span>Cardmarket API</span><strong>${api?.enabled?"aktiv":"vorbereitet"}</strong><small>${api?.enabled?"Quelle eingeschaltet":"wartet auf API-Zugang"}</small></div>`;
+  const recommendations=data?.recommendations?.recommendations||[];
+  table.innerHTML=recommendations.length?recommendations.map(row=>{
+    const confidenceLabel={high:"hoch",medium:"mittel",low:"niedrig"}[row.confidenceLevel]||"niedrig";
+    const names=cardDisplayNames({productId:row.productId,name:row.name,englishName:row.englishName});
+    return `<tr>
+      <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<small>${escapeHtml(names.secondary)}</small>`:""}<small>CM ${escapeHtml(row.productId)}${row.setName?` · ${escapeHtml(row.setName)}`:""}${row.rarity?` · ${escapeHtml(row.rarity)}`:""}</small></td>
+      <td>${Number(row.buySampleCount||0)} EK / ${Number(row.sellSampleCount||0)} VK<small>${Number(row.marketSampleCount||0)} Marktstände</small></td>
+      <td>${row.ownBuyAverage?money(row.ownBuyAverage):"–"}</td>
+      <td>${row.ownSellAverage?money(row.ownSellAverage):"–"}</td>
+      <td><strong>${row.recommendedBuy?money(row.recommendedBuy):"–"}</strong></td>
+      <td><strong>${row.recommendedSell?money(row.recommendedSell):"–"}</strong></td>
+      <td><span class="trade-confidence ${escapeHtml(row.confidenceLevel)}">${confidenceLabel} · ${Math.round(Number(row.confidenceScore||0))}%</span><small title="${escapeHtml((row.explanation||[]).join(" · "))}">${escapeHtml((row.explanation||[])[0]||"Weitere Daten erforderlich")}</small></td>
+    </tr>`;
+  }).join(""):`<tr><td colspan="7" class="empty">Noch keine kartengenauen Ein- oder Verkäufe vorhanden. Produkt-IDs in Importen und Bestandskarten bilden automatisch die Datenbasis.</td></tr>`;
+  const labels={purchase:"Einkauf",sale:"Verkauf",inventory:"Bestand"};
+  const actions={baseline:"Ausgangsstand",create:"erstellt",update:"geändert",delete:"gelöscht"};
+  const eventRows=Array.isArray(data?.events)?data.events:[];
+  events.innerHTML=eventRows.length?`<div class="trade-event-list">${eventRows.map(row=>`<div class="trade-event-row"><div><strong>${escapeHtml(labels[row.entityType]||row.entityType)} ${escapeHtml(row.entityId)}</strong> <span class="muted">${escapeHtml(actions[row.eventType]||row.eventType)}</span>${row.changedFields?.length?`<small>Felder: ${escapeHtml(row.changedFields.slice(0,6).join(", "))}${row.changedFields.length>6?" …":""}</small>`:""}</div><small>${new Date(row.occurredAt).toLocaleString("de-DE")}</small></div>`).join("")}</div>`:`<div class="empty">Noch keine Änderungen protokolliert.</div>`;
+}
+
+async function renderTradeDatabaseInsights(force=false) {
+  if(!window.desktopApp?.getTradeDatabaseStatus)return;
+  if(!force&&tradeInsightsCache&&Date.now()-tradeInsightsCache.loadedAt<5000){paintTradeDatabaseInsights(tradeInsightsCache);return;}
+  if(tradeInsightsPromise)return tradeInsightsPromise;
+  tradeInsightsPromise=(async()=>{
+    try{
+      const [status,recommendations,events]=await Promise.all([
+        window.desktopApp.getTradeDatabaseStatus(),
+        window.desktopApp.getTradeRecommendations({limit:12}),
+        window.desktopApp.getBusinessEvents({limit:8})
+      ]);
+      tradeInsightsCache={status,recommendations,events,loadedAt:Date.now()};
+      paintTradeDatabaseInsights(tradeInsightsCache);
+    }catch(error){
+      console.error("Handelsdatenbank konnte nicht dargestellt werden:",error);
+      const summary=document.getElementById("tradeDatabaseSummary");
+      if(summary)summary.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;
+    }finally{tradeInsightsPromise=null;}
+  })();
+  return tradeInsightsPromise;
 }
 
 function renderSettings() {
@@ -2317,10 +2381,8 @@ async function initAutomation(){
   try{syncDirectoryHandle=await loadDirectoryHandle();}catch{}
   updateAutomationUi();startFolderSyncTimer();
   if(syncDirectoryHandle&&state.sync.autoFolder) setTimeout(()=>scanSyncFolder(false),1200);
-  if(state.sync.autoPrices){
-    const last=state.sync.lastPriceUpdate?new Date(state.sync.lastPriceUpdate).getTime():0;
-    if(Date.now()-last>20*60*60*1000) setTimeout(()=>updateOfficialMarketPrices(false),1800);
-  }
+  // Der taegliche Price-Guide-Lauf wird zentral im Cardmarket-Datencenter
+  // geplant. So koennen manueller Button und Automatik nie parallel importieren.
 }
 
 function exportBackup(){

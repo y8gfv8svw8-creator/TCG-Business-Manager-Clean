@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 function isoNow() {
   return new Date().toISOString();
@@ -27,6 +27,65 @@ function normalizedProductId(value) {
   const productId = String(value ?? '').trim();
   if (!/^\d+$/.test(productId)) throw new TypeError('Ungültige Cardmarket-Produkt-ID.');
   return productId;
+}
+
+function numberValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function positiveQuantity(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function recordId(record, index) {
+  return String(record?.id || record?.orderNo || `row-${index}`);
+}
+
+function recordSource(record) {
+  const source = String(record?.source || record?.importSource || '').toLowerCase();
+  return source.includes('cardmarket') || record?.importKey ? 'csv_import' : 'manual';
+}
+
+function comparableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(comparableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${comparableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function changedFields(before, after) {
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  return [...keys].filter(key => comparableJson(before?.[key]) !== comparableJson(after?.[key])).sort();
+}
+
+function roundedMoney(value) {
+  return Math.max(0, Math.round(numberValue(value) * 100) / 100);
+}
+
+function weightedAverage(rows, valueKey = 'unit_price') {
+  let total = 0;
+  let weight = 0;
+  for (const row of rows) {
+    const quantity = positiveQuantity(row.quantity);
+    const value = numberValue(row[valueKey]);
+    if (value <= 0) continue;
+    total += value * quantity;
+    weight += quantity;
+  }
+  return weight ? total / weight : 0;
+}
+
+function isCancelledStatus(status) {
+  return /storniert|cancel|abgebrochen|refunded|erstattet/i.test(String(status || ''));
+}
+
+function isRealizedSaleStatus(status) {
+  const value = String(status || '').trim();
+  if (!value || isCancelledStatus(value)) return false;
+  return /bezahlt|paid|kommissioniert|picked|verpackt|packed|versendet|shipped|abgeschlossen|completed|received|angekommen/i.test(value);
 }
 
 class TcgDatabase {
@@ -59,7 +118,9 @@ class TcgDatabase {
     const schema = fs.readFileSync(this.schemaPath, 'utf8');
     this.db.exec(schema);
     this.runMigrations(migrationBackupPrepared);
+    this.ensureDataSources();
     this.ensureSnapshotSummaries();
+    this.ensureObservationSummaries();
 
     this.db.prepare(`
       INSERT INTO schema_version (version, applied_at)
@@ -114,6 +175,7 @@ class TcgDatabase {
     this.db.exec('BEGIN IMMEDIATE;');
     try {
       if (currentVersion < 4) this.migrateToVersion4();
+      if (currentVersion < 5) this.migrateToVersion5();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -173,6 +235,82 @@ class TcgDatabase {
     this.rebuildCardSearchIndexes(null, false);
   }
 
+  ensureDataSources() {
+    const now = isoNow();
+    const sources = [
+      ['manual', 'manual', 'Manuelle Eingaben', 1, 0, 10, ''],
+      ['csv_import', 'file_import', 'Cardmarket CSV-/HTML-Import', 1, 1, 20, ''],
+      ['cardmarket_price_guide', 'official_download', 'Cardmarket Price Guide', 1, 1, 30, 'https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_3.json'],
+      ['cardmarket_api', 'api', 'Cardmarket API (vorbereitet)', 0, 1, 40, 'https://apiv2.cardmarket.com/ws/v2.0'],
+      ['legacy_state', 'migration', 'Bestehender Programmstand', 1, 1, 90, '']
+    ];
+    const statement = this.db.prepare(`
+      INSERT INTO data_sources (
+        source_id, source_type, display_name, enabled, read_only, priority,
+        base_url, config_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
+      ON CONFLICT(source_id) DO UPDATE SET
+        source_type = excluded.source_type,
+        display_name = excluded.display_name,
+        read_only = excluded.read_only,
+        priority = excluded.priority,
+        base_url = excluded.base_url,
+        updated_at = excluded.updated_at
+    `);
+    for (const source of sources) statement.run(...source, now, now);
+  }
+
+  migrateToVersion5() {
+    this.ensureDataSources();
+    const now = isoNow();
+
+    const unknownSources = this.db.prepare(`
+      SELECT DISTINCT source_id FROM market_prices
+      WHERE source_id NOT IN (SELECT source_id FROM data_sources)
+    `).all();
+    const addLegacySource = this.db.prepare(`
+      INSERT OR IGNORE INTO data_sources (
+        source_id, source_type, display_name, enabled, read_only, priority,
+        base_url, config_json, created_at, updated_at
+      ) VALUES (?, 'legacy_import', ?, 1, 1, 80, '', '{}', ?, ?)
+    `);
+    for (const row of unknownSources) {
+      const id = String(row.source_id || 'legacy_state');
+      addLegacySource.run(id, `Frühere Quelle: ${id}`, now, now);
+    }
+
+    this.db.exec(`
+      INSERT OR IGNORE INTO market_observations (
+        product_id, observed_at, observed_date, source_id, source_record_key,
+        category_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+        avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+        data_quality, imported_at, raw_json
+      )
+      SELECT
+        product_id,
+        COALESCE(NULLIF(collected_at, ''), captured_date || 'T12:00:00.000Z'),
+        captured_date,
+        COALESCE(NULLIF(source_id, ''), 'legacy_state'),
+        captured_date || '|' || product_id,
+        category_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+        avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+        COALESCE(data_quality, 'legacy'), imported_at, '{}'
+      FROM market_prices
+    `);
+
+    const stateRow = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (stateRow?.state_json) {
+      try {
+        const state = JSON.parse(stateRow.state_json);
+        this.recordStateEvents(null, state, stateRow.updated_at || now, true);
+        this.materializeState(state, stateRow.updated_at || now);
+      } catch (error) {
+        throw new Error(`Bestehender Programmstand konnte nicht normalisiert werden: ${error.message}`);
+      }
+    }
+    this.refreshObservationSummaries();
+  }
+
   close() {
     if (!this.db) return;
     this.db.close();
@@ -211,6 +349,28 @@ class TcgDatabase {
     }
   }
 
+  refreshObservationSummaries() {
+    this.db.exec('DELETE FROM market_observation_summary;');
+    this.db.exec(`
+      INSERT INTO market_observation_summary (
+        source_id, observed_date, row_count, first_imported_at, updated_at
+      )
+      SELECT source_id, observed_date, COUNT(*), MIN(imported_at), MAX(imported_at)
+      FROM market_observations
+      GROUP BY source_id, observed_date
+    `);
+  }
+
+  ensureObservationSummaries() {
+    const expected = Number(this.db.prepare(`
+      SELECT COUNT(*) AS count FROM (
+        SELECT source_id, observed_date FROM market_observations GROUP BY source_id, observed_date
+      )
+    `).get()?.count || 0);
+    const existing = Number(this.db.prepare('SELECT COUNT(*) AS count FROM market_observation_summary').get()?.count || 0);
+    if (expected !== existing) this.refreshObservationSummaries();
+  }
+
   getStatus() {
     this.open();
     const stateRow = this.db.prepare('SELECT updated_at FROM app_state WHERE id = 1').get();
@@ -218,6 +378,9 @@ class TcgDatabase {
     const priceRow = this.db.prepare('SELECT COUNT(*) AS count FROM market_prices').get();
     const snapshotRow = this.db.prepare('SELECT COUNT(DISTINCT captured_date) AS count FROM market_prices').get();
     const lastSnapshot = this.db.prepare('SELECT MAX(captured_date) AS date FROM market_prices').get();
+    const eventRow = this.db.prepare('SELECT COUNT(*) AS count FROM business_events').get();
+    const tradeLineRow = this.db.prepare('SELECT COUNT(*) AS count FROM trade_lines WHERE archived = 0').get();
+    const observationRow = this.db.prepare('SELECT COUNT(*) AS count FROM market_observations').get();
 
     return {
       ready: true,
@@ -226,6 +389,9 @@ class TcgDatabase {
       stateUpdatedAt: stateRow?.updated_at || '',
       productCount: Number(productRow?.count || 0),
       marketPriceCount: Number(priceRow?.count || 0),
+      marketObservationCount: Number(observationRow?.count || 0),
+      businessEventCount: Number(eventRow?.count || 0),
+      activeTradeLineCount: Number(tradeLineRow?.count || 0),
       snapshotCount: Number(snapshotRow?.count || 0),
       latestSnapshotDate: lastSnapshot?.date || ''
     };
@@ -254,9 +420,20 @@ class TcgDatabase {
 
     const updatedAt = isoNow();
     const json = JSON.stringify(state);
+    const previousRow = this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get();
+    let previousState = null;
+    if (previousRow?.state_json) {
+      try {
+        previousState = JSON.parse(previousRow.state_json);
+      } catch {
+        previousState = null;
+      }
+    }
 
     this.db.exec('BEGIN IMMEDIATE;');
     try {
+      this.recordStateEvents(previousState, state, updatedAt, !previousState);
+      this.materializeState(state, updatedAt);
       this.db.prepare(`
         INSERT INTO app_state (id, state_json, updated_at)
         VALUES (1, ?, ?)
@@ -271,7 +448,252 @@ class TcgDatabase {
     }
 
     this.createDailyBackup(json, updatedAt);
-    return { ok: true, updatedAt, bytes: Buffer.byteLength(json, 'utf8') };
+    return {
+      ok: true,
+      updatedAt,
+      bytes: Buffer.byteLength(json, 'utf8'),
+      tradeDatabase: this.getTradeDatabaseStatus()
+    };
+  }
+
+  recordStateEvents(previousState, nextState, savedAt, baseline = false) {
+    const collections = [
+      ['purchase', 'purchases'],
+      ['sale', 'sales'],
+      ['inventory', 'inventory']
+    ];
+    const insert = this.db.prepare(`
+      INSERT INTO business_events (
+        entity_type, entity_id, event_type, occurred_at, source_id,
+        before_json, after_json, changed_fields_json, state_saved_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const [entityType, collectionName] of collections) {
+      const beforeRows = Array.isArray(previousState?.[collectionName]) ? previousState[collectionName] : [];
+      const afterRows = Array.isArray(nextState?.[collectionName]) ? nextState[collectionName] : [];
+      const beforeMap = new Map(beforeRows.map((row, index) => [recordId(row, index), row]));
+      const afterMap = new Map(afterRows.map((row, index) => [recordId(row, index), row]));
+
+      for (const [entityId, after] of afterMap) {
+        const before = beforeMap.get(entityId);
+        const fields = before ? changedFields(before, after) : Object.keys(after || {}).sort();
+        if (before && fields.length === 0) continue;
+        const eventType = before ? 'update' : (baseline ? 'baseline' : 'create');
+        insert.run(
+          entityType, entityId, eventType, savedAt,
+          baseline ? 'legacy_state' : recordSource(after),
+          before ? JSON.stringify(before) : null,
+          JSON.stringify(after), JSON.stringify(fields), savedAt
+        );
+      }
+
+      for (const [entityId, before] of beforeMap) {
+        if (afterMap.has(entityId)) continue;
+        insert.run(
+          entityType, entityId, 'delete', savedAt, recordSource(before),
+          JSON.stringify(before), null, JSON.stringify(Object.keys(before || {}).sort()), savedAt
+        );
+      }
+    }
+  }
+
+  materializeState(state, updatedAt) {
+    const purchases = Array.isArray(state?.purchases) ? state.purchases : [];
+    const sales = Array.isArray(state?.sales) ? state.sales : [];
+    const inventory = Array.isArray(state?.inventory) ? state.inventory : [];
+    const settings = state?.settings || {};
+    const inventoryById = new Map(inventory.map((row, index) => [recordId(row, index), row]));
+
+    this.db.exec(`
+      UPDATE trade_lines SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}'
+      WHERE materialized_from = 'app_state' AND archived = 0;
+      UPDATE trade_orders SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}'
+      WHERE materialized_from = 'app_state' AND archived = 0;
+    `);
+
+    const upsertOrder = this.db.prepare(`
+      INSERT INTO trade_orders (
+        order_key, trade_type, local_order_id, origin_source_id, materialized_from,
+        external_order_id, order_no, transaction_date, partner, country, status,
+        card_value, shipping, extra, fees, postage, cost, revenue,
+        archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(order_key) DO UPDATE SET
+        origin_source_id = excluded.origin_source_id,
+        external_order_id = excluded.external_order_id,
+        order_no = excluded.order_no,
+        transaction_date = excluded.transaction_date,
+        partner = excluded.partner,
+        country = excluded.country,
+        status = excluded.status,
+        card_value = excluded.card_value,
+        shipping = excluded.shipping,
+        extra = excluded.extra,
+        fees = excluded.fees,
+        postage = excluded.postage,
+        cost = excluded.cost,
+        revenue = excluded.revenue,
+        archived = 0,
+        raw_json = excluded.raw_json,
+        updated_at = excluded.updated_at
+    `);
+    const upsertLine = this.db.prepare(`
+      INSERT INTO trade_lines (
+        line_key, order_key, trade_type, local_order_id, origin_source_id, materialized_from,
+        external_article_id, product_id, metacard_id, card_name, set_name, rarity,
+        language, card_condition, quantity, unit_price, allocated_shipping,
+        allocated_extra, unit_cost, unit_net, status, transaction_date,
+        archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(line_key) DO UPDATE SET
+        order_key = excluded.order_key,
+        origin_source_id = excluded.origin_source_id,
+        external_article_id = excluded.external_article_id,
+        product_id = excluded.product_id,
+        metacard_id = excluded.metacard_id,
+        card_name = excluded.card_name,
+        set_name = excluded.set_name,
+        rarity = excluded.rarity,
+        language = excluded.language,
+        card_condition = excluded.card_condition,
+        quantity = excluded.quantity,
+        unit_price = excluded.unit_price,
+        allocated_shipping = excluded.allocated_shipping,
+        allocated_extra = excluded.allocated_extra,
+        unit_cost = excluded.unit_cost,
+        unit_net = excluded.unit_net,
+        status = excluded.status,
+        transaction_date = excluded.transaction_date,
+        archived = 0,
+        raw_json = excluded.raw_json,
+        updated_at = excluded.updated_at
+    `);
+
+    const insertLine = (order, item, index, values = {}) => {
+      const rawProductId = String(values.productId ?? item?.productId ?? '').trim();
+      const productId = /^\d+$/.test(rawProductId) ? rawProductId : '';
+      const suffix = String(item?.articleId || item?.sourceRow || item?.id || `row-${index}`);
+      const lineKey = `${order.orderKey}:line:${suffix}:${index}`;
+      upsertLine.run(
+        lineKey, order.orderKey, order.tradeType, order.localId, order.sourceId,
+        String(item?.articleId || ''), productId,
+        String(values.metacardId ?? item?.metacardId ?? ''),
+        String(values.name ?? item?.name ?? ''),
+        String(values.setName ?? item?.setName ?? item?.set ?? ''),
+        String(values.rarity ?? item?.rarity ?? item?.version ?? ''),
+        String(values.language ?? item?.language ?? ''),
+        String(values.condition ?? item?.condition ?? ''),
+        positiveQuantity(values.quantity ?? item?.quantity),
+        numberValue(values.unitPrice ?? item?.unitPrice),
+        numberValue(values.allocatedShipping), numberValue(values.allocatedExtra),
+        numberValue(values.unitCost), numberValue(values.unitNet),
+        String(order.status || ''), String(order.date || ''), JSON.stringify(item || {}), updatedAt
+      );
+    };
+
+    purchases.forEach((purchase, purchaseIndex) => {
+      const localId = recordId(purchase, purchaseIndex);
+      const orderKey = `purchase:${localId}`;
+      const sourceId = recordSource(purchase);
+      const cardValue = numberValue(purchase.cardValue);
+      const shipping = numberValue(purchase.shipping);
+      const extra = numberValue(purchase.extra);
+      upsertOrder.run(
+        orderKey, 'purchase', localId, sourceId,
+        String(purchase.externalOrderId || purchase.orderNo || ''), String(purchase.orderNo || ''),
+        String(purchase.date || ''), String(purchase.seller || ''), String(purchase.country || ''),
+        String(purchase.status || ''), cardValue, shipping, extra, 0, 0,
+        cardValue + shipping + extra, 0, JSON.stringify(purchase), updatedAt
+      );
+      const order = { orderKey, tradeType: 'purchase', localId, sourceId, status: purchase.status, date: purchase.date };
+      const pending = Array.isArray(purchase.pendingItems) ? purchase.pendingItems : [];
+      const linkedInventory = inventory.filter(item => String(item.purchaseId || '') === localId);
+      const items = pending.length ? pending : linkedInventory;
+      const totalQuantity = items.length
+        ? items.reduce((sum, item) => sum + positiveQuantity(item.quantity), 0)
+        : positiveQuantity(purchase.items);
+      const allocatedShipping = totalQuantity ? shipping / totalQuantity : 0;
+      const allocatedExtra = totalQuantity ? extra / totalQuantity : 0;
+      if (items.length) {
+        items.forEach((item, index) => {
+          const fromPending = pending.length > 0;
+          const unitPrice = fromPending
+            ? numberValue(item.unitPrice)
+            : Math.max(0, numberValue(item.cost) - allocatedShipping - allocatedExtra);
+          insertLine(order, item, index, {
+            unitPrice, allocatedShipping, allocatedExtra,
+            unitCost: fromPending ? unitPrice + allocatedShipping + allocatedExtra : numberValue(item.cost),
+            quantity: item.quantity || 1
+          });
+        });
+      } else {
+        const quantity = positiveQuantity(purchase.items);
+        insertLine(order, { name: purchase.cardNames || 'Sammelbestellung' }, 0, {
+          quantity, unitPrice: quantity ? cardValue / quantity : 0,
+          allocatedShipping, allocatedExtra,
+          unitCost: quantity ? (cardValue + shipping + extra) / quantity : 0
+        });
+      }
+    });
+
+    sales.forEach((sale, saleIndex) => {
+      const localId = recordId(sale, saleIndex);
+      const orderKey = `sale:${localId}`;
+      const sourceId = recordSource(sale);
+      const revenue = numberValue(sale.revenue);
+      const cardValue = numberValue(sale.cardValue || revenue);
+      const fee = sale.fee !== undefined && sale.fee !== ''
+        ? numberValue(sale.fee)
+        : cardValue * numberValue(settings.feePercent) / 100;
+      const packaging = Array.isArray(sale.materialUsage) && sale.materialUsage.length
+        ? sale.materialUsage.reduce((sum, usage) => sum + numberValue(usage.quantity) * numberValue(usage.unitCost), 0)
+        : numberValue(sale.packaging);
+      const postage = numberValue(sale.postage);
+      const cost = numberValue(sale.cost);
+      upsertOrder.run(
+        orderKey, 'sale', localId, sourceId,
+        String(sale.externalOrderId || sale.orderNo || ''), String(sale.orderNo || ''),
+        String(sale.date || ''), String(sale.customer || ''), String(sale.country || ''),
+        String(sale.status || ''), cardValue, numberValue(sale.shippingPaid), packaging,
+        fee, postage, cost, revenue, JSON.stringify(sale), updatedAt
+      );
+      const order = { orderKey, tradeType: 'sale', localId, sourceId, status: sale.status, date: sale.date };
+      const detailedItems = Array.isArray(sale.items) ? sale.items : [];
+      const linkedIds = Array.isArray(sale.itemIds) ? sale.itemIds.map(String) : [];
+      const linkedItems = linkedIds.map(id => inventoryById.get(id)).filter(Boolean);
+      const items = detailedItems.length ? detailedItems : linkedItems;
+      const totalQuantity = items.length
+        ? items.reduce((sum, item) => sum + positiveQuantity(item.quantity), 0)
+        : positiveQuantity(sale.quantity);
+      const feeUnit = totalQuantity ? fee / totalQuantity : 0;
+      const postageUnit = totalQuantity ? postage / totalQuantity : 0;
+      const packagingUnit = totalQuantity ? packaging / totalQuantity : 0;
+      if (items.length) {
+        items.forEach((item, index) => {
+          const matchedIds = Array.isArray(item.matchedItemIds) ? item.matchedItemIds.map(String) : [];
+          const matched = matchedIds.map(id => inventoryById.get(id)).filter(Boolean);
+          const quantity = positiveQuantity(item.quantity);
+          const unitPrice = detailedItems.length
+            ? numberValue(item.unitPrice)
+            : (cardValue > 0 ? cardValue / totalQuantity : revenue / totalQuantity);
+          const unitCost = matched.length
+            ? matched.reduce((sum, row) => sum + numberValue(row.cost), 0) / matched.length
+            : (item.cost !== undefined ? numberValue(item.cost) : (totalQuantity ? cost / totalQuantity : 0));
+          insertLine(order, item, index, {
+            quantity, unitPrice, unitCost,
+            unitNet: unitPrice - feeUnit - postageUnit - packagingUnit
+          });
+        });
+      } else {
+        const quantity = positiveQuantity(sale.quantity);
+        const unitPrice = quantity ? cardValue / quantity : 0;
+        insertLine(order, { name: sale.cardNames || 'Sammelverkauf' }, 0, {
+          quantity, unitPrice, unitCost: quantity ? cost / quantity : 0,
+          unitNet: unitPrice - feeUnit - postageUnit - packagingUnit
+        });
+      }
+    });
   }
 
   createDailyBackup(json, updatedAt) {
@@ -293,6 +715,230 @@ class TcgDatabase {
     for (const oldName of backups.slice(30)) {
       fs.rmSync(path.join(automaticRoot, oldName), { force: true });
     }
+  }
+
+  getTradeDatabaseStatus() {
+    this.open();
+    const counts = this.db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM business_events) AS event_count,
+        (SELECT COUNT(*) FROM trade_orders WHERE archived = 0) AS order_count,
+        (SELECT COUNT(*) FROM trade_lines WHERE archived = 0) AS line_count,
+        (SELECT COUNT(*) FROM market_observations) AS observation_count,
+        (SELECT COUNT(*) FROM pricing_recommendations) AS recommendation_count,
+        (SELECT MAX(occurred_at) FROM business_events) AS latest_event_at,
+        (SELECT MAX(observed_date) FROM market_observations) AS latest_market_date
+    `).get();
+    return {
+      ready: true,
+      eventCount: Number(counts?.event_count || 0),
+      orderCount: Number(counts?.order_count || 0),
+      tradeLineCount: Number(counts?.line_count || 0),
+      marketObservationCount: Number(counts?.observation_count || 0),
+      recommendationCount: Number(counts?.recommendation_count || 0),
+      latestEventAt: String(counts?.latest_event_at || ''),
+      latestMarketDate: String(counts?.latest_market_date || ''),
+      dataSources: this.getDataSources()
+    };
+  }
+
+  getDataSources() {
+    this.open();
+    return this.db.prepare(`
+      SELECT
+        source_id AS sourceId, source_type AS sourceType, display_name AS displayName,
+        enabled, read_only AS readOnly, priority, base_url AS baseUrl,
+        last_success_at AS lastSuccessAt, last_error AS lastError, updated_at AS updatedAt
+      FROM data_sources
+      ORDER BY priority, display_name
+    `).all().map(row => ({
+      ...row,
+      enabled: Boolean(row.enabled),
+      readOnly: Boolean(row.readOnly)
+    }));
+  }
+
+  getBusinessEvents({ limit = 100, entityType = '', entityId = '' } = {}) {
+    this.open();
+    const safeLimit = boundedInteger(limit, 1, 1000, 100);
+    const clauses = [];
+    const parameters = [];
+    if (entityType) {
+      clauses.push('entity_type = ?');
+      parameters.push(String(entityType));
+    }
+    if (entityId) {
+      clauses.push('entity_id = ?');
+      parameters.push(String(entityId));
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return this.db.prepare(`
+      SELECT
+        event_id AS eventId, entity_type AS entityType, entity_id AS entityId,
+        event_type AS eventType, occurred_at AS occurredAt, source_id AS sourceId,
+        changed_fields_json AS changedFieldsJson, state_saved_at AS stateSavedAt
+      FROM business_events
+      ${where}
+      ORDER BY event_id DESC
+      LIMIT ?
+    `).all(...parameters, safeLimit).map(row => ({
+      ...row,
+      changedFields: JSON.parse(row.changedFieldsJson || '[]')
+    }));
+  }
+
+  getTradeRecommendations({ productIds = [], limit = 12 } = {}) {
+    this.open();
+    const safeLimit = boundedInteger(limit, 1, 100, 12);
+    let ids = Array.isArray(productIds)
+      ? [...new Set(productIds.map(value => String(value || '').trim()).filter(value => /^\d+$/.test(value)))].slice(0, 500)
+      : [];
+    if (!ids.length) {
+      ids = this.db.prepare(`
+        SELECT product_id
+        FROM trade_lines
+        WHERE archived = 0 AND product_id <> ''
+        GROUP BY product_id
+        ORDER BY SUM(quantity) DESC, MAX(transaction_date) DESC
+        LIMIT ?
+      `).all(safeLimit).map(row => String(row.product_id));
+    }
+    if (!ids.length) return { calculatedAt: isoNow(), recommendations: [] };
+
+    let settings = {};
+    try {
+      settings = JSON.parse(this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get()?.state_json || '{}').settings || {};
+    } catch {
+      settings = {};
+    }
+    const feeRate = Math.max(0, numberValue(settings.feePercent)) / 100;
+    const packaging = Math.max(0, numberValue(settings.packaging));
+    const minProfit = Math.max(0, numberValue(settings.minProfit));
+    const minRoi = Math.max(0, numberValue(settings.minRoi)) / 100;
+    const safetyRate = Math.max(0, numberValue(settings.safetyPercent ?? 5)) / 100;
+    const calculatedAt = isoNow();
+    const lineQuery = this.db.prepare(`
+      SELECT quantity, unit_price, unit_cost, unit_net, status, transaction_date,
+             card_name, set_name, rarity
+      FROM trade_lines
+      WHERE product_id = ? AND trade_type = ? AND archived = 0
+      ORDER BY transaction_date DESC
+    `);
+    const marketQuery = this.db.prepare(`
+      SELECT
+        observed_date, source_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30
+      FROM market_observations
+      WHERE product_id = ?
+      ORDER BY observed_date DESC,
+        CASE source_id WHEN 'cardmarket_api' THEN 1 WHEN 'cardmarket_price_guide' THEN 2 ELSE 9 END,
+        observation_id DESC
+      LIMIT 90
+    `);
+    const productQuery = this.db.prepare(`
+      SELECT
+        COALESCE(NULLIF(name_de, ''), NULLIF(name_en, ''), NULLIF(official_name, ''), 'CM ' || product_id) AS name,
+        name_en AS english_name, set_name, rarity
+      FROM products WHERE product_id = ?
+    `);
+    const cache = this.db.prepare(`
+      INSERT INTO pricing_recommendations (
+        product_id, calculated_at, recommended_buy, recommended_sell,
+        own_buy_average, own_sell_average, market_reference,
+        buy_sample_count, sell_sample_count, market_sample_count,
+        confidence_score, confidence_level, explanation_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(product_id) DO UPDATE SET
+        calculated_at = excluded.calculated_at,
+        recommended_buy = excluded.recommended_buy,
+        recommended_sell = excluded.recommended_sell,
+        own_buy_average = excluded.own_buy_average,
+        own_sell_average = excluded.own_sell_average,
+        market_reference = excluded.market_reference,
+        buy_sample_count = excluded.buy_sample_count,
+        sell_sample_count = excluded.sell_sample_count,
+        market_sample_count = excluded.market_sample_count,
+        confidence_score = excluded.confidence_score,
+        confidence_level = excluded.confidence_level,
+        explanation_json = excluded.explanation_json
+    `);
+
+    const recommendations = [];
+    for (const productId of ids) {
+      const purchases = lineQuery.all(productId, 'purchase').filter(row => !isCancelledStatus(row.status));
+      const sales = lineQuery.all(productId, 'sale').filter(row => isRealizedSaleStatus(row.status));
+      const marketRows = marketQuery.all(productId);
+      const ownBuyAverage = weightedAverage(purchases, 'unit_cost');
+      const ownSellAverage = weightedAverage(sales, 'unit_price');
+      const buySampleCount = purchases.reduce((sum, row) => sum + positiveQuantity(row.quantity), 0);
+      const sellSampleCount = sales.reduce((sum, row) => sum + positiveQuantity(row.quantity), 0);
+      const marketSampleCount = new Set(marketRows.map(row => `${row.source_id}|${row.observed_date}`)).size;
+      const latestMarket = marketRows[0] || {};
+      const marketParts = [
+        [latestMarket.trend_price, 0.35],
+        [latestMarket.avg_7, 0.30],
+        [latestMarket.avg_30, 0.25],
+        [latestMarket.low_price, 0.10]
+      ].filter(([value]) => numberValue(value) > 0);
+      const weightTotal = marketParts.reduce((sum, part) => sum + part[1], 0);
+      const marketReference = weightTotal
+        ? marketParts.reduce((sum, [value, weight]) => sum + numberValue(value) * weight, 0) / weightTotal
+        : 0;
+
+      let recommendedSell = marketReference;
+      if (ownSellAverage > 0 && marketReference > 0) {
+        const ownWeight = sellSampleCount >= 3 ? 0.45 : 0.20;
+        recommendedSell = ownSellAverage * ownWeight + marketReference * (1 - ownWeight);
+      } else if (ownSellAverage > 0) {
+        recommendedSell = ownSellAverage;
+      }
+      if (recommendedSell <= 0 && ownBuyAverage > 0 && feeRate < 1) {
+        const profitSell = (ownBuyAverage + packaging + minProfit) / Math.max(0.01, 1 - feeRate);
+        const roiSell = (ownBuyAverage * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate);
+        recommendedSell = Math.max(profitSell, roiSell);
+      }
+      const safeSell = recommendedSell * Math.max(0, 1 - safetyRate);
+      const availableBeforeBuy = safeSell * Math.max(0, 1 - feeRate) - packaging;
+      const byProfit = availableBeforeBuy - minProfit;
+      const byRoi = availableBeforeBuy / Math.max(1, 1 + minRoi);
+      const recommendedBuy = recommendedSell > 0 ? Math.max(0, Math.min(byProfit, byRoi)) : 0;
+
+      const confidenceScore = Math.min(100,
+        Math.min(25, buySampleCount * 7) +
+        Math.min(35, sellSampleCount * 10) +
+        Math.min(40, marketSampleCount * 4)
+      );
+      const confidenceLevel = confidenceScore >= 75 ? 'high' : confidenceScore >= 45 ? 'medium' : 'low';
+      const explanation = [];
+      if (marketReference > 0) explanation.push(`Cardmarket-Marktwert aus ${marketSampleCount} Quellen-/Tagesständen`);
+      if (buySampleCount) explanation.push(`${buySampleCount} eigene Einkaufseinheit(en) berücksichtigt`);
+      if (sellSampleCount) explanation.push(`${sellSampleCount} realisierte Verkaufseinheit(en) berücksichtigt`);
+      if (!sellSampleCount) explanation.push('Noch keine eigenen abgeschlossenen Verkäufe für diese Druckvariante');
+      const product = productQuery.get(productId) || {};
+      const tradeIdentity = sales[0] || purchases[0] || {};
+      const result = {
+        productId,
+        name: String(product.name || tradeIdentity.card_name || `CM ${productId}`),
+        englishName: String(product.english_name || ''),
+        setName: String(product.set_name || tradeIdentity.set_name || ''),
+        rarity: String(product.rarity || tradeIdentity.rarity || ''),
+        recommendedBuy: roundedMoney(recommendedBuy),
+        recommendedSell: roundedMoney(recommendedSell),
+        ownBuyAverage: roundedMoney(ownBuyAverage),
+        ownSellAverage: roundedMoney(ownSellAverage),
+        marketReference: roundedMoney(marketReference),
+        buySampleCount, sellSampleCount, marketSampleCount,
+        confidenceScore, confidenceLevel, explanation,
+        calculatedAt
+      };
+      cache.run(
+        productId, calculatedAt, result.recommendedBuy, result.recommendedSell,
+        result.ownBuyAverage, result.ownSellAverage, result.marketReference,
+        buySampleCount, sellSampleCount, marketSampleCount,
+        confidenceScore, confidenceLevel, JSON.stringify(explanation)
+      );
+      recommendations.push(result);
+    }
+    return { calculatedAt, recommendations };
   }
 
   rebuildCardSearchIndexes(metacardIds = null, manageTransaction = true) {
@@ -833,6 +1479,14 @@ class TcgDatabase {
       ? String(snapshotDate)
       : dateStamp();
     const importTime = importedAt || isoNow();
+    const sourceIds = [...new Set(rows.map(row => String(row?.sourceId || sourceId || 'cardmarket_price_guide')))];
+    const ensureSource = this.db.prepare(`
+      INSERT OR IGNORE INTO data_sources (
+        source_id, source_type, display_name, enabled, read_only, priority,
+        base_url, config_json, created_at, updated_at
+      ) VALUES (?, ?, ?, 1, 1, 70, '', '{}', ?, ?)
+    `);
+    for (const id of sourceIds) ensureSource.run(id, 'market_import', id, importTime, importTime);
 
     const statement = this.db.prepare(`
       INSERT INTO market_prices (
@@ -861,6 +1515,32 @@ class TcgDatabase {
         collected_at = excluded.collected_at,
         imported_at = excluded.imported_at
     `);
+    const observationStatement = this.db.prepare(`
+      INSERT INTO market_observations (
+        product_id, observed_at, observed_date, source_id, source_record_key,
+        category_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+        avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+        data_quality, imported_at, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, source_record_key) DO UPDATE SET
+        observed_at = excluded.observed_at,
+        category_id = excluded.category_id,
+        avg_price = excluded.avg_price,
+        low_price = excluded.low_price,
+        trend_price = excluded.trend_price,
+        avg_1 = excluded.avg_1,
+        avg_7 = excluded.avg_7,
+        avg_30 = excluded.avg_30,
+        avg_foil = excluded.avg_foil,
+        low_foil = excluded.low_foil,
+        trend_foil = excluded.trend_foil,
+        avg_1_foil = excluded.avg_1_foil,
+        avg_7_foil = excluded.avg_7_foil,
+        avg_30_foil = excluded.avg_30_foil,
+        data_quality = excluded.data_quality,
+        imported_at = excluded.imported_at,
+        raw_json = excluded.raw_json
+    `);
 
     const numberOrNull = value => {
       if (value === null || value === undefined || value === '') return null;
@@ -874,9 +1554,12 @@ class TcgDatabase {
       for (const row of rows) {
         const productId = String(row?.productId ?? '').trim();
         if (!/^\d+$/.test(productId)) continue;
+        const rowDate = String(row?.date || normalizedDate);
+        const rowSourceId = String(row?.sourceId || sourceId);
+        const collectedAt = String(row?.collectedAt || `${rowDate}T12:00:00.000Z` || importTime);
         statement.run(
           productId,
-          String(row?.date || normalizedDate),
+          rowDate,
           Number(row?.categoryId || 0) || null,
           numberOrNull(row?.avg),
           numberOrNull(row?.low),
@@ -890,11 +1573,21 @@ class TcgDatabase {
           numberOrNull(row?.avg1Foil),
           numberOrNull(row?.avg7Foil),
           numberOrNull(row?.avg30Foil),
-          String(row?.sourceId || sourceId),
+          rowSourceId,
           String(row?.sourceType || 'official_download'),
           String(row?.dataQuality || 'official_reference'),
-          String(row?.collectedAt || importTime),
+          collectedAt,
           importTime
+        );
+        observationStatement.run(
+          productId, collectedAt, rowDate, rowSourceId,
+          String(row?.sourceRecordKey || `${rowDate}|${productId}`),
+          Number(row?.categoryId || 0) || null,
+          numberOrNull(row?.avg), numberOrNull(row?.low), numberOrNull(row?.trend),
+          numberOrNull(row?.avg1), numberOrNull(row?.avg7), numberOrNull(row?.avg30),
+          numberOrNull(row?.avgFoil), numberOrNull(row?.lowFoil), numberOrNull(row?.trendFoil),
+          numberOrNull(row?.avg1Foil), numberOrNull(row?.avg7Foil), numberOrNull(row?.avg30Foil),
+          String(row?.dataQuality || 'official_reference'), importTime, JSON.stringify(row || {})
         );
         written += 1;
       }
@@ -908,8 +1601,30 @@ class TcgDatabase {
       .map(row => String(row?.date || normalizedDate))
       .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))];
     this.updateSnapshotSummaries(snapshotDates, sourceId, importTime);
+    this.updateObservationSummaries(snapshotDates, sourceIds, importTime);
 
     return { written, snapshotDate: normalizedDate, snapshotDates };
+  }
+
+  updateObservationSummaries(snapshotDates = [], sourceIds = [], importedAt = isoNow()) {
+    const countStatement = this.db.prepare(`
+      SELECT COUNT(*) AS row_count FROM market_observations
+      WHERE observed_date = ? AND source_id = ?
+    `);
+    const upsertStatement = this.db.prepare(`
+      INSERT INTO market_observation_summary (
+        source_id, observed_date, row_count, first_imported_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, observed_date) DO UPDATE SET
+        row_count = excluded.row_count,
+        updated_at = excluded.updated_at
+    `);
+    for (const date of snapshotDates) {
+      for (const sourceId of sourceIds) {
+        const count = Number(countStatement.get(date, sourceId)?.row_count || 0);
+        if (count) upsertStatement.run(sourceId, date, count, importedAt, importedAt);
+      }
+    }
   }
 
   updateSnapshotSummaries(snapshotDates = [], sourceId = 'cardmarket_price_guide', importedAt = isoNow()) {
@@ -1092,6 +1807,9 @@ class TcgDatabase {
       this.db.exec('DELETE FROM analysis_metrics;');
       this.db.exec('DELETE FROM market_liquidity;');
       this.db.exec('DELETE FROM market_snapshot_summary;');
+      this.db.exec('DELETE FROM market_observation_summary;');
+      this.db.exec('DELETE FROM market_observations;');
+      this.db.exec('DELETE FROM pricing_recommendations;');
       this.db.exec('DELETE FROM market_prices;');
       this.db.exec('DELETE FROM products;');
       this.db.exec('DELETE FROM card_search_index;');
@@ -1110,6 +1828,15 @@ class TcgDatabase {
   recordImportRun(run = {}) {
     this.open();
     const runId = String(run.runId || `run-${Date.now()}`);
+    const requestedSource = String(run.sourceId || run.source || 'unknown');
+    const knownSource = requestedSource === 'price_guide' ? 'cardmarket_price_guide' : requestedSource;
+    const sourceTime = isoNow();
+    this.db.prepare(`
+      INSERT OR IGNORE INTO data_sources (
+        source_id, source_type, display_name, enabled, read_only, priority,
+        base_url, config_json, created_at, updated_at
+      ) VALUES (?, 'import', ?, 1, 1, 70, '', '{}', ?, ?)
+    `).run(knownSource, knownSource, sourceTime, sourceTime);
     this.db.prepare(`
       INSERT INTO import_runs (
         run_id, source, snapshot_date, started_at, finished_at,
@@ -1135,6 +1862,34 @@ class TcgDatabase {
       Number(run.skippedRows || 0),
       String(run.errorMessage || '')
     );
+    this.db.prepare(`
+      INSERT INTO sync_runs (
+        sync_id, source_id, sync_type, external_cursor, started_at, finished_at,
+        status, rows_read, rows_written, rows_skipped, error_message, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sync_id) DO UPDATE SET
+        finished_at = excluded.finished_at,
+        status = excluded.status,
+        rows_read = excluded.rows_read,
+        rows_written = excluded.rows_written,
+        rows_skipped = excluded.rows_skipped,
+        error_message = excluded.error_message,
+        metadata_json = excluded.metadata_json
+    `).run(
+      runId, knownSource, String(run.syncType || 'import'), String(run.externalCursor || ''),
+      String(run.startedAt || sourceTime), String(run.finishedAt || ''),
+      String(run.status || 'success'), Number(run.rowsRead || 0), Number(run.rowsWritten || 0),
+      Number(run.skippedRows || 0), String(run.errorMessage || ''), JSON.stringify(run.metadata || {})
+    );
+    if (String(run.status || 'success') === 'success') {
+      this.db.prepare(`
+        UPDATE data_sources SET last_success_at = ?, last_error = '', updated_at = ? WHERE source_id = ?
+      `).run(String(run.finishedAt || sourceTime), sourceTime, knownSource);
+    } else {
+      this.db.prepare(`
+        UPDATE data_sources SET last_error = ?, updated_at = ? WHERE source_id = ?
+      `).run(String(run.errorMessage || 'Import fehlgeschlagen'), sourceTime, knownSource);
+    }
     return { ok: true, runId };
   }
 }

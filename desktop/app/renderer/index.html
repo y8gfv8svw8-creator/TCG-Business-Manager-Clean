@@ -507,6 +507,28 @@
             <div id="sellerReport"></div>
           </article>
         </div>
+        <article class="panel trade-database-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Handelsdatenbank &amp; automatische Preisempfehlungen</h2>
+              <small>Eigene Ein- und Verkäufe, Marktstände und jede Änderung werden dauerhaft in SQLite ausgewertet.</small>
+            </div>
+          </div>
+          <div id="tradeDatabaseSummary" class="trade-database-summary"><div class="muted">Handelsdatenbank wird gelesen …</div></div>
+          <div class="table-wrap trade-recommendation-wrap">
+            <table class="trade-recommendation-table">
+              <thead><tr><th>Karte / Druck</th><th>Datenbasis</th><th>Eigener Ø EK</th><th>Eigener Ø VK</th><th>Empfohlener max. EK</th><th>Empfohlener VK</th><th>Sicherheit</th></tr></thead>
+              <tbody id="tradeRecommendationTable"><tr><td colspan="7" class="empty">Noch keine kartengenauen Handelsdaten vorhanden.</td></tr></tbody>
+            </table>
+          </div>
+          <p class="muted trade-database-note">Die Empfehlung beachtet Gebühren, Verpackung, Mindestgewinn, Mindest-ROI und Sicherheitsabschlag aus den Einstellungen. Sie wird mit jedem neuen Kauf, Verkauf und Price-Guide-Stand genauer.</p>
+        </article>
+        <article class="panel trade-database-panel">
+          <div class="panel-head">
+            <div><h2>Letzte protokollierte Änderungen</h2><small>Erstellen, Bearbeiten und Löschen von Einkäufen, Verkäufen und Bestand.</small></div>
+          </div>
+          <div id="businessEventList"><div class="muted">Änderungshistorie wird gelesen …</div></div>
+        </article>
       </section>
 
       <section id="view-settings" class="view">

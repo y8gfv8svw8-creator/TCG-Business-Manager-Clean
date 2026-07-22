@@ -478,9 +478,9 @@ function statusBadge(status) {
   const s = String(status||"");
   let c = "blue";
   if (["TOP DEAL","KAUFEN","Verkauft","Abgeschlossen","Eingetroffen"].includes(s)) c="green";
-  if (["BEOBACHTEN","Im Bestand","Offen","Unterwegs","Bestellt"].includes(s)) c="yellow";
-  if (["STOP","Storniert","Beschädigt","Verlustverkauf"].includes(s)) c="red";
-  if (["Reserviert","Bezahlt","Versendet"].includes(s)) c="purple";
+  if (["BEOBACHTEN","KEINE PREISDATEN","Im Bestand","Offen","Unterwegs","Bestellt"].includes(s)) c="yellow";
+  if (["STOP","NICHT KAUFEN","FALLEND","Storniert","Beschädigt","Verlustverkauf"].includes(s)) c="red";
+  if (["Reserviert","Bezahlt","Kommissioniert","Verpackt","Versendet"].includes(s)) c="purple";
   return `<span class="badge ${c}">${escapeHtml(s||"-")}</span>`;
 }
 
@@ -625,6 +625,33 @@ function calculateSaleProfit(sale) {
   return {fee, packaging, postage, profit:gross-fee-packaging-postage-cost};
 }
 
+function automaticWatchTargets(w={}){
+  const shared=window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(w,state.settings);
+  if(shared)return {targetSell:Number(shared.recommendedSell||0),maxBuy:Number(shared.maxBuy||0)};
+  const low=Number(w.low||w.currentBuy||0),trend=Number(w.trend||0),avg7=Number(w.avg7||0),avg30=Number(w.avg30||0),avg1=Number(w.avg1||0);
+  const weighted=[];if(trend>0)weighted.push([trend,.45]);if(avg7>0)weighted.push([avg7,.35]);if(avg30>0)weighted.push([avg30,.20]);if(!weighted.length&&avg1>0)weighted.push([avg1,1]);if(!weighted.length&&low>0)weighted.push([low,1]);
+  const totalWeight=weighted.reduce((sum,row)=>sum+row[1],0);
+  const weightedSell=totalWeight?weighted.reduce((sum,row)=>sum+row[0]*row[1],0)/totalWeight:0;
+  const targetSell=Math.round(Math.max(low,weightedSell)*100)/100;
+  const safeSell=targetSell*Math.max(0,1-Number(state.settings.safetyPercent||0)/100);
+  const net=safeSell*(1-Number(state.settings.feePercent||0)/100)-Number(state.settings.packaging||0);
+  const byProfit=net-Number(state.settings.minProfit||0);
+  const minRoi=Math.max(0,Number(state.settings.minRoi||0))/100;
+  const byRoi=net/Math.max(1,1+minRoi);
+  const maxBuy=targetSell>0?Math.max(0,Math.floor(Math.min(byProfit,byRoi)*100)/100):0;
+  return {targetSell,maxBuy};
+}
+
+function syncAutomaticWatchPrices(){
+  let changed=false;
+  state.watchlist.forEach(w=>{
+    if(w.archived||w.pricingMode==="manual")return;
+    const next=automaticWatchTargets(w);if(!next.targetSell)return;
+    if(Number(w.targetSell||0)!==next.targetSell||Number(w.maxBuy||0)!==next.maxBuy){w.targetSell=next.targetSell;w.maxBuy=next.maxBuy;w.pricingMode="automatic";w.pricingUpdatedAt=new Date().toISOString();changed=true;}
+  });
+  if(changed){clearTimeout(syncAutomaticWatchPrices.timer);syncAutomaticWatchPrices.timer=setTimeout(()=>saveState(),50);}
+}
+
 function calculateWatch(w) {
   const buy = Number(w.currentBuy||0);
   const sell = Number(w.targetSell||0);
@@ -635,9 +662,12 @@ function calculateWatch(w) {
   let status = "BEOBACHTEN";
   if (w.reprint==="Hoch" || w.banlist==="Hoch") status="STOP";
   else if (w.stock >= w.target && w.target>0) status="STOP";
+  else if (!buy || !sell) status="KEINE PREISDATEN";
+  else if (Number(w.trend||0)>0&&Number(w.avg30||0)>0&&Number(w.trend)<Number(w.avg30)*0.9) status="FALLEND";
   else if (buy && buy <= Number(w.maxBuy||0) && profit >= state.settings.minProfit && roi >= state.settings.minRoi) {
     status = buy <= Number(w.maxBuy||0)*0.8 ? "TOP DEAL" : "KAUFEN";
-  }
+  } else if(Number(w.maxBuy||0)>0&&buy<=Number(w.maxBuy||0)*1.08)status="BEOBACHTEN";
+  else status="NICHT KAUFEN";
   return {profit,roi,status};
 }
 
@@ -652,6 +682,7 @@ function showView(name) {
 
 function renderAll() {
   syncWatchStock();
+  syncAutomaticWatchPrices();
   renderDashboard();
   renderInventory();
   renderPurchases();
@@ -1100,9 +1131,26 @@ function renderMaterials(){
   document.getElementById("materialValue").textContent=money(state.materials.reduce((a,m)=>a+Number(m.stock||0)*Number(m.unitCost||0),0));
   document.getElementById("materialLowCount").textContent=state.materials.filter(m=>Number(m.stock||0)<=Number(m.minStock||0)).length;
   document.getElementById("materialMonthCost").textContent=money(monthCost);
-  table.innerHTML=rows.length?rows.map(m=>{const low=Number(m.stock||0)<=Number(m.minStock||0);return `<tr><td><strong>${escapeHtml(m.name)}</strong><br><small>${escapeHtml(m.unit||"Stück")}</small></td><td>${Number(m.stock||0)}</td><td>${money(m.unitCost)}</td><td>${money(Number(m.stock||0)*Number(m.unitCost||0))}</td><td>${Number(m.minStock||0)}</td><td class="${low?'stock-low':'stock-ok'}">${low?'Nachbestellen':'Ausreichend'}</td><td><div class="row-actions"><button class="icon-button" data-buy-material="${m.id}">Einkaufen</button><button class="icon-button" data-edit-material="${m.id}">Bearbeiten</button><button class="icon-button" data-delete-material="${m.id}">Löschen</button></div></td></tr>`}).join(""):'<tr><td colspan="7" class="empty">Noch kein Versandmaterial angelegt</td></tr>';
+  table.innerHTML=rows.length?rows.map(m=>{const low=Number(m.stock||0)<=Number(m.minStock||0);return `<tr><td><button class="material-name-link" type="button" data-show-material="${m.id}"><strong>${escapeHtml(m.name)}</strong><small>${escapeHtml(m.unit||"Stück")} · Verlauf anzeigen</small></button></td><td>${Number(m.stock||0)}</td><td>${money(m.unitCost)}</td><td>${money(Number(m.stock||0)*Number(m.unitCost||0))}</td><td>${Number(m.minStock||0)}</td><td class="${low?'stock-low':'stock-ok'}">${low?'Nachbestellen':'Ausreichend'}</td><td><div class="row-actions"><button class="icon-button" data-buy-material="${m.id}">Einkaufen</button><button class="icon-button" data-edit-material="${m.id}">Bearbeiten</button><button class="icon-button" data-delete-material="${m.id}">Löschen</button></div></td></tr>`}).join(""):'<tr><td colspan="7" class="empty">Noch kein Versandmaterial angelegt</td></tr>';
   const list=document.getElementById("templateList");
   list.innerHTML=state.materialTemplates.length?state.materialTemplates.map(t=>`<div class="template-chip"><div><strong>${escapeHtml(t.name)}</strong><small>${escapeHtml(t.shippingType||"Keine Versandart")} · ${(t.items||[]).map(i=>`${Number(i.quantity||0)}× ${escapeHtml(state.materials.find(m=>m.id===i.materialId)?.name||"Material")}`).join(", ")||"Keine Materialien"}</small></div><div class="row-actions"><button class="icon-button" data-edit-template="${t.id}">Bearbeiten</button><button class="icon-button" data-delete-template="${t.id}">Löschen</button></div></div>`).join(""):'<div class="empty">Noch keine Versandvorlagen gespeichert</div>';
+}
+function showMaterialHistory(materialId){
+  const material=state.materials.find(row=>row.id===materialId);if(!material)return;
+  const explicit=(state.movements||[]).filter(row=>row.materialId===materialId);
+  const recordedExpenses=new Set(explicit.map(row=>row.expenseId).filter(Boolean));
+  const legacy=(state.expenses||[]).filter(row=>row.materialId===materialId&&!recordedExpenses.has(row.id)).map(row=>({
+    id:`expense-${row.id}`,timestamp:row.date,type:"Materialeinkauf",quantity:Number(String(row.description||"").match(/^\s*(\d+(?:[.,]\d+)?)/)?.[1]?.replace(",",".")||0),materialId,expenseId:row.id,reference:row.description||"Materialeinkauf",note:`${money(row.amount)}${row.note?` · ${row.note}`:""}`
+  }));
+  const movements=[...explicit,...legacy].sort((a,b)=>new Date(b.timestamp||b.date||0)-new Date(a.timestamp||a.date||0));
+  const incoming=movements.filter(row=>Number(row.quantity||0)>0).reduce((sum,row)=>sum+Number(row.quantity||0),0);
+  const outgoing=Math.abs(movements.filter(row=>Number(row.quantity||0)<0).reduce((sum,row)=>sum+Number(row.quantity||0),0));
+  const dialog=document.getElementById("orderDetailDialog");
+  if(dialog.open)dialog.close();
+  dialog.dataset.saleId="";
+  document.getElementById("orderDetailTitle").textContent=`Materialverlauf · ${material.name}`;
+  document.getElementById("orderDetailContent").innerHTML=`<div class="order-summary-grid"><div><small>Aktueller Bestand</small><strong>${Number(material.stock||0)} ${escapeHtml(material.unit||"Stück")}</strong></div><div><small>Stückkosten</small><strong>${money(material.unitCost)}</strong></div><div><small>Buchungen</small><strong>${movements.length}</strong></div><div><small>Zugänge im Verlauf</small><strong>+${incoming}</strong></div><div><small>Verbrauch im Verlauf</small><strong>−${outgoing}</strong></div></div><div class="table-wrap material-history-table"><table><thead><tr><th>Zeitpunkt</th><th>Bewegung</th><th>Menge</th><th>Wofür</th><th>Information</th></tr></thead><tbody>${movements.length?movements.map(row=>`<tr><td>${row.timestamp?new Date(row.timestamp).toLocaleString("de-DE"):fmtDate(row.date)}</td><td>${escapeHtml(row.type||"Bewegung")}</td><td class="${Number(row.quantity||0)>=0?"money-positive":"money-negative"}"><strong>${Number(row.quantity||0)>0?"+":""}${Number(row.quantity||0)}</strong></td><td>${row.saleId&&state.sales.some(sale=>sale.id===row.saleId)?`<button class="link-button" type="button" data-show-sale="${escapeHtml(row.saleId)}">${escapeHtml(row.reference||"Bestellung öffnen")}</button>`:escapeHtml(row.reference||"–")}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
+  dialog.showModal();
 }
 function renderExpenses(){
   const table=document.getElementById("expenseTable"); if(!table) return;
@@ -1115,17 +1163,19 @@ function renderExpenses(){
 }
 function addMaterial(initial={}){openModal(initial.id?"Material bearbeiten":"Material anlegen",[
   {name:"name",label:"Materialname",required:true},{name:"unit",label:"Einheit",value:"Stück"},{name:"stock",label:"Aktueller Bestand",type:"number"},{name:"unitCost",label:"Stückkosten (€)",type:"number",step:"0.001"},{name:"minStock",label:"Mindestbestand",type:"number"},{name:"note",label:"Notiz",full:true}
-],initial,data=>{const obj={...data,stock:Number(data.stock||0),unitCost:Number(data.unitCost||0),minStock:Number(data.minStock||0)};if(initial.id)Object.assign(state.materials.find(x=>x.id===initial.id),obj);else state.materials.push({...obj,id:uid()});});}
+],initial,data=>{const obj={...data,stock:Number(data.stock||0),unitCost:Number(data.unitCost||0),minStock:Number(data.minStock||0)};if(initial.id){const material=state.materials.find(x=>x.id===initial.id);const difference=obj.stock-Number(material?.stock||0);Object.assign(material,obj);if(difference)addMovement({type:"Bestandskorrektur",quantity:difference,materialId:initial.id,reference:"Manuelle Materialkorrektur",note:data.note||data.name});}else{const material={...obj,id:uid()};state.materials.push(material);if(material.stock)addMovement({type:"Anfangsbestand",quantity:material.stock,materialId:material.id,reference:"Material angelegt",note:material.name});}});}
 function buyMaterial(materialId=""){
   if(!state.materials.length){alert("Bitte zuerst ein Material anlegen.");return;}
   const initial={materialId:materialId||state.materials[0].id,date:todayISO()};
-  openModal("Material einkaufen",[{name:"materialId",label:"Material",type:"select",options:state.materials.map(m=>m.id)},{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"quantity",label:"Menge",type:"number",required:true},{name:"totalCost",label:"Gesamtpreis (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{
-    const m=state.materials.find(x=>x.id===data.materialId); if(!m)return; const qty=Number(data.quantity||0),cost=Number(data.totalCost||0); if(qty<=0||cost<0){alert("Menge und Preis prüfen.");return;}
+  openModal("Material einkaufen",[{name:"materialId",label:"Material",type:"select",options:state.materials.map(m=>({value:m.id,label:`${m.name} (${Number(m.stock||0)} ${m.unit||"Stück"} vorhanden)`}))},{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"quantity",label:"Menge",type:"number",required:true},{name:"totalCost",label:"Gesamtpreis (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{
+    const m=state.materials.find(x=>x.id===data.materialId); if(!m)return false; const qty=Number(data.quantity||0),cost=Number(data.totalCost||0); if(qty<=0||cost<0){alert("Menge und Preis prüfen.");return false;}
     const oldStock=Number(m.stock||0),oldValue=oldStock*Number(m.unitCost||0); m.stock=oldStock+qty; m.unitCost=m.stock?(oldValue+cost)/m.stock:0;
-    state.expenses.push({id:uid(),date:data.date||todayISO(),category:"Versandmaterial",description:`${qty} ${m.unit||"Stück"} ${m.name}`,amount:cost,note:data.note||"",materialId:m.id});
+    const expense={id:uid(),date:data.date||todayISO(),category:"Versandmaterial",description:`${qty} ${m.unit||"Stück"} ${m.name}`,amount:cost,note:data.note||"",materialId:m.id};
+    state.expenses.push(expense);
+    addMovement({type:"Materialeinkauf",quantity:qty,materialId:m.id,expenseId:expense.id,reference:`Einkauf ${fmtDate(data.date||todayISO())}`,note:`${m.name} · ${money(cost)}${data.note?` · ${data.note}`:""}`});
   });
 }
-function addExpense(initial={}){openModal(initial.id?"Ausgabe bearbeiten":"Ausgabe erfassen",[{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"category",label:"Kategorie",type:"select",options:["Porto","Software","Bürobedarf","Sonstiges"]},{name:"description",label:"Beschreibung",required:true},{name:"amount",label:"Betrag (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{const obj={...data,amount:Number(data.amount||0)};if(initial.id)Object.assign(state.expenses.find(x=>x.id===initial.id),obj);else state.expenses.push({...obj,id:uid()});});}
+function addExpense(initial={}){openModal(initial.id?"Ausgabe bearbeiten":"Ausgabe erfassen",[{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"category",label:"Kategorie",type:"select",options:["Versandmaterial","Porto","Software","Bürobedarf","Sonstiges"]},{name:"description",label:"Beschreibung",required:true},{name:"amount",label:"Betrag (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{const obj={...data,amount:Number(data.amount||0)};if(initial.id)Object.assign(state.expenses.find(x=>x.id===initial.id),obj);else state.expenses.push({...obj,id:uid()});});}
 function addTemplate(initial={}){
   const compact=(initial.items||[]).map(i=>`${i.materialId}:${i.quantity}`).join(",");
   openModal(initial.id?"Versandvorlage bearbeiten":"Versandvorlage anlegen",[{name:"name",label:"Vorlagenname",required:true},{name:"shippingType",label:"Versandart"},{name:"postage",label:"Porto (€)",type:"number",step:"0.01"},{name:"itemsText",label:"Materialien – Format Material-ID:Menge, ...",value:compact,full:true}],{...initial,itemsText:compact},data=>{const items=String(data.itemsText||"").split(",").map(x=>x.trim()).filter(Boolean).map(x=>{const [materialId,q]=x.split(":");return{materialId,quantity:Number(q||0)}}).filter(x=>state.materials.some(m=>m.id===x.materialId)&&x.quantity>0);const obj={name:data.name,shippingType:data.shippingType||"",postage:Number(data.postage||0),items};if(initial.id)Object.assign(state.materialTemplates.find(x=>x.id===initial.id),obj);else state.materialTemplates.push({...obj,id:uid()});});
@@ -1138,11 +1188,16 @@ function applyTemplateToEditor(templateId){
   document.getElementById("saleMaterialUsage").innerHTML=(t.items||[]).map((i,idx)=>{const m=state.materials.find(x=>x.id===i.materialId);return materialUsageRow({materialId:i.materialId,quantity:i.quantity,unitCost:Number(m?.unitCost||0)},idx,options)}).join("");
   updateSaleMaterialPreview();
 }
-function adjustMaterialStock(oldUsage,newUsage){
-  const delta=new Map();
-  (oldUsage||[]).forEach(u=>delta.set(u.materialId,(delta.get(u.materialId)||0)+Number(u.quantity||0)));
-  (newUsage||[]).forEach(u=>delta.set(u.materialId,(delta.get(u.materialId)||0)-Number(u.quantity||0)));
-  for(const [id,d] of delta){const m=state.materials.find(x=>x.id===id);if(m)m.stock=Math.max(0,Number(m.stock||0)+d);}
+function planMaterialStockChanges(oldUsage,newUsage){
+  return window.TcgBusinessAutomation.planMaterialUsageChanges(state.materials,oldUsage,newUsage);
+}
+function applyMaterialStockPlan(plan){
+  return (plan.changes||[]).map(change=>{
+    const material=state.materials.find(row=>String(row.id)===String(change.materialId));
+    if(!material)return null;
+    material.stock=change.stockAfter;
+    return {material,quantity:change.quantity};
+  }).filter(Boolean);
 }
 function saleMaterialEditor(sale){
   const options=state.materials.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} (${Number(m.stock||0)} verfügbar)</option>`).join("");
@@ -1151,11 +1206,13 @@ function saleMaterialEditor(sale){
   const orderItems=(sale.items||[]).length?sale.items:[{name:sale.cardNames||`${sale.quantity||0} Karten`,quantity:sale.quantity||1}];
   if(stage==="Offen") return `<div class="workflow-panel"><h3>Bestellübersicht</h3><p>Die Bestellung ist offen. Mit „Weiter“ wird sie als bezahlt markiert, die Ware reserviert und direkt die Kommissionierung geöffnet.</p><div class="order-detail-actions"><button class="primary" id="saleWorkflowNext">Weiter zur Kommissionierung</button></div></div>`;
   if(stage==="Kommissioniert") return `<div class="workflow-panel"><h3>Kommissionieren</h3><p class="muted">Alle Positionen aus dem Lager holen und einzeln abhaken.</p><div class="pick-list">${orderItems.map((item,idx)=>`<label class="pick-row"><input type="checkbox" data-pick-item="${idx}" ${(sale.pickedItems||[]).includes(idx)?"checked":""}><span><strong>${Number(item.quantity||1)}× ${escapeHtml(item.name||"Unbekannte Karte")}</strong><small>${escapeHtml([item.set,item.rarity,item.language,item.condition].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div><div class="order-detail-actions"><button class="primary" id="saleWorkflowNext">Weiter zum Verpacken</button></div></div>`;
-  if(stage==="Verpackt") return `<div class="material-editor"><h3>Verpacken</h3>
+  if(stage==="Verpackt") {const packed=sale.status==="Verpackt";return `<div class="material-editor"><h3>${packed?"Verpackt":"Verpacken"}</h3><p class="muted">${packed?"Die Verpackung ist gespeichert. Änderungen können noch erfasst werden; der Versand erfolgt erst über die eigene Schaltfläche.":"Versandart, tatsächliches Porto und verwendetes Material erfassen. Danach zunächst als verpackt speichern."}</p>
     <div class="material-editor-grid"><label>Versandart<select id="saleShippingType"><option value="">Bitte auswählen…</option>${["Standardbrief","Kompaktbrief","Großbrief","Maxibrief","Warensendung"].map(x=>`<option ${sale.shippingType===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Tatsächliches Porto (€)<input id="salePostage" type="number" min="0" step="0.01" value="${Number(sale.postage||0)}"></label><label>Vorlage<select id="saleTemplateSelect">${templateOptions}</select></label><button class="secondary" type="button" id="applySaleTemplateBtn">Vorlage laden</button></div>
     <div id="saleMaterialUsage" class="material-usage-list">${(sale.materialUsage||[]).map((u,idx)=>materialUsageRow(u,idx,options)).join("")}</div>
-    <div class="order-detail-actions"><button class="secondary" type="button" id="addSaleMaterialBtn">+ Material</button><button class="secondary" type="button" id="saveSaleAsTemplateBtn">Als Vorlage speichern</button><button class="secondary" type="button" id="createDeliveryNoteBtn">Lieferschein</button><button class="secondary" type="button" id="createShippingLabelBtn">Versandlabel</button><button class="primary" type="button" id="saveAndShipSaleBtn">Verpackung beenden & versenden</button></div>
+    <div class="template-save-row"><input id="saleTemplateName" placeholder="Name für neue Vorlage"><button class="secondary" type="button" id="saveSaleAsTemplateBtn">Als Vorlage speichern</button></div>
+    <div class="order-detail-actions"><button class="secondary" type="button" id="addSaleMaterialBtn">+ Material</button><button class="secondary" type="button" id="createDeliveryNoteBtn">Lieferschein</button><button class="secondary" type="button" id="createShippingLabelBtn">Versandlabel</button><button class="${packed?"secondary":"primary"}" type="button" id="saveSaleMaterialsBtn">${packed?"Änderungen speichern":"Verpackung speichern"}</button>${packed?'<button class="primary" type="button" id="saveAndShipSaleBtn">Jetzt als versendet markieren</button>':""}</div>
     <div class="financial-summary"><div><small>Materialkosten</small><strong id="saleMaterialCostPreview">${money(saleMaterialCost(sale))}</strong></div><div><small>Porto</small><strong id="salePostagePreview">${money(sale.postage)}</strong></div><div><small>Gewinn Bestellung</small><strong id="saleProfitPreview">${money(calculateSaleProfit(sale).profit)}</strong></div></div></div>`;
+  }
   if(stage==="Versendet") return `<div class="workflow-panel"><h3>Versendet</h3><p>Die Bestellung wurde versendet. Die Einnahme ist gebucht; bis zur Empfangsbestätigung bleibt sie als noch nicht abgeschlossen gekennzeichnet.</p><div class="order-detail-actions"><button class="secondary" id="createDeliveryNoteBtn">Lieferschein</button><button class="primary" id="saleCompleteBtn">Ankunft bestätigt – abschließen</button></div></div>`;
   return `<div class="workflow-panel"><h3>Abgeschlossen</h3><p>Der Kunde hat den Erhalt bestätigt.</p><div class="order-detail-actions"><button class="secondary" id="createDeliveryNoteBtn">Lieferschein</button></div></div>`;
 }
@@ -1179,19 +1236,22 @@ function saveSalePacking(sale,markShipped=false){
   const old=sale.materialUsage||[]; const usage=readSaleMaterialRows();
   const shippingType=document.getElementById("saleShippingType")?.value||"";
   if(markShipped&&!shippingType){alert("Bitte zuerst eine Versandart auswählen.");return false;}
-  for(const u of usage){
-    const m=state.materials.find(x=>x.id===u.materialId); const oldQty=old.filter(x=>x.materialId===u.materialId).reduce((a,x)=>a+Number(x.quantity||0),0);
-    const needed=Math.max(0,u.quantity-oldQty);
-    if(m&&needed>Number(m.stock||0)){alert(`${m.name}: Es fehlen ${needed-Number(m.stock||0)} ${m.unit||"Stück"}.`);return false;}
-  }
-  adjustMaterialStock(old,usage); sale.materialUsage=usage; sale.shippingType=shippingType; sale.postage=Math.max(0,Number(document.getElementById("salePostage")?.value||0));
+  const stockPlan=planMaterialStockChanges(old,usage);
+  if(!stockPlan.valid){const shortage=stockPlan.shortages[0];alert(`${shortage.name}: Es fehlen ${shortage.missing} ${shortage.unit}.`);return false;}
+  const stockChanges=applyMaterialStockPlan(stockPlan); sale.materialUsage=usage; sale.shippingType=shippingType; sale.postage=Math.max(0,Number(document.getElementById("salePostage")?.value||0));
+  stockChanges.forEach(change=>addMovement({type:change.quantity<0?"Materialverbrauch":"Materialkorrektur",quantity:change.quantity,materialId:change.material.id,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:change.quantity<0?`${change.material.name} für Verpackung verwendet`:`${change.material.name} aus Verpackung entfernt`}));
   if(markShipped){
     sale.status="Versendet"; sale.workflowStage="Versendet"; sale.shippedDate=todayISO(); syncSaleInventoryStatus(sale);
     addMovement({type:"Versand",quantity:-Number(sale.quantity||sale.itemIds?.length||0),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:`${sale.shippingType}; Porto ${money(sale.postage)}`});
-    usage.forEach(u=>addMovement({type:"Materialverbrauch",quantity:-u.quantity,materialId:u.materialId,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:u.name}));
     addMovement({type:"Einnahme",quantity:Number(sale.revenue||0),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Nach Versand als Einnahme gebucht"});
+  }else{
+    const firstPacking=sale.status!=="Verpackt";
+    sale.status="Verpackt";sale.workflowStage="Verpackt";sale.packedDate=sale.packedDate||todayISO();
+    if(firstPacking)addMovement({type:"Status",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Verpackung gespeichert · bereit zum Versand"});
   }
-  saveState(); renderAll(); document.getElementById("orderDetailDialog").close(); return true;
+  saveState(); renderAll();
+  if(markShipped)document.getElementById("orderDetailDialog").close();else openOrderDetails("sale",sale.id);
+  return true;
 }
 function printSaleDocument(sale,kind){
   const items=(sale.items||[]).map(i=>`<tr><td>${Number(i.quantity||1)}×</td><td>${escapeHtml(i.name||"Karte")}</td><td>${escapeHtml(i.set||"")}</td><td>${money(i.unitPrice||i.price||0)}</td></tr>`).join("");
@@ -1354,6 +1414,8 @@ function openOrderDetails(kind,id) {
   const total=isPurchase ? subtotal+shipping+extra : Number(order.revenue||subtotal+shipping);
   const partner=isPurchase ? order.seller : order.customer;
   const calc=isPurchase?null:calculateSaleProfit(order);
+  const dialog=document.getElementById("orderDetailDialog");
+  if(dialog.open)dialog.close();
   document.getElementById("orderDetailTitle").textContent=`${isPurchase?"Einkauf":"Verkauf"} #${order.orderNo||"-"}`;
   document.getElementById("orderDetailContent").innerHTML=`
     <div class="order-summary-grid">
@@ -1370,8 +1432,8 @@ function openOrderDetails(kind,id) {
     ${orderItemTable(items,kind)}
     ${!isPurchase?saleMaterialEditor(order):""}
     ${order.note?`<div class="order-note"><strong>Notiz</strong><p>${escapeHtml(order.note)}</p></div>`:""}`;
-  document.getElementById("orderDetailDialog").dataset.saleId=sale?.id||"";
-  document.getElementById("orderDetailDialog").showModal();
+  dialog.dataset.saleId=sale?.id||"";
+  dialog.showModal();
 }
 
 function renderPartners() {
@@ -1604,10 +1666,15 @@ function renderSettings() {
 function openModal(title, fields, initial={}, onSave) {
   document.getElementById("modalTitle").textContent = title;
   const wrap = document.getElementById("modalFields");
+  inventoryCardSearchSequence++;
+  inventoryPriceSequence++;
+  wrap.oninput=null;
+  wrap.onclick=null;
+  delete wrap.dataset.inventorySelection;
   wrap.innerHTML = fields.map(f=>`
     <label class="${f.full?"full-width":""}">${escapeHtml(f.label)}
       ${f.type==="select"
-        ? `<select name="${f.name}">${f.options.map(o=>`<option ${String(initial[f.name]??f.value??"")===String(o)?"selected":""}>${escapeHtml(o)}</option>`).join("")}</select>`
+        ? `<select name="${f.name}">${f.options.map(option=>{const value=typeof option==="object"?option.value:option;const label=typeof option==="object"?option.label:option;return `<option value="${escapeHtml(value)}" ${String(initial[f.name]??f.value??"")===String(value)?"selected":""}>${escapeHtml(label)}</option>`;}).join("")}</select>`
         : `<input name="${f.name}" type="${f.type||"text"}" value="${escapeHtml(initial[f.name]??f.value??"")}" ${f.step?`step="${f.step}"`:""} ${f.required?"required":""} />`
       }
     </label>`).join("");
@@ -1618,35 +1685,128 @@ function openModal(title, fields, initial={}, onSave) {
 document.getElementById("modalForm").addEventListener("submit", e=>{
   e.preventDefault();
   const data=Object.fromEntries(new FormData(e.currentTarget).entries());
-  modalHandler?.(data);
+  if(modalHandler?.(data)===false)return;
+  inventoryCardSearchSequence++;
+  inventoryPriceSequence++;
   document.getElementById("modal").close();
   saveState(); renderAll();
 });
-document.getElementById("modalClose").onclick=()=>document.getElementById("modal").close();
-document.getElementById("modalCancel").onclick=()=>document.getElementById("modal").close();
+document.getElementById("modalClose").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
+document.getElementById("modalCancel").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
+
+let inventoryModalVariants=new Map();
+let inventoryCardSearchSequence=0;
+let inventoryPriceSequence=0;
+
+async function searchInventoryCardVariants(query){
+  if(window.tcgSearchCatalogCards){
+    const result=await window.tcgSearchCatalogCards(query,8);
+    return result.products||[];
+  }
+  if(window.desktopApp?.searchCards){
+    const result=await window.desktopApp.searchCards({query,limit:8,offset:0});
+    const products=(result.cards||[]).flatMap(card=>(card.variants||[]).map(variant=>({...variant,germanName:card.germanName||variant.germanName,englishName:card.englishName||variant.englishName,name:card.germanName||variant.germanName||card.englishName||variant.englishName||variant.officialName})));
+    if(window.desktopApp.getTradeRecommendations&&products.length){
+      const recommendations=await window.desktopApp.getTradeRecommendations({productIds:products.map(row=>row.productId),limit:100});
+      const byId=new Map((recommendations.recommendations||[]).map(row=>[String(row.productId),row]));
+      products.forEach(product=>product.learnedPricing=byId.get(String(product.productId))||null);
+    }
+    return products;
+  }
+  const q=normalizeCardName(query);
+  return Object.entries(state.productCatalog||{}).filter(([id,row])=>normalizeCardName([id,row.name,row.germanName,row.englishName,row.set,row.setName,row.rarity,row.collectorNumber].join(" ")).includes(q)).slice(0,100).map(([productId,row])=>({productId,...row}));
+}
+
+function inventoryVariantName(product={}){
+  return product.germanName||product.name||product.officialName||product.englishName||`Cardmarket-Produkt ${product.productId||""}`;
+}
+
+function inventoryVariantSubtitle(product={}){
+  const setName=product.setName||product.set||"Set unbekannt";
+  const setNumber=product.collectorNumber||product.setCode||"Setnummer unbekannt";
+  const rarity=[product.variant,product.rarity].filter((value,index,array)=>value&&array.indexOf(value)===index).join(" · ")||"Seltenheit unbekannt";
+  return `${setName} · ${setNumber} · ${rarity}`;
+}
+
+async function inventoryPricingSuggestion(product={}){
+  if(window.tcgProductPricing)return window.tcgProductPricing(product);
+  const learned=product.learnedPricing||((await window.desktopApp?.getTradeRecommendations?.({productIds:[String(product.productId||"")],limit:1}))?.recommendations||[])[0]||{};
+  const marketValues=[product.trend,product.avg7,product.avg30,product.low].map(Number).filter(value=>value>0);
+  return {recommendedSell:Number(learned.recommendedSell||marketValues[0]||0),recommendedBuy:Number(learned.recommendedBuy||0),confidence:learned.confidenceLevel||"low"};
+}
+
+async function chooseInventoryVariant(productId){
+  const product=inventoryModalVariants.get(String(productId));if(!product)return;
+  const priceSequence=++inventoryPriceSequence;
+  const wrap=document.getElementById("modalFields");
+  wrap.dataset.inventorySelection="selected";
+  const setValue=product.setCode||product.set||product.setName||"";
+  const rarityValue=[product.variant,product.rarity].filter((value,index,array)=>value&&array.indexOf(value)===index).join(" · ");
+  const values={productId:String(product.productId||""),metacardId:String(product.metacardId||""),name:inventoryVariantName(product),germanName:product.germanName||inventoryVariantName(product),englishName:product.englishName||product.officialName||"",set:setValue,setName:product.setName||product.set||"",rarity:rarityValue,collectorNumber:product.collectorNumber||product.setCode||"",productUrl:product.productUrl||""};
+  Object.entries(values).forEach(([name,value])=>{const field=document.querySelector(`#modalFields [name="${name}"]`);if(field)field.value=value;});
+  document.getElementById("inventorySelectedCard").innerHTML=`<strong>${escapeHtml(values.name)}</strong>${values.englishName&&normalizeCardName(values.englishName)!==normalizeCardName(values.name)?`<small>Englisch: ${escapeHtml(values.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span>`;
+  document.getElementById("inventorySetDisplay").value=values.setName||values.set;
+  document.getElementById("inventoryRarityDisplay").value=values.rarity;
+  document.getElementById("inventoryNumberDisplay").value=values.collectorNumber;
+  document.getElementById("inventoryCardResults").innerHTML="";
+  const suggestion=await inventoryPricingSuggestion(product);
+  if(priceSequence!==inventoryPriceSequence||document.querySelector('#modalFields [name="productId"]')?.value!==String(productId))return;
+  const suggestionField=document.querySelector('#modalFields [name="suggestedSell"]');if(suggestionField)suggestionField.value=Number(suggestion.recommendedSell||0).toFixed(2);
+  const priceInfo=document.getElementById("inventoryPriceSuggestion");
+  if(priceInfo)priceInfo.innerHTML=suggestion.recommendedSell?`<strong>VK-Vorschlag ${money(suggestion.recommendedSell)}</strong><span>Maximaler sinnvoller EK ${suggestion.recommendedBuy?money(suggestion.recommendedBuy):"noch ohne ausreichende Daten"} · Datenbasis ${escapeHtml({high:"hoch",medium:"mittel",low:"niedrig"}[suggestion.confidence]||suggestion.confidence||"niedrig")}</span><button type="button" class="link-button" id="applyInventorySuggestedPrice">Vorschlag als Inseratspreis übernehmen</button>`:`<span>Noch kein belastbarer VK-Vorschlag für diese Druckvariante vorhanden.</span>`;
+}
+
+async function renderInventoryCardSearch(query){
+  const target=document.getElementById("inventoryCardResults");if(!target)return;
+  const sequence=++inventoryCardSearchSequence;
+  if(normalizeCardName(query).length<2){target.innerHTML='<div class="muted">Mindestens zwei Zeichen eingeben.</div>';return;}
+  target.innerHTML='<div class="muted">Passende Karten und Druckvarianten werden gesucht …</div>';
+  try{
+    const products=await searchInventoryCardVariants(query);if(sequence!==inventoryCardSearchSequence)return;
+    inventoryModalVariants=new Map(products.map(product=>[String(product.productId),product]));
+    target.innerHTML=products.length?products.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span></button>`).join(""):'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
+  }catch(error){if(sequence===inventoryCardSearchSequence)target.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;}
+}
 
 function addInventory(initial={}) {
-  const modalInitial={...initial,listingStatus:initial.listed?"Inseriert":"Nicht inseriert"};
-  openModal(initial.id?"Karte bearbeiten":"Karte hinzufügen",[
-    {name:"productId",label:"CM Produkt-ID"},
-    {name:"name",label:"Kartenname",required:true},
-    {name:"set",label:"Set"},
-    {name:"rarity",label:"Version / Seltenheit"},
-    {name:"language",label:"Sprache",type:"select",options:["DE","EN","DE/EN","IT","FR","ES","PL","NL"]},
-    {name:"condition",label:"Zustand",type:"select",options:["NM","EX","GD","LP","PL"]},
-    {name:"cost",label:"Einstand (€)",type:"number",step:"0.01"},
-    {name:"listingStatus",label:"Cardmarket-Inserat",type:"select",options:["Nicht inseriert","Inseriert"]},
-    {name:"listingPrice",label:"Inseratspreis pro Stück (€)",type:"number",step:"0.01"},
-    {name:"purchaseDate",label:"Kaufdatum",type:"date",value:todayISO()},
-    {name:"status",label:"Status",type:"select",options:["Bestellt","Unterwegs","Im Bestand","Reserviert","Verkauft","Beschädigt"]},
-    {name:"location",label:"Lagerort"},
-    {name:"note",label:"Notiz",full:true}
-  ], modalInitial, data=>{
-    const obj={...data,cost:Number(data.cost||0),listingPrice:Number(data.listingPrice||0),listed:data.listingStatus==="Inseriert"};
-    delete obj.listingStatus;
-    if(initial.id) Object.assign(state.inventory.find(x=>x.id===initial.id),obj);
-    else state.inventory.push({...obj,id:uid()});
-  });
+  inventoryCardSearchSequence++;
+  inventoryPriceSequence++;
+  document.getElementById("modalTitle").textContent=initial.id?"Karte bearbeiten":"Karte hinzufügen";
+  const wrap=document.getElementById("modalFields");
+  const language=initial.language||"DE",condition=initial.condition||"NM",status=initial.status||"Im Bestand";
+  wrap.innerHTML=`
+    <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
+    <label>Set<input id="inventorySetDisplay" value="${escapeHtml(initial.setName||initial.set||"")}" readonly></label>
+    <label>Setnummer<input id="inventoryNumberDisplay" value="${escapeHtml(initial.collectorNumber||"")}" readonly></label>
+    <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" value="${escapeHtml(initial.rarity||"")}" readonly></label>
+    <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option ${language===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option ${condition===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    <label>Einstand (€)<input name="cost" type="number" min="0" step="0.01" value="${Number(initial.cost||0)||""}"></label>
+    <label>Gewünschter Inseratspreis (€)<input name="listingPrice" type="number" min="0" step="0.01" value="${Number(initial.listingPrice||0)||""}"></label>
+    <input name="suggestedSell" type="hidden" value="${Number(initial.suggestedSell||0)||""}">
+    <div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span></div>
+    <label>Kaufdatum<input name="purchaseDate" type="date" value="${escapeHtml(initial.purchaseDate||todayISO())}"></label>
+    <label>Status<select name="status">${["Bestellt","Unterwegs","Im Bestand","Reserviert","Verkauft","Beschädigt"].map(value=>`<option ${status===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    <label>Lagerort<input name="location" value="${escapeHtml(initial.location||"")}"></label>
+    <label class="full-width">Notiz<input name="note" value="${escapeHtml(initial.note||"")}"></label>`;
+  wrap.dataset.inventorySelection=initial.productId?"selected":(initial.id?"legacy":"required");
+  modalHandler=data=>{
+    const legacyUnchanged=initial.id&&wrap.dataset.inventorySelection==="legacy"&&initial.name;
+    if((!data.productId||!data.name)&&!legacyUnchanged){alert("Bitte zuerst eine Karte und anschließend die richtige Druckvariante auswählen.");document.getElementById("inventoryCardSearch")?.focus();return false;}
+    if(legacyUnchanged)data.name=initial.name;
+    const obj={...data,cost:Number(data.cost||0),listingPrice:Number(data.listingPrice||0),suggestedSell:Number(data.suggestedSell||0),listed:Number(data.listingPrice||0)>0};
+    if(initial.id)Object.assign(state.inventory.find(row=>row.id===initial.id),obj);else state.inventory.push({...obj,id:uid()});
+    return true;
+  };
+  let searchTimer;
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const listing=document.querySelector('#modalFields [name="listingPrice"]');if(listing&&suggestion){listing.value=suggestion.toFixed(2);listing.focus();}}};
+  inventoryModalVariants=new Map();
+  document.getElementById("modal").showModal();
+  if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
+  else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function materializePurchaseInventory(purchase) {
@@ -1744,6 +1904,7 @@ function addSale(initial={}) {
 }
 
 function addWatch(initial={}) {
+  const modalInitial={...initial,pricingMode:initial.pricingMode||"automatic"};
   openModal(initial.id?"Watchlist bearbeiten":"Karte beobachten",[
     {name:"priority",label:"Priorität",type:"select",options:["A","B","C"]},
     {name:"productId",label:"CM Produkt-ID"},
@@ -1752,6 +1913,7 @@ function addWatch(initial={}) {
     {name:"version",label:"Version / Seltenheit"},
     {name:"productUrl",label:"Cardmarket-Link zur genauen Version",full:true},
     {name:"target",label:"Sollbestand",type:"number",value:state.settings.targetStock},
+    {name:"pricingMode",label:"Preisgrenzen",type:"select",options:[{value:"automatic",label:"Automatisch aus Marktdaten"},{value:"manual",label:"Manuell festlegen"}]},
     {name:"maxBuy",label:"Max. Einkauf (€)",type:"number",step:"0.01"},
     {name:"currentBuy",label:"Aktuelles Angebot (€)",type:"number",step:"0.01"},
     {name:"targetSell",label:"Zielverkauf (€)",type:"number",step:"0.01"},
@@ -1759,8 +1921,9 @@ function addWatch(initial={}) {
     {name:"avg30",label:"Ø 30 Tage (€)",type:"number",step:"0.01"},
     {name:"reprint",label:"Reprint-Risiko",type:"select",options:["Niedrig","Mittel","Hoch"]},
     {name:"banlist",label:"Banlist-Risiko",type:"select",options:["Niedrig","Mittel","Hoch"]}
-  ], initial, data=>{
+  ], modalInitial, data=>{
     const obj={...data,target:Number(data.target||0),maxBuy:Number(data.maxBuy||0),currentBuy:data.currentBuy===""?"":Number(data.currentBuy),targetSell:Number(data.targetSell||0),trend:data.trend===""?"":Number(data.trend),avg30:data.avg30===""?"":Number(data.avg30)};
+    if(obj.pricingMode!=="manual")Object.assign(obj,automaticWatchTargets(obj));
     if(initial.id) Object.assign(state.watchlist.find(x=>x.id===initial.id),obj); else state.watchlist.push({...obj,id:uid(),stock:0});
   });
 }
@@ -2066,9 +2229,16 @@ function deleteSaleRecord(id) {
   const sale = state.sales.find(x=>x.id===id);
   if (!sale) return;
   const restored = restoreSaleInventory(sale);
+  let restoredMaterials=0;
+  if((sale.materialUsage||[]).length&&(sale.packedDate||["Verpackt","Versendet","Abgeschlossen"].includes(sale.status))){
+    const plan=planMaterialStockChanges(sale.materialUsage,[]);
+    const changes=applyMaterialStockPlan(plan);
+    restoredMaterials=changes.reduce((sum,change)=>sum+Math.max(0,Number(change.quantity||0)),0);
+    changes.forEach(change=>addMovement({type:"Materialrückbuchung",quantity:change.quantity,materialId:change.material.id,saleId:sale.id,reference:`Gelöschte Bestellung ${sale.orderNo||"-"}`,note:`${change.material.name} aus gelöschter Verpackung zurückgebucht`}));
+  }
   state.sales = state.sales.filter(x=>x.id!==id);
   saveState(); renderAll();
-  if (restored) alert(`${restored} Karte${restored===1?"":"n"} wurde${restored===1?"":"n"} wieder in den Bestand gelegt.`);
+  if (restored||restoredMaterials) alert(`${restored} Karte${restored===1?"":"n"} und ${restoredMaterials} Materialeinheit${restoredMaterials===1?"":"en"} wurden wieder in den Bestand gelegt.`);
 }
 
 function downloadTextFile(filename, text, type="text/csv;charset=utf-8") {
@@ -2686,7 +2856,10 @@ async function importBackup(file){return importBackupPayload(JSON.parse(await fi
 document.querySelectorAll(".nav-item").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.view)));
 document.querySelectorAll("[data-view-jump]").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.viewJump)));
 
-["inventorySearch","inventoryStatusFilter","purchaseSearch","purchaseStatusFilter","salesSearch","salesStatusFilter","watchSearch","watchStatusFilter","materialSearch","expenseSearch","expenseCategoryFilter"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
+["inventorySearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
+// Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
+// während des Öffnens würde das native Auswahlmenü sofort wieder schließen.
+["inventoryStatusFilter","purchaseStatusFilter","salesStatusFilter","watchStatusFilter","expenseCategoryFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
 
 document.getElementById("addInventoryBtn").onclick=()=>addInventory();
 document.getElementById("addPurchaseBtn").onclick=()=>addPurchase();
@@ -2701,7 +2874,7 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
-  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-inventory-group], [data-inventory-details], [data-edit-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense]");
+  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-inventory-group], [data-inventory-details], [data-edit-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
   if(d.editInventoryGroup) editInventoryGroup(d.editInventoryGroup);
@@ -2715,6 +2888,7 @@ document.body.addEventListener("click",e=>{
   if(d.showCustomer) showCustomerDetails(d.showCustomer);
   if(d.showPurchase) openOrderDetails("purchase",d.showPurchase);
   if(d.showSale) openOrderDetails("sale",d.showSale);
+  if(d.showMaterial) showMaterialHistory(d.showMaterial);
   if(d.deleteInventory && confirm("Karte wirklich löschen?")) {state.inventory=state.inventory.filter(x=>x.id!==d.deleteInventory);saveState();renderAll();}
   if(d.deleteInventoryGroup) {
     const group=getInventoryGroups().find(g=>g.key===d.deleteInventoryGroup);
@@ -2748,7 +2922,7 @@ document.body.addEventListener("click",e=>{
   if(d.deleteExpense && confirm("Ausgabe wirklich löschen?")) {state.expenses=state.expenses.filter(x=>x.id!==d.deleteExpense);saveState();renderAll();}
   if(d.editTemplate) addTemplate(state.materialTemplates.find(x=>x.id===d.editTemplate));
   if(d.deleteTemplate && confirm("Versandvorlage wirklich löschen?")) {state.materialTemplates=state.materialTemplates.filter(x=>x.id!==d.deleteTemplate);saveState();renderAll();}
-  if(d.removeUsage) {e.target.closest('[data-usage-row]')?.remove();}
+  if("removeUsage" in d) {actionTarget?.closest('[data-usage-row]')?.remove();updateSaleMaterialPreview();}
   if(d.deleteImport) removeImport(state.imports.find(x=>x.id===d.deleteImport));
   if(d.removeImportHistory) removeImportHistory(d.removeImportHistory);
 });
@@ -2796,7 +2970,7 @@ document.getElementById("orderDetailContent").addEventListener("click",e=>{
   const dlg=document.getElementById("orderDetailDialog"); const sale=state.sales.find(s=>s.id===dlg.dataset.saleId); if(!sale)return;
   if(e.target.id==="addSaleMaterialBtn") {const options=state.materials.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} (${Number(m.stock||0)} verfügbar)</option>`).join("");document.getElementById("saleMaterialUsage").insertAdjacentHTML("beforeend",materialUsageRow({},Date.now(),options));}
   if(e.target.id==="applySaleTemplateBtn") {const id=document.getElementById("saleTemplateSelect").value;if(!id)return;applyTemplateToEditor(id);}
-  if(e.target.id==="saveSaleAsTemplateBtn") {const name=prompt("Name der neuen Versandvorlage:");if(!name)return;const items=readSaleMaterialRows();state.materialTemplates.push({id:uid(),name,shippingType:document.getElementById("saleShippingType").value,postage:Number(document.getElementById("salePostage").value||0),items:items.map(i=>({materialId:i.materialId,quantity:i.quantity}))});saveState();renderAll();alert("Vorlage gespeichert.");}
+  if(e.target.id==="saveSaleAsTemplateBtn") {const name=document.getElementById("saleTemplateName")?.value?.trim();if(!name){alert("Bitte zuerst einen Namen für die Vorlage eingeben.");document.getElementById("saleTemplateName")?.focus();return;}const items=readSaleMaterialRows();state.materialTemplates.push({id:uid(),name,shippingType:document.getElementById("saleShippingType").value,postage:Number(document.getElementById("salePostage").value||0),items:items.map(i=>({materialId:i.materialId,quantity:i.quantity}))});saveState();renderAll();openOrderDetails("sale",sale.id);alert("Vorlage gespeichert.");}
   if(e.target.id==="saleWorkflowNext") {
     const stage=sale.workflowStage||"Offen";
     if(stage==="Offen") { sale.status="Bezahlt"; reserveSaleInventory(sale); sale.workflowStage="Kommissioniert"; addMovement({type:"Status",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Bezahlt → Kommissionieren"}); }

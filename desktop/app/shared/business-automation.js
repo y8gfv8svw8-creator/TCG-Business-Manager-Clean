@@ -71,6 +71,92 @@
     return { gross, cardValue, fee, packaging, postage, cost, profit: gross - fee - packaging - postage - cost };
   }
 
+  const optionalNumber = value => {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const normalized = String(value)
+      .replace(/[^\d,.-]/g, '')
+      .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+      .replace(',', '.');
+    if (!/^-?\d+(?:\.\d+)?$/.test(normalized)) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const roundMoney = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+  const floorMoney = value => Math.max(0, Math.floor((Number(value) + Number.EPSILON) * 100) / 100);
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, asNumber(value)));
+
+  function calculateAutomaticPriceTargets(prices = {}, settings = {}) {
+    const low = optionalNumber(prices.low ?? prices.currentBuy);
+    const trend = optionalNumber(prices.trend);
+    const avg1 = optionalNumber(prices.avg1);
+    const avg7 = optionalNumber(prices.avg7);
+    const avg30 = optionalNumber(prices.avg30);
+    const pricePointCount = [low, trend, avg1, avg7, avg30].filter(value => value !== null).length;
+    const weighted = [];
+    if (trend !== null) weighted.push([trend, 0.45]);
+    if (avg7 !== null) weighted.push([avg7, 0.35]);
+    if (avg30 !== null) weighted.push([avg30, 0.20]);
+    if (!weighted.length && avg1 !== null) weighted.push([avg1, 1]);
+    if (!weighted.length && low !== null) weighted.push([low, 1]);
+    const weightTotal = weighted.reduce((sum, row) => sum + row[1], 0);
+    const weightedSell = weightTotal
+      ? weighted.reduce((sum, row) => sum + row[0] * row[1], 0) / weightTotal
+      : 0;
+    const recommendedSell = pricePointCount
+      ? roundMoney(Math.max(0, weightedSell, low || 0))
+      : 0;
+    const safety = clamp(settings.safetyPercent, 0, 50) / 100;
+    const feeRate = clamp(settings.feePercent, 0, 100) / 100;
+    const packaging = Math.max(0, asNumber(settings.packaging));
+    const safeSell = floorMoney(recommendedSell * (1 - safety));
+    const feeAmount = safeSell * feeRate;
+    const netBeforeBuy = safeSell - feeAmount - packaging;
+    const minProfit = Math.max(0, asNumber(settings.minProfit));
+    const minRoi = Math.max(0, asNumber(settings.minRoi)) / 100;
+    const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy - minProfit) : 0;
+    const maxByRoi = netBeforeBuy > 0 ? floorMoney(minRoi > 0 ? netBeforeBuy / (1 + minRoi) : netBeforeBuy) : 0;
+    const maxBuy = recommendedSell > 0 ? floorMoney(Math.min(maxByProfit, maxByRoi)) : 0;
+    return {
+      low, trend, avg1, avg7, avg30, pricePointCount,
+      recommendedSell, safeSell, feeRate, packaging, feeAmount, netBeforeBuy,
+      minProfit, minRoi, maxByProfit, maxByRoi, maxBuy
+    };
+  }
+
+  function planMaterialUsageChanges(materials = [], oldUsage = [], newUsage = []) {
+    const materialById = new Map(materials.map(material => [String(material.id), material]));
+    const deltaById = new Map();
+    const addDelta = (usage, direction) => (usage || []).forEach(row => {
+      const materialId = String(row.materialId || '');
+      const quantity = Math.max(0, asNumber(row.quantity));
+      if (!materialId || !quantity) return;
+      deltaById.set(materialId, (deltaById.get(materialId) || 0) + quantity * direction);
+    });
+    addDelta(oldUsage, 1);
+    addDelta(newUsage, -1);
+    const changes = [];
+    const shortages = [];
+    for (const [materialId, quantity] of deltaById) {
+      const material = materialById.get(materialId);
+      if (!material || !quantity) continue;
+      const stockBefore = Math.max(0, asNumber(material.stock));
+      const stockAfter = stockBefore + quantity;
+      if (stockAfter < 0) {
+        shortages.push({
+          materialId,
+          name: material.name || 'Material',
+          missing: Math.abs(stockAfter),
+          unit: material.unit || 'Stück'
+        });
+        continue;
+      }
+      changes.push({ materialId, quantity, stockBefore, stockAfter });
+    }
+    return { valid: shortages.length === 0, changes, shortages };
+  }
+
   const realizedSale = sale => ['Bezahlt', 'Versendet', 'Abgeschlossen'].includes(String(sale?.status || ''));
 
   function buildPerformanceReport(state = {}, now = new Date()) {
@@ -256,6 +342,8 @@
     normalizeField,
     detectCsvImportType,
     calculateSaleProfit,
+    calculateAutomaticPriceTargets,
+    planMaterialUsageChanges,
     buildPerformanceReport,
     buildDataQualityIssues,
     buildPriceAlerts,

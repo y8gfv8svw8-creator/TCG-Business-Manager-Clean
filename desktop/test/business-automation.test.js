@@ -67,3 +67,29 @@ test('warnt vor Inseraten unter Einstand und fallenden Watchlist-Preisen', () =>
   assert.ok(alerts.some(alert => alert.type === 'Verlustpreis'));
   assert.ok(alerts.some(alert => alert.type === 'Preisrückgang'));
 });
+
+test('berechnet automatische Max-EK- und Ziel-VK-Werte mit einheitlicher Rundung', () => {
+  const settings = { safetyPercent: 5, feePercent: 5, packaging: 0.20, minProfit: 1, minRoi: 30 };
+  const first = automation.calculateAutomaticPriceTargets({ low: 8, trend: 10, avg7: 9, avg30: 8 }, settings);
+  const updated = automation.calculateAutomaticPriceTargets({ low: 8, trend: 12, avg7: 10, avg30: 9 }, settings);
+
+  assert.equal(first.recommendedSell, 9.25);
+  assert.equal(first.maxBuy, 6.26);
+  assert.ok(updated.recommendedSell > first.recommendedSell);
+  assert.ok(updated.maxBuy > first.maxBuy);
+});
+
+test('plant Materialverbrauch, Entfernen und Bestandsrückbuchung ohne negative Bestände', () => {
+  const materials = [
+    { id: 'sleeve', name: 'Sleeve', unit: 'Stück', stock: 5 },
+    { id: 'letter', name: 'Umschlag', unit: 'Stück', stock: 1 }
+  ];
+  const removal = automation.planMaterialUsageChanges(materials, [{ materialId: 'sleeve', quantity: 3 }], [{ materialId: 'sleeve', quantity: 1 }]);
+  assert.equal(removal.valid, true);
+  assert.deepEqual(removal.changes[0], { materialId: 'sleeve', quantity: 2, stockBefore: 5, stockAfter: 7 });
+
+  const shortage = automation.planMaterialUsageChanges(materials, [], [{ materialId: 'letter', quantity: 2 }]);
+  assert.equal(shortage.valid, false);
+  assert.equal(shortage.shortages[0].missing, 1);
+  assert.equal(materials[1].stock, 1);
+});

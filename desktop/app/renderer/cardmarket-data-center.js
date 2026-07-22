@@ -230,12 +230,6 @@
     return Math.floor((number + Number.EPSILON) * 100) / 100;
   }
 
-  function cmRoundMoney(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return 0;
-    return Math.round((number + Number.EPSILON) * 100) / 100;
-  }
-
   function cmDateFromPayload(payload) {
     const raw = String(payload?.createdAt || "").trim();
     const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
@@ -598,6 +592,13 @@
       w.avg7 = price.avg7 ?? "";
       w.avg30 = price.avg30 ?? "";
       w.priceDate = priceDate;
+      const calculation=cmMarketCalculation({...w,...price},{});
+      if(w.pricingMode!=="manual"){
+        w.maxBuy=Number(calculation.maxBuy||0);
+        w.targetSell=Number(calculation.recommendedSell||0);
+      }
+      w.pricingUpdatedAt=new Date().toISOString();
+      w.pricingMode=w.pricingMode||"automatic";
       updated++;
     });
     return updated;
@@ -871,32 +872,13 @@
     const marketBuy = buyCandidates.length ? buyCandidates[0][0] : 0;
     const marketBuySource = buyCandidates.length ? buyCandidates[0][1] : "Keine EK-Referenz";
 
-    const weighted = [];
-    if (trend !== null) weighted.push([trend, 0.45]);
-    if (avg7 !== null) weighted.push([avg7, 0.35]);
-    if (avg30 !== null) weighted.push([avg30, 0.20]);
-    if (!weighted.length && avg1 !== null) weighted.push([avg1,1]);
-    if (!weighted.length && low !== null) weighted.push([low,1]);
-    const weightTotal = weighted.reduce((sum, [,weight]) => sum+weight, 0);
-    const weightedSell = weightTotal ? weighted.reduce((sum,[value,weight]) => sum+value*weight,0)/weightTotal : 0;
-    // Der angezeigte Ziel-VK ist zugleich die Rechenbasis. So entstehen keine versteckten Bruchteile von Cent.
-    const recommendedSell = hasPriceData ? cmRoundMoney(Math.max(0, weightedSell, low || 0)) : 0;
-
-    const safety = cmClamp(state.settings.safetyPercent,0,50)/100;
-    const feeRate = cmClamp(state.settings.feePercent,0,100)/100;
-    const packaging = Math.max(0, Number(state.settings.packaging || 0));
-    // Sicherheits-VK und Einkaufsgrenzen werden abgerundet, damit die Kalkulation nie zu optimistisch ist.
-    const safeSell = cmFloorMoney(recommendedSell * (1-safety));
-    const feeAmount = safeSell * feeRate;
-    // Wichtig: Negative Erlöse dürfen nicht auf 0 gekappt werden. Sonst werden Verlust, ROI und Marge falsch.
-    const netBeforeBuy = safeSell - feeAmount - packaging;
+    // Datencenter, Watchlist und Bestandserfassung verwenden exakt dieselbe
+    // Preisformel. So werden automatisch gesetzte Grenzen nicht anschließend
+    // von einer zweiten Berechnung mit leicht anderen Rundungen überschrieben.
+    const automaticTargets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(product,state.settings);
+    const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,maxByProfit,maxByRoi,maxBuy}=automaticTargets;
     const isCostCovering = netBeforeBuy > 0;
     const costShortfall = isCostCovering ? 0 : Math.abs(netBeforeBuy);
-    const minProfit = Math.max(0, Number(state.settings.minProfit || 0));
-    const minRoi = Math.max(0, Number(state.settings.minRoi || 0))/100;
-    const maxByProfit = isCostCovering ? cmFloorMoney(netBeforeBuy-minProfit) : 0;
-    const maxByRoi = isCostCovering ? cmFloorMoney(minRoi > 0 ? netBeforeBuy/(1+minRoi) : netBeforeBuy) : 0;
-    const maxBuy = recommendedSell > 0 ? cmFloorMoney(Math.min(maxByProfit,maxByRoi)) : 0;
     const profitAtMarket = marketBuy > 0 ? netBeforeBuy-marketBuy : 0;
     const roiAtMarket = marketBuy > 0 ? profitAtMarket/marketBuy*100 : 0;
     const marginOnSell = safeSell > 0 ? profitAtMarket/safeSell*100 : 0;
@@ -1143,6 +1125,21 @@
     await cmAttachTradeRecommendations(groups);
     return {groups,products:groups.flatMap(group => group.variants),totalCards:allGroups.length,sqlite:false};
   }
+
+  // Die geführte Bestandserfassung nutzt denselben vollständigen Katalog und
+  // dieselbe Preiskalkulation wie das Cardmarket-Datencenter.
+  window.tcgSearchCatalogCards=cmSearchCatalogCards;
+  window.tcgProductPricing=function(product={}){
+    const own=cmBuildOwnStats().get(String(product.productId||""))||{};
+    const calculated=cmMarketCalculation(product,own);
+    const learned=product.learnedPricing||{};
+    return {
+      recommendedSell:Number(learned.recommendedSell||calculated.recommendedSell||0),
+      recommendedBuy:Number(learned.recommendedBuy||calculated.maxBuy||0),
+      marketLow:Number(calculated.marketBuy||0),
+      confidence:learned.confidenceLevel||calculated.scoreConfidence||"low"
+    };
+  };
 
   async function cmRenderSearchNow() {
     const output = document.getElementById("cmSearchResults");

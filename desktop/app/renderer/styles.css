@@ -57,6 +57,7 @@ nav { display: grid; gap: 6px; }
 .toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
 .search { min-width: 320px; }
 input, select { border: 1px solid var(--border); border-radius: 9px; padding: 10px 11px; background: white; color: var(--text); }
+select { cursor: pointer; }
 .table-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: auto; box-shadow: var(--shadow); }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { position: sticky; top: 0; background: var(--navy2); color: white; text-align: left; padding: 11px; white-space: nowrap; }
@@ -92,6 +93,7 @@ tbody tr:hover { background: #f8fbfe; }
 .bar > span { display: block; height: 100%; background: var(--navy2); border-radius: inherit; }
 dialog { border: 0; border-radius: 14px; padding: 0; width: min(760px, calc(100vw - 28px)); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
 dialog::backdrop { background: rgba(16, 24, 40, .48); }
+#modal { max-height: 94vh; overflow: auto; }
 #modalForm { padding: 20px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-head h2 { margin: 0; }
@@ -373,6 +375,10 @@ dialog::backdrop { background: rgba(16, 24, 40, .48); }
 .finance-detail-table td small{color:var(--muted)}.finance-detail-amount{text-align:right;white-space:nowrap}
 .finance-detail-table tfoot td{padding:13px 11px;background:#f3f6f8;border-top:2px solid var(--border)}
 .finance-order-link{display:inline-block;margin-top:5px;padding:0;font-size:12px}
+
+/* Geführte Kartenerfassung und Materialverlauf */
+.inventory-card-search-label{position:relative}.inventory-card-results{display:grid;gap:6px;max-height:310px;overflow:auto;margin-top:2px;border-radius:10px}.inventory-card-results:not(:empty){padding:7px;border:1px solid var(--border);background:#f8fafc}.inventory-card-choice{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;padding:10px 11px;border:1px solid transparent;border-radius:8px;background:#fff;color:var(--text);text-align:left}.inventory-card-choice:hover,.inventory-card-choice:focus{border-color:#7fa5c2;background:#f1f7fb}.inventory-card-choice small{color:var(--muted);font-weight:500}.inventory-card-choice span{color:#42566a;font-size:12px;font-weight:500}.inventory-selected-card{display:flex;flex-direction:column;gap:4px;padding:12px 13px;border:1px solid #a9c6db;border-radius:10px;background:#f1f7fb}.inventory-selected-card span,.inventory-selected-card small{color:var(--muted);font-size:12px}.inventory-price-suggestion{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 13px;border:1px solid #d5c183;border-radius:10px;background:#fff9e9}.inventory-price-suggestion span{color:#655b42;font-size:12px}.inventory-price-suggestion button{margin-left:auto}.form-grid input[readonly]{background:#f1f4f7;color:#526273}
+.material-name-link{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:0;border:0;background:none;color:var(--navy2);text-align:left}.material-name-link:hover strong{text-decoration:underline}.material-name-link small{color:var(--muted)}.material-history-table table{min-width:820px}.template-save-row{display:flex;gap:9px;align-items:center;margin:12px 0}.template-save-row input{flex:1;min-width:220px}
 
 /* Automatisierung, sicherer Import und erweiterte Auswertungen */
 .panel-head-actions,.report-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center}

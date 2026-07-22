@@ -74,3 +74,15 @@ Patch 7 – Sicherer Import und Geschäftsautomatisierung
 - Cardmarket-Abrechnungs-CSV können mit erwarteten Verkaufsauszahlungen abgeglichen werden. Mehrere Buchungszeilen derselben Bestellung werden zusammengefasst.
 - Abrechnungen und Einzelbuchungen werden normalisiert in SQLite-Schema v6 gespeichert; dieselben Tabellen sind für eine spätere API-Quelle vorbereitet.
 - Der Berichtsbereich zeigt Anzahl und Zeitpunkt der automatischen Tagesbackups.
+
+Patch 8 – Geführte Kartenerfassung und Versandablauf
+- Die Bestandserfassung sucht Karten zuerst auf Deutsch oder Englisch und zeigt anschließend alle passenden Cardmarket-Druckvarianten mit Set, Setnummer und Seltenheit zur Auswahl.
+- Set, Setnummer, Seltenheit, Produktlink und die intern benötigte Cardmarket-Produkt-ID werden aus der gewählten Druckvariante übernommen; die Produkt-ID muss nicht mehr manuell eingegeben werden.
+- Neben dem Einstand kann der gewünschte Inseratspreis direkt gespeichert werden. Eine datenbasierte VK- und Max-EK-Empfehlung wird als Information angeboten.
+- Versandvorlagen können im Verpackungsfenster mit einem Namen gespeichert und wieder geladen werden.
+- Nach dem Speichern der Verpackung bleibt eine Bestellung ausdrücklich im Status „Verpackt“. Erst eine zweite, getrennte Aktion setzt sie auf „Versendet“.
+- Verwendetes Versandmaterial kann vor dem Speichern entfernt oder in der Menge geändert werden. Bestandsänderungen und Rückbuchungen werden protokolliert; beim Löschen eines verpackten Verkaufs wird Material zurückgebucht.
+- Ein Klick auf den Materialnamen öffnet den vollständigen Verlauf mit Zeitpunkt, Buchungsanzahl, Menge, Bestellung/Verwendungszweck und Zusatzinformation.
+- Such- und Statusfilter reagieren erst nach einer bestätigten Auswahl, damit native Auswahlfelder nicht mehr während des Öffnens neu aufgebaut werden.
+- Max-EK und Ziel-VK der Marktbeobachtung werden mit jedem neuen Price Guide und nach geänderten Kalkulationseinstellungen automatisch neu berechnet. Manuelle Preisgrenzen bleiben optional möglich.
+- Der Empfehlungsfilter enthält alle ausgegebenen Zustände einschließlich „NICHT KAUFEN“, „FALLEND“ und „KEINE PREISDATEN“.

@@ -1,0 +1,35 @@
+TCG Business Manager 5.2.0 – QA-Bericht Patch 8
+
+Geprüfte Bereiche
+- Geführte deutsche und englische Kartensuche in der Bestandserfassung
+- Vollständige Druckvarianten mit Set, Setnummer und Seltenheit
+- Automatische Übernahme der Varianten- und Produktdaten
+- Inseratspreis sowie VK- und Max-EK-Vorschlag
+- Versandvorlage speichern und laden
+- Getrennter Ablauf Kommissioniert → Verpackt → Versendet
+- Material entfernen, Mengen ändern und Bestände zurückbuchen
+- Materialverlauf mit Bestellbezug und Bewegungsgrund
+- Status- und Kategoriefilter in Bestand, Einkauf, Verkauf, Ausgaben und Marktbeobachtung
+- Automatische Marktbeobachtungsgrenzen und vollständiger Empfehlungsfilter
+- Erhalt bestehender SQLite-, Cardmarket- und Nutzerdaten
+
+Automatische Prüfung
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Preload-, Shared- und Renderer-Dateien: bestanden
+- 17 automatisierte Tests: 17 bestanden, 0 fehlgeschlagen
+- Zweisprachige Suche, Sonderzeichennormalisierung und alle Druckvarianten: bestanden
+- Einheitliche automatische Preisgrenzen und Neuberechnung bei veränderten Marktdaten: bestanden
+- Materialverbrauch, Entfernen, Rückbuchung und Schutz vor negativem Bestand: bestanden
+- SQLite-Migration und Sicherung vorhandener Daten: bestanden
+
+Sicherheitsverhalten
+- Die Cardmarket-Produkt-ID bleibt intern erhalten, wird bei der Kartenerfassung aber nicht mehr als manuelles Eingabefeld angezeigt.
+- Eine Druckvariante muss vor dem Anlegen einer neuen Karte eindeutig gewählt werden. Ältere Bestandskarten ohne Produkt-ID bleiben weiterhin bearbeitbar.
+- Das Speichern einer Verpackung versendet die Bestellung nicht mehr automatisch.
+- Materialbestände werden erst beim Speichern geändert; eine entfernte Zeile kann daher keine ungewollte Abbuchung auslösen.
+- Fehlender Materialbestand verhindert das Speichern, statt einen negativen Bestand zu erzeugen.
+- Manuell gesetzte Watchlist-Grenzen werden durch Price-Guide-Importe nicht überschrieben.
+
+Hinweis zur lokalen Entwicklungsumgebung
+- Der direkte Aufruf der lokalen Oberfläche wurde durch die Sicherheitsrichtlinie des Testbrowsers blockiert.
+- Im Repository ist kein node_modules-Ordner vorhanden. Deshalb wurde in dieser Umgebung kein Electron-Fenster gestartet.
+- Ereignisverkabelung, Berechnungen, Datenmigration, Syntax, Suche und Geschäftslogik wurden statisch und automatisiert geprüft.

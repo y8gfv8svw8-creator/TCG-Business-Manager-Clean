@@ -56,6 +56,10 @@ let activePerformanceReport = "cards";
 let businessHealthDatabaseStatus = null;
 let businessHealthStatusPromise = null;
 let scannerSessionMode = "business";
+let scannerSessionActive = false;
+let scannerReviewActive = false;
+let scannerSubmissionQueue = [];
+let scannerSubmissionProcessing = false;
 
 const views = {
   private: ["Privatsammlung", "Private Karten getrennt vom Geschaeftsbestand verwalten."],
@@ -2218,9 +2222,11 @@ document.getElementById("modalForm").addEventListener("submit", e=>{
   inventoryPriceSequence++;
   document.getElementById("modal").close();
   saveState(); renderAll();
+  finishScannerCardReview();
 });
-document.getElementById("modalClose").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
-document.getElementById("modalCancel").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
+document.getElementById("modalClose").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();finishScannerCardReview();};
+document.getElementById("modalCancel").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();finishScannerCardReview();};
+document.getElementById("modal").addEventListener("close",finishScannerCardReview);
 
 async function scannerImageFingerprint(dataUrl){
   if(!dataUrl)return "";
@@ -2263,35 +2269,117 @@ async function openIphoneScanner(mode="business",targetId=""){
   if(state.settings.scannerEnabled===false){alert("Der iPhone-Scanner ist in den Einstellungen deaktiviert.");return;}
   if(!window.desktopApp?.startScanner){alert("Der iPhone-Scanner steht nur in der installierten Desktop-App zur Verfügung.");return;}
   scannerSessionMode=["business","private","purchase","sale"].includes(mode)?mode:"business";
+  scannerSessionActive=false;scannerReviewActive=false;scannerSubmissionProcessing=false;scannerSubmissionQueue=[];
   const dialog=document.getElementById("scannerDialog"),content=document.getElementById("scannerContent");
   document.getElementById("scannerSubtitle").textContent={private:"Foto für die Privatsammlung aufnehmen.",purchase:"Karte zu diesem Einkauf ergänzen.",sale:"Karte zu diesem Verkauf ergänzen.",business:"Foto für den Geschäftsbestand aufnehmen."}[scannerSessionMode];
   content.innerHTML='<div class="scanner-loading">Sichere Verbindung wird vorbereitet …</div>';
   try{if(!dialog.open)dialog.showModal();}catch{dialog.setAttribute("open","");}
   try{
     const info=await window.desktopApp.startScanner({mode:scannerSessionMode,targetId});
-    content.innerHTML=`<div class="scanner-pairing"><img class="scanner-qr" src="${info.qrDataUrl}" alt="QR-Code für den iPhone-Scanner"><div class="scanner-instructions"><h3>So verbinden Sie Ihr iPhone</h3><p>iPhone und PC müssen im selben WLAN sein. Öffnen Sie die Kamera-App und richten Sie sie auf den QR-Code.</p><span class="scanner-url">${escapeHtml(info.url)}</span><p>Auf dem iPhone fotografieren Sie die Karte. Im Manager bestätigen oder korrigieren Sie danach immer die genaue Druckvariante.</p></div></div><div class="scanner-waiting">Warte auf ein Kartenfoto vom iPhone …</div>`;
+    scannerSessionActive=true;
+    content.innerHTML=`<div class="scanner-pairing"><img class="scanner-qr" src="${info.qrDataUrl}" alt="QR-Code für den iPhone-Scanner"><div class="scanner-instructions"><h3>So verbinden Sie Ihr iPhone</h3><p>iPhone und PC müssen im selben WLAN sein. Öffnen Sie die Kamera-App und richten Sie sie auf den QR-Code.</p><span class="scanner-url">${escapeHtml(info.url)}</span><p>Fotografieren Sie beliebig viele Karten nacheinander. Der Manager liest Name und Setnummer lokal aus und lässt Sie jede Druckvariante einzeln bestätigen.</p></div></div><div class="scanner-waiting">Bereit für die erste Karte …</div>`;
   }catch(error){content.innerHTML=`<div class="scanner-error"><strong>Scanner konnte nicht gestartet werden.</strong><br>${escapeHtml(error.message||error)}</div>`;}
 }
 
 async function closeIphoneScanner(){
+  scannerSessionActive=false;scannerReviewActive=false;scannerSubmissionProcessing=false;scannerSubmissionQueue=[];
   document.getElementById("scannerDialog")?.close();
   try{await window.desktopApp?.stopScanner?.();}catch(error){console.error("Scanner konnte nicht beendet werden:",error);}
 }
 
+function updateScannerSeriesStatus(message){
+  const target=document.querySelector("#scannerContent .scanner-waiting");
+  if(target)target.textContent=message;
+}
+
+function scannerProductComplete(product={}){
+  return Boolean(String(product.productId||"").trim()&&String(product.setName||product.set||product.setCode||"").trim()&&String(product.collectorNumber||product.setCode||"").trim()&&String(product.rarity||product.variant||"").trim());
+}
+
+async function scannerCatalogMatch(scan){
+  const recognition=scan.recognition||{};
+  const queries=(recognition.queries?.length?recognition.queries:TcgScannerRecognition.buildQueries({hint:scan.hint,text:recognition.text})).slice(0,10);
+  const setCodes=recognition.setCodes?.length?recognition.setCodes:TcgScannerRecognition.extractSetCodes(recognition.text||"");
+  let hintFallback=null;
+  for(const query of queries){
+    if(normalizeCardName(query).length<2)continue;
+    const products=await searchInventoryCardVariants(query);
+    const complete=products.filter(scannerProductComplete);
+    if(!complete.length)continue;
+    const codeMatches=TcgScannerRecognition.exactCodeMatches(complete,setCodes.length?setCodes:[query]);
+    if(codeMatches.length)return {query,products:codeMatches,selected:codeMatches.length===1?codeMatches[0]:null,reason:"set-code"};
+    const normalizedQuery=normalizeCardName(query);
+    const exactNames=complete.filter(product=>[product.germanName,product.englishName,product.name,product.officialName].some(name=>name&&normalizeCardName(name)===normalizedQuery));
+    if(exactNames.length)return {query,products:exactNames,selected:exactNames.length===1?exactNames[0]:null,reason:"card-name"};
+    if(scan.hint&&normalizeCardName(query)===normalizeCardName(scan.hint)&&!hintFallback)hintFallback={query,products:complete,selected:complete.length===1?complete[0]:null,reason:"hint"};
+  }
+  return hintFallback;
+}
+
+async function resolveRememberedScannerProduct(mapping){
+  if(!mapping)return null;
+  try{
+    const products=await searchInventoryCardVariants(mapping.productId);
+    return products.find(row=>String(row.productId)===String(mapping.productId))||resolveProduct(mapping.productId,{name:mapping.name});
+  }catch{return resolveProduct(mapping.productId,{name:mapping.name});}
+}
+
 async function acceptScannerSubmission(submission){
   if(!submission?.imageDataUrl)return;
+  updateScannerSeriesStatus(`Foto wird lokal erkannt … ${scannerSubmissionQueue.length?`${scannerSubmissionQueue.length} weitere in der Warteschlange` : ""}`.trim());
   let fingerprint="";
   try{fingerprint=await scannerImageFingerprint(submission.imageDataUrl);}catch(error){console.error("Scanner-Fingerabdruck fehlgeschlagen:",error);}
   const scan={...submission,fingerprint};
   const mapping=scannerMappingMatch(fingerprint);
-  const catalog=mapping?resolveProduct(mapping.productId,{name:mapping.name}):{};
-  document.getElementById("scannerDialog")?.close();
-  setTimeout(()=>window.desktopApp?.stopScanner?.().catch(()=>{}),800);
+  if(mapping){
+    scan.recognizedProduct=await resolveRememberedScannerProduct(mapping);
+    scan.recognitionMatch={query:mapping.name||mapping.productId,products:[scan.recognizedProduct],selected:scan.recognizedProduct,reason:"remembered",confidence:mapping.confidence};
+  }else{
+    try{
+      scan.recognition=await window.desktopApp?.recognizeCardImage?.({imageDataUrl:submission.imageDataUrl,hint:submission.hint||""})||{queries:TcgScannerRecognition.buildQueries({hint:submission.hint})};
+    }catch(error){
+      console.error("Lokale Karten-Texterkennung fehlgeschlagen:",error);
+      scan.recognition={text:"",confidence:0,queries:TcgScannerRecognition.buildQueries({hint:submission.hint}),setCodes:[],error:error.message||String(error)};
+    }
+    scan.recognitionMatch=await scannerCatalogMatch(scan);
+    scan.recognizedProduct=scan.recognitionMatch?.selected||null;
+  }
+  scannerReviewActive=true;
+  const detected=scan.recognizedProduct?`Erkannt: ${inventoryVariantName(scan.recognizedProduct)}`:scan.recognitionMatch?.products?.length?`${scan.recognitionMatch.products.length} passende Druckvarianten gefunden`:'Keine eindeutige Zuordnung – bitte manuell auswählen';
+  updateScannerSeriesStatus(`${detected}. Weitere Fotos können bereits aufgenommen werden.`);
   if(submission.mode==="purchase"&&submission.targetId){addPurchaseLine(submission.targetId,scan);return;}
   if(submission.mode==="sale"&&submission.targetId){addSaleLine(submission.targetId,scan);return;}
-  addInventory(mapping?catalog:{},submission.mode==="private"?"private":"business",scan);
-  const search=document.getElementById("inventoryCardSearch");
-  if(!mapping&&submission.hint&&search){search.value=submission.hint;renderInventoryCardSearch(submission.hint);}
+  addInventory(scan.recognizedProduct||{},submission.mode==="private"?"private":"business",scan);
+}
+
+function queueScannerSubmission(submission){
+  if(!submission)return;
+  scannerSubmissionQueue.push(submission);
+  if(scannerReviewActive||scannerSubmissionProcessing)updateScannerSeriesStatus(`Eine Karte wird geprüft · ${scannerSubmissionQueue.length} weitere${scannerSubmissionQueue.length===1?" Karte":" Karten"} warten.`);
+  processScannerSubmissionQueue();
+}
+
+async function processScannerSubmissionQueue(){
+  if(scannerSubmissionProcessing||scannerReviewActive||!scannerSubmissionQueue.length)return;
+  if([...document.querySelectorAll("dialog[open]")].some(dialog=>dialog.id!=="scannerDialog")){setTimeout(processScannerSubmissionQueue,250);return;}
+  scannerSubmissionProcessing=true;
+  const submission=scannerSubmissionQueue.shift();
+  try{await acceptScannerSubmission(submission);}
+  catch(error){
+    console.error("Scanner-Foto konnte nicht übernommen werden:",error);
+    updateScannerSeriesStatus(`Scanfehler: ${error.message||error}. Die nächste Karte kann weiterbearbeitet werden.`);
+  }finally{
+    scannerSubmissionProcessing=false;
+    if(!scannerReviewActive&&scannerSubmissionQueue.length)setTimeout(processScannerSubmissionQueue,0);
+  }
+}
+
+function finishScannerCardReview(){
+  if(!scannerReviewActive)return;
+  scannerReviewActive=false;
+  if(!scannerSessionActive)return;
+  updateScannerSeriesStatus(scannerSubmissionQueue.length?`${scannerSubmissionQueue.length} weitere${scannerSubmissionQueue.length===1?" Karte wird":" Karten werden"} jetzt geöffnet …`:'Bereit für die nächste Karte …');
+  setTimeout(processScannerSubmissionQueue,0);
 }
 
 let inventoryModalVariants=new Map();
@@ -2356,6 +2444,46 @@ async function chooseInventoryVariant(productId){
   if(priceInfo)priceInfo.innerHTML=suggestion.recommendedSell?`<strong>VK-Vorschlag ${money(suggestion.recommendedSell)}</strong><span>${suggestion.quickSell?`Schnellverkauf ${money(suggestion.quickSell)} · `:""}${suggestion.priceFloor?`Persönliche Preisuntergrenze ${money(suggestion.priceFloor)} · `:""}Maximaler sinnvoller EK ${suggestion.recommendedBuy?money(suggestion.recommendedBuy):"noch ohne ausreichende Daten"} · Datenbasis ${escapeHtml({high:"hoch",medium:"mittel",low:"niedrig"}[suggestion.confidence]||suggestion.confidence||"niedrig")}</span><button type="button" class="link-button" id="applyInventorySuggestedPrice">Vorschlag als Inseratspreis übernehmen</button>`:`<span>Noch kein belastbarer VK-Vorschlag für diese Druckvariante vorhanden.</span>`;
 }
 
+function scannerReviewTitle(scan={}){
+  if(scan.recognizedProduct)return "Karte und Druckvariante erkannt – bitte kontrollieren";
+  if(scan.recognitionMatch?.products?.length)return "Karte erkannt – bitte Druckvariante auswählen";
+  return "Foto empfangen – bitte Karte und Druckvariante auswählen";
+}
+
+function scannerReviewDescription(scan={}){
+  const detected=scan.recognitionMatch?.query||scan.hint||"";
+  const source=scan.recognitionMatch?.reason==="remembered"?"Aus einer früheren Bestätigung wiedererkannt":detected?`Im Foto erkannt: ${detected}`:"Im Foto wurde kein sicherer Kartenname gelesen";
+  return `${source}. Der Scan speichert niemals automatisch; alle Angaben bleiben vor dem Speichern korrigierbar.`;
+}
+
+function renderInventoryProductChoices(products=[],scan=null){
+  const target=document.getElementById("inventoryCardResults");if(!target)return;
+  const complete=products.filter(scannerProductComplete);
+  const incomplete=products.filter(product=>!complete.includes(product));
+  inventoryModalVariants=new Map(complete.map(product=>[String(product.productId),product]));
+  const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe und Seltenheit kontrollieren.</span></div>`:"";
+  const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
+  const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} noch nicht eindeutig auswählbar</strong><span>Setnummer oder Seltenheit fehlt in der Quelldatei. Diese Varianten werden zusammengefasst, damit nicht versehentlich die falsche Produkt-ID gespeichert wird.</span></div>`:"";
+  target.innerHTML=products.length?recognitionHtml+completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
+}
+
+function applyScannerModalRecognition(scan){
+  if(!scan)return false;
+  const match=scan.recognitionMatch;
+  const search=document.getElementById("inventoryCardSearch");
+  if(search&&match?.query)search.value=match.query;
+  if(match?.products?.filter(Boolean).length){
+    const products=match.products.filter(Boolean);
+    renderInventoryProductChoices(products,scan);
+    const selected=scan.recognizedProduct||match.selected;
+    if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}
+    return true;
+  }
+  const fallback=scan.hint||scan.recognition?.queries?.[0]||"";
+  if(search&&fallback){search.value=fallback;renderInventoryCardSearch(fallback);return true;}
+  setTimeout(()=>search?.focus(),0);return false;
+}
+
 async function renderInventoryCardSearch(query){
   const target=document.getElementById("inventoryCardResults");if(!target)return;
   const sequence=++inventoryCardSearchSequence;
@@ -2363,12 +2491,7 @@ async function renderInventoryCardSearch(query){
   target.innerHTML='<div class="muted">Passende Karten und Druckvarianten werden gesucht …</div>';
   try{
     const products=await searchInventoryCardVariants(query);if(sequence!==inventoryCardSearchSequence)return;
-    const complete=products.filter(product=>String(product.productId||"").trim()&&String(product.setName||product.set||product.setCode||"").trim()&&String(product.collectorNumber||product.setCode||"").trim()&&String(product.rarity||product.variant||"").trim());
-    const incomplete=products.filter(product=>!complete.includes(product));
-    inventoryModalVariants=new Map(complete.map(product=>[String(product.productId),product]));
-    const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
-    const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} noch nicht eindeutig auswählbar</strong><span>Setnummer oder Seltenheit fehlt in der Quelldatei. Diese Varianten werden zusammengefasst, damit nicht versehentlich die falsche Produkt-ID gespeichert wird.</span></div>`:"";
-    target.innerHTML=products.length?completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
+    renderInventoryProductChoices(products);
   }catch(error){if(sequence===inventoryCardSearchSequence)target.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;}
 }
 
@@ -2380,7 +2503,7 @@ function addInventory(initial={}, collection="business", scan=null) {
   const wrap=document.getElementById("modalFields");
   const language=initial.language||"DE",condition=initial.condition||"NM",status=initial.status||(isPrivate?"Privatsammlung":"Im Bestand");
   wrap.innerHTML=`
-    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${scan.fingerprint&&scannerMappingMatch(scan.fingerprint)?"Bekannte Karte gefunden – bitte Druckvariante kontrollieren":"Foto empfangen – bitte Karte und Druckvariante auswählen"}</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Der Scan speichert niemals automatisch. Erst Ihre Bestätigung übernimmt die Karte.</span></div></div>`:""}
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
@@ -2416,7 +2539,8 @@ function addInventory(initial={}, collection="business", scan=null) {
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
   inventoryModalVariants=new Map();
   document.getElementById("modal").showModal();
-  if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
+  if(scan)applyScannerModalRecognition(scan);
+  else if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
   else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
@@ -2426,7 +2550,7 @@ function addPurchaseLine(purchaseId,scan=null){
   document.getElementById("modalTitle").textContent=`Karte zu Einkauf #${purchase.orderNo||"-"} hinzufügen`;
   const wrap=document.getElementById("modalFields");
   wrap.innerHTML=`
-    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>Foto empfangen – Einkaufsposition bestätigen</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Die genaue Druckvariante bleibt manuell korrigierbar.</span></div></div>`:""}
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="z. B. Aschenblüte oder RA01-008" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
@@ -2454,9 +2578,7 @@ function addPurchaseLine(purchaseId,scan=null){
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
   inventoryModalVariants=new Map();document.getElementById("modal").showModal();
-  const mapping=scan?.fingerprint?scannerMappingMatch(scan.fingerprint):null;
-  if(mapping)searchInventoryCardVariants(mapping.productId).then(products=>{const selected=products.find(row=>String(row.productId)===String(mapping.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
-  else if(scan?.hint)renderInventoryCardSearch(scan.hint);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
+  if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function addSaleLine(saleId,scan=null){
@@ -2465,7 +2587,7 @@ function addSaleLine(saleId,scan=null){
   document.getElementById("modalTitle").textContent=`Karte zu Verkauf #${sale.orderNo||"-"} hinzufügen`;
   const wrap=document.getElementById("modalFields");
   wrap.innerHTML=`
-    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>Foto empfangen – Verkaufsposition bestätigen</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Die genaue Druckvariante bleibt manuell korrigierbar.</span></div></div>`:""}
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
@@ -2488,9 +2610,7 @@ function addSaleLine(saleId,scan=null){
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
   inventoryModalVariants=new Map();document.getElementById("modal").showModal();
-  const mapping=scan?.fingerprint?scannerMappingMatch(scan.fingerprint):null;
-  if(mapping)searchInventoryCardVariants(mapping.productId).then(products=>{const selected=products.find(row=>String(row.productId)===String(mapping.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
-  else if(scan?.hint)renderInventoryCardSearch(scan.hint);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
+  if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function recalculatePurchaseTotals(purchase){
@@ -4231,10 +4351,7 @@ document.addEventListener("click",event=>{
 const purchaseImportDateField = document.getElementById("purchaseImportDate");
 if (purchaseImportDateField && !purchaseImportDateField.value) purchaseImportDateField.value = todayISO();
 
-window.desktopApp?.onScannerSubmission?.(submission=>acceptScannerSubmission(submission).catch(error=>{
-  console.error("Scanner-Foto konnte nicht übernommen werden:",error);
-  alert("Das Scanner-Foto konnte nicht übernommen werden. Bitte die Karte manuell hinzufügen.");
-}));
+window.desktopApp?.onScannerSubmission?.(submission=>queueScannerSubmission(submission));
 
 applyAppearanceSettings();
 systemThemeQuery?.addEventListener?.("change",()=>{if((state.settings.themeMode||"system")==="system")applyAppearanceSettings();});

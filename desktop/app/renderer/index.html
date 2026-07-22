@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.0.0</title>
+  <title>TCG Business Manager 6.0.1</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.0.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.0.1 · SQLite</div>
         </div>
       </div>
 
@@ -839,6 +839,7 @@
         await prepareDesktopState();
         await loadScript("../shared/app-config.js");
         await loadScript("../shared/card-search.js");
+        await loadScript("../shared/scanner-recognition.js");
         await loadScript("../shared/business-automation.js");
         await loadScript("app.js");
         await loadScript("cardmarket-data-center.js");

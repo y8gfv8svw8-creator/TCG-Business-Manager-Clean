@@ -1,4 +1,4 @@
-# TCG Business Manager – Analysecenter 6.0.0
+# TCG Business Manager – Analysecenter 6.0.1
 
 Diese Version aktiviert die dauerhafte lokale SQLite-Datenbank.
 
@@ -28,7 +28,7 @@ Cardmarket-Abrechnungen können als CSV über den Universal-Import eingelesen we
 
 - Deutscher und englischer Kartenname mit fehlertoleranter Teilbegriffsuche; alle eindeutigen Cardmarket-Druckvarianten bleiben erhalten.
 - Grauer Dark Mode, globale Suche und umfangreiche Filter für Bestand, Privatsammlung, Einkäufe, Verkäufe und Marktbeobachtung.
-- Lokaler iPhone-Fotoscanner per zeitlich begrenztem QR-Code; jede Druckvariante muss vor dem Speichern bestätigt werden.
+- Lokaler iPhone-Fotoscanner per zeitlich begrenztem QR-Code mit deutscher/englischer OCR, Setnummer-Erkennung und Serienerfassung; jede Druckvariante muss vor dem Speichern bestätigt werden.
 - Getrennte Finanzsicht für Cashflow, realisierten Verkaufsgewinn, direkte Verkaufskosten und allgemeine Betriebsausgaben.
 - Wareneingänge werden bewusst zwischen Geschäftsbestand, Privatsammlung, beschädigt und storniert aufgeteilt.
 - Statusverläufe für Zahlung, Lieferung, Versand und Abrechnung bleiben dauerhaft nachvollziehbar.

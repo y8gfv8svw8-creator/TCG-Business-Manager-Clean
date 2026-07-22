@@ -1,0 +1,62 @@
+TCG Business Manager 6.0.1 – Abschlussprüfung
+================================================
+Prüfdatum: 22.07.2026
+
+Ergebnis
+--------
+BESTANDEN
+
+Automatisierte Prüfung
+----------------------
+- JavaScript-Prüfung aller Haupt-, Datenbank-, OCR-, Scanner-, Such-, Analyse- und Rendererdateien: bestanden
+- 36 von 36 Tests bestanden
+- Keine übersprungenen oder fehlgeschlagenen Tests
+- Zwei Kartenfotos innerhalb derselben Scanner-Sitzung erfolgreich angenommen
+- OCR-Setnummern, typische Zeichenverwechslungen und eindeutige Druckvariantenzuordnung geprüft
+
+Dark-Mode-Prüfung
+-----------------
+- Gebaute Windows-App im Dark Mode gestartet
+- Warnungen, Marktwerte, Kartenauswahl, Status, Kennzahlen und schreibgeschützte Felder geprüft
+- Niedrigster gemessener Kontrast: 8,76:1
+- Geforderter Mindestwert für normale Schrift: 4,5:1
+- Ergebnis: bestanden
+
+Scanner- und OCR-Prüfung
+-----------------------
+- Lokale deutsche und englische Tesseract-OCR aus der gebauten Windows-App gestartet
+- Test-Setnummer RA01-EN008 trotz OCR-Ausgabe RAO01-EN008 korrekt normalisiert
+- Verbindung bleibt nach einer Übertragung aktiv
+- Warteschlange für mehrere nacheinander gescannte Karten ist vorhanden
+- Kartenname, Setnummer und bekannte Bestätigungen werden für die Katalogsuche verwendet
+- Eine Cardmarket-Produkt-ID wird nur bei eindeutiger Druckvariante vorausgewählt
+- Auswahl bleibt vor dem Speichern vollständig manuell korrigierbar
+- Keine Cloud-Übertragung der Kartenfotos
+
+Echter Desktop-Starttest
+------------------------
+- Gebaute Windows-App aus dist\win-unpacked gestartet
+- Vollständig getrennter QA-Datenordner verwendet; echte Nutzerdaten wurden nicht geöffnet
+- Dokumentstatus: complete
+- Fenstertitel: TCG Business Manager 6.0.1
+- SQLite-Status: bereit
+- 13 Navigationsbereiche erkannt
+- Bestand und Auswertungen geöffnet und neu gerendert
+- Filter, Finanzkennzahlen, Scanner, OCR und sichere Desktop-Verbindung erkannt
+- Ergebnis: bestanden
+
+Windows-Installer
+-----------------
+Datei: dist\TCG Business Manager-Setup-6.0.1.exe
+Größe: 126.173.701 Bytes
+SHA-256: DEF53B66D6B13051CAC1A2785D679D2483FB703319B7F1AE874DC76E86399444
+Build: bestanden
+
+Wichtige Nutzungshinweise
+-------------------------
+- iPhone und PC müssen für den lokalen Scanner im selben WLAN sein.
+- Windows kann beim ersten Scannerstart nach einer Firewall-Freigabe für private Netzwerke fragen.
+- Für die beste Erkennung die Karte vollständig, gerade und ohne Spiegelung fotografieren.
+- Bei Karten mit derselben Setnummer in mehreren Seltenheiten muss die richtige Variante weiterhin ausgewählt werden.
+- Der Scanner übernimmt nie ungeprüft eine Druckvariante.
+- Windows SmartScreen kann bei einem privat erstellten, nicht öffentlich zertifizierten Installer einen Hinweis anzeigen.

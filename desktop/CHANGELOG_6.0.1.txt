@@ -1,0 +1,15 @@
+TCG Business Manager 6.0.1 – Scanner- und Dark-Mode-Korrektur
+================================================================
+
+- Lesbaren Kontrast für Warnungen, Marktanalyse, Preisstände, Eingabefelder,
+  Statusanzeigen, Versandmaterial sowie Händler- und Kundenübersichten ergänzt.
+- Statistikfelder in Versandmaterial, Versand und Kontakte wieder als getrennte
+  Karten dargestellt.
+- Lokale OCR für deutsche und englische Kartennamen sowie Setnummern eingebaut.
+- Erkannte Setnummern werden mit den vorhandenen Cardmarket-Druckvarianten
+  abgeglichen; eine Variante wird nur bei eindeutiger Zuordnung vorausgewählt.
+- Scanner-Auswahl bleibt immer manuell korrigierbar und speichert nie ungeprüft.
+- Scanner-Verbindung bleibt für mehrere Karten geöffnet.
+- Schnell eingehende Fotos werden in einer Warteschlange nacheinander bestätigt.
+- OCR arbeitet vollständig lokal; Kartenfotos werden nicht an einen Cloud-Dienst
+  übertragen.

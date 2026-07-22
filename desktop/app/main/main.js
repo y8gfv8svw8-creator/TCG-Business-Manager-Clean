@@ -3,11 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
+const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.0.0';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.0.1';
 let database = null;
 let dataRoot = '';
 let mainWindow = null;
+let scannerRecognizer = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
@@ -27,6 +29,12 @@ function ensureUserFolders() {
 
 function initializeDatabase() {
   dataRoot = ensureUserFolders();
+  scannerRecognizer = new CardScannerRecognizer({
+    cacheRoot: path.join(dataRoot, 'Cache', 'OCR'),
+    logger: message => {
+      if (message?.status === 'recognizing text') console.info(`Scanner-OCR ${Math.round(Number(message.progress || 0) * 100)} %`);
+    }
+  });
   database = new TcgDatabase({
     databasePath: path.join(dataRoot, 'Daten', 'tcg_business_manager.sqlite'),
     schemaPath: path.join(__dirname, '..', '..', 'database', 'schema.sql'),
@@ -49,6 +57,7 @@ function setupIpcHandlers() {
   ipcMain.handle('scanner:start', (_event, payload) => scannerServer.start(payload?.mode, payload?.targetId));
   ipcMain.handle('scanner:stop', () => scannerServer.stop());
   ipcMain.handle('scanner:status', () => scannerServer.status());
+  ipcMain.handle('scanner:recognize-card', (_event, payload) => scannerRecognizer.recognize(payload));
 
   ipcMain.handle('data:load-state', () => database.loadState());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));
@@ -130,6 +139,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   scannerServer.stop().catch(error => console.error('Scanner-Server konnte nicht beendet werden:', error));
+  scannerRecognizer?.terminate().catch(error => console.error('Scanner-OCR konnte nicht beendet werden:', error));
   try {
     database?.close();
   } catch (error) {

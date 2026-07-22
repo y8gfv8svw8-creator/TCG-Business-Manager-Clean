@@ -5,8 +5,10 @@ const fs = require('fs');
 const root = path.resolve(__dirname, '..');
 const executable = path.join(root, 'dist', 'win-unpacked', 'TCG Business Manager.exe');
 const qaData = path.join(root, 'dist', 'qa-runtime-data');
+const qaChromiumData = path.join(qaData, 'Chromium');
 const port = 9227;
-fs.mkdirSync(qaData, { recursive: true });
+let childOutput = '';
+fs.mkdirSync(qaChromiumData, { recursive: true });
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -26,7 +28,7 @@ async function waitForPage() {
 function evaluate(webSocketUrl, expression) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(webSocketUrl);
-    const timer = setTimeout(() => { socket.close(); reject(new Error('Oberflächenprüfung hat zu lange gedauert.')); }, 15000);
+    const timer = setTimeout(() => { socket.close(); reject(new Error('Oberflächenprüfung hat zu lange gedauert.')); }, 60000);
     socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
     socket.onerror = () => { clearTimeout(timer); reject(new Error('Verbindung zur Desktop-Oberfläche fehlgeschlagen.')); };
     socket.onmessage = event => {
@@ -41,18 +43,38 @@ function evaluate(webSocketUrl, expression) {
 
 async function main() {
   if (!fs.existsSync(executable)) throw new Error(`Testprogramm fehlt: ${executable}`);
-  const child = spawn(executable, [`--remote-debugging-port=${port}`], {
+  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${qaChromiumData}`, '--disable-gpu'], {
     cwd: path.dirname(executable), windowsHide: true,
-    env: { ...process.env, TCG_MANAGER_DATA_ROOT: qaData }, stdio: 'ignore'
+    env: { ...process.env, TCG_MANAGER_DATA_ROOT: qaData }, stdio: ['ignore', 'pipe', 'pipe']
   });
+  child.stdout.on('data', chunk => { childOutput += chunk.toString(); });
+  child.stderr.on('data', chunk => { childOutput += chunk.toString(); });
   try {
     const page = await waitForPage();
     await delay(1200);
     const result = await evaluate(page.webSocketDebuggerUrl, `(async()=>{
       renderAll();
+      document.documentElement.dataset.theme='dark';
+      const contrast=(foreground,background)=>{
+        const rgb=value=>(value.match(/[\\d.]+/g)||[]).slice(0,3).map(Number);
+        const luminance=value=>{const [r,g,b]=rgb(value).map(channel=>{channel/=255;return channel<=.03928?channel/12.92:Math.pow((channel+.055)/1.055,2.4);});return .2126*r+.7152*g+.0722*b;};
+        const lighter=Math.max(luminance(foreground),luminance(background)),darker=Math.min(luminance(foreground),luminance(background));
+        return (lighter+.05)/(darker+.05);
+      };
+      const samples=[
+        ['Warnung','business-issue warning','button'],
+        ['Marktwert','cm-result-metric','div'],
+        ['Kartenauswahl','inventory-card-choice','button'],
+        ['Status','badge blue','span'],
+        ['Kennzahl','stat-card','article']
+      ].map(([text,className,tag])=>{const node=document.createElement(tag);node.className=className;node.textContent=text;document.body.appendChild(node);const style=getComputedStyle(node);const ratio=contrast(style.color,style.backgroundColor);node.remove();return {className,ratio};});
+      const input=document.createElement('input');input.readOnly=true;const form=document.createElement('div');form.className='form-grid';form.appendChild(input);document.body.appendChild(form);const inputStyle=getComputedStyle(input);samples.push({className:'readonly',ratio:contrast(inputStyle.color,inputStyle.backgroundColor)});form.remove();
       showView('inventory');
       const inventoryActive=document.getElementById('view-inventory').classList.contains('active');
       showView('reports');
+      const ocrCanvas=document.createElement('canvas');ocrCanvas.width=620;ocrCanvas.height=160;
+      const ocrContext=ocrCanvas.getContext('2d');ocrContext.fillStyle='#fff';ocrContext.fillRect(0,0,620,160);ocrContext.fillStyle='#000';ocrContext.font='bold 58px Arial';ocrContext.fillText('RA01-EN008',45,102);
+      const ocrResult=await window.desktopApp.recognizeCardImage({imageDataUrl:ocrCanvas.toDataURL('image/png')});
       return {
         ready:document.readyState,
         title:document.title,
@@ -63,10 +85,18 @@ async function main() {
         filterPanels:document.querySelectorAll('.filter-panel').length,
         hasCashflow:Boolean(document.getElementById('mMonthlyProfit')),
         hasScanner:Boolean(document.getElementById('scanInventoryBtn')&&document.getElementById('scanPrivateBtn')),
+        scannerOcrBridge:typeof window.desktopApp?.recognizeCardImage==='function',
+        scannerOcrEngine:ocrResult?.engine||'',
+        scannerOcrSetCode:(ocrResult?.setCodes||[]).includes('RA01-EN008'),
+        scannerOcrText:ocrResult?.text||'',
+        scannerRecognitionParser:typeof window.TcgScannerRecognition?.extractSetCodes==='function',
+        scannerSeriesQueue:typeof queueScannerSubmission==='function'&&typeof finishScannerCardReview==='function',
+        darkContrastMinimum:Math.min(...samples.map(row=>row.ratio)),
+        darkContrastSamples:samples,
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -76,4 +106,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+main().catch(error => { console.error(error);if(childOutput.trim())console.error(childOutput.trim());process.exitCode = 1; });

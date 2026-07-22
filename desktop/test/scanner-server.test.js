@@ -13,7 +13,9 @@ test('stellt eine zeitlich begrenzte iPhone-Verbindung bereit und übernimmt nur
 
   const page = await fetch(info.localUrl);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /Yu-Gi-Oh!-Karte erfassen/);
+  const pageHtml = await page.text();
+  assert.match(pageHtml, /Yu-Gi-Oh!-Karte erfassen/);
+  assert.match(pageHtml, /direkt weitere Karten fotografieren/i);
 
   const invalidUrl = new URL(info.localUrl);
   invalidUrl.searchParams.set('token', 'ungueltig');
@@ -30,6 +32,16 @@ test('stellt eine zeitlich begrenzte iPhone-Verbindung bereit und übernimmt nur
   assert.equal(submissions.length, 1);
   assert.equal(submissions[0].mode, 'private');
   assert.equal(submissions[0].hint, 'RA01-EN008');
+
+  const secondResponse = await fetch(submitUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ imageDataUrl: 'data:image/jpeg;base64,BBBB', hint: 'BLCR-EN042' })
+  });
+  assert.equal(secondResponse.status, 200);
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[1].hint, 'BLCR-EN042');
+  assert.equal(server.status().running, true);
 
   await server.stop();
   assert.equal(server.status().running, false);

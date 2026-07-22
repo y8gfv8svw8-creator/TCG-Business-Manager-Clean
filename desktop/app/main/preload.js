@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   startScanner: payload => ipcRenderer.invoke('scanner:start', payload),
   stopScanner: () => ipcRenderer.invoke('scanner:stop'),
   getScannerStatus: () => ipcRenderer.invoke('scanner:status'),
+  recognizeCardImage: payload => ipcRenderer.invoke('scanner:recognize-card', payload),
   onScannerSubmission: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, submission) => callback(submission);

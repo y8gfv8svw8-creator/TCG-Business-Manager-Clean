@@ -69,6 +69,8 @@ test('findet deutsche und englische Teilnamen und liefert alle Cardmarket-Druckv
   assert.equal(apostropheResult.cards[0].metacardId, '200');
   assert.deepEqual(apostropheResult.cards[0].variants.map(row => row.productId), ['800001']);
   assert.equal(database.searchCards({query:'Blauäugiger weißer Drache'}).cards[0].rank, 0);
+  const exactSetResult = database.searchCards({query:'TST1-EN001'});
+  assert.deepEqual(exactSetResult.cards.flatMap(card => card.variants).map(row => row.productId), ['700001']);
 
   database.upsertProducts(variants.map(row => ({...row,germanName:''})));
   const storedNames = database.getCardNamesForProducts({productIds:['700001']});
@@ -150,7 +152,7 @@ test('migriert eine bestehende v3-Datenbank verlustfrei und legt vorher eine SQL
   });
   database.open();
 
-  assert.equal(database.getStatus().schemaVersion, 6);
+  assert.equal(database.getStatus().schemaVersion, 7);
   assert.equal(database.searchCards({query:'dark mag'}).cards[0].variants[0].productId, '900001');
   assert.equal(database.searchCards({query:'dunkler'}).cards[0].variants[0].productId, '900001');
   const migrationRoot = path.join(backupRoot, 'Migrationen');

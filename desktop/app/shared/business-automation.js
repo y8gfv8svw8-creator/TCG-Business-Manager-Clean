@@ -59,6 +59,7 @@
 
   function calculateSaleProfit(sale = {}, settings = {}) {
     const gross = asNumber(sale.revenue);
+    const refund = Math.max(0, asNumber(sale.refund));
     const shippingPaid = asNumber(sale.shippingPaid);
     const cardValue = asNumber(sale.cardValue) || Math.max(0, gross - shippingPaid);
     const fee = sale.fee !== undefined && sale.fee !== ''
@@ -67,8 +68,9 @@
     const packaging = asNumber(sale.material) || asNumber(sale.packaging) ||
       Math.max(0, asNumber(sale.quantity)) * asNumber(settings.packaging);
     const postage = asNumber(sale.postage);
-    const cost = asNumber(sale.cost);
-    return { gross, cardValue, fee, packaging, postage, cost, profit: gross - fee - packaging - postage - cost };
+    const cost = String(sale.status || '') === 'Rückgabe eingetroffen' ? 0 : asNumber(sale.cost);
+    const netRevenue = gross - refund;
+    return { gross, refund, netRevenue, cardValue, fee, packaging, postage, cost, profit: netRevenue - fee - packaging - postage - cost };
   }
 
   const optionalNumber = value => {
@@ -118,11 +120,175 @@
     const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy - minProfit) : 0;
     const maxByRoi = netBeforeBuy > 0 ? floorMoney(minRoi > 0 ? netBeforeBuy / (1 + minRoi) : netBeforeBuy) : 0;
     const maxBuy = recommendedSell > 0 ? floorMoney(Math.min(maxByProfit, maxByRoi)) : 0;
+    const ownedCost = Math.max(0, asNumber(prices.cost ?? prices.ownBuyAverage));
+    const minimumByProfit = feeRate < 1
+      ? (ownedCost + packaging + minProfit) / Math.max(0.01, 1 - feeRate)
+      : 0;
+    const minimumByRoi = feeRate < 1
+      ? (ownedCost * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate)
+      : 0;
+    const priceFloor = ownedCost > 0 ? Math.ceil(Math.max(minimumByProfit, minimumByRoi) * 100) / 100 : 0;
+    const quickSell = recommendedSell > 0
+      ? Math.ceil(Math.max(low || 0, priceFloor, recommendedSell * (1 - safety)) * 100) / 100
+      : 0;
+    const confidenceScore = Math.min(100,
+      pricePointCount * 10 +
+      Math.min(25, Math.max(0, asNumber(prices.marketSampleCount)) * 3) +
+      Math.min(25, Math.max(0, asNumber(prices.sellSampleCount)) * 5)
+    );
+    const confidenceLevel = confidenceScore >= 75 ? 'high' : confidenceScore >= 45 ? 'medium' : 'low';
     return {
       low, trend, avg1, avg7, avg30, pricePointCount,
       recommendedSell, safeSell, feeRate, packaging, feeAmount, netBeforeBuy,
-      minProfit, minRoi, maxByProfit, maxByRoi, maxBuy
+      minProfit, minRoi, maxByProfit, maxByRoi, maxBuy,
+      ownedCost, priceFloor, quickSell, confidenceScore, confidenceLevel
     };
+  }
+
+  const wholeQuantity = value => Math.max(0, Math.round(asNumber(value)));
+
+  function purchaseLineKey(item = {}, index = 0) {
+    return String(item.receiptLineKey || item.articleId || item.sourceRow || item.id ||
+      `${item.productId || 'unknown'}:${item.language || ''}:${item.condition || ''}:${index}`);
+  }
+
+  function normalizePurchaseReceiptLine(item = {}, index = 0) {
+    const quantity = wholeQuantity(item.quantity || 1);
+    const business = wholeQuantity(item.receivedBusiness);
+    const privateQuantity = wholeQuantity(item.receivedPrivate);
+    const damaged = wholeQuantity(item.receivedDamaged);
+    const cancelled = wholeQuantity(item.cancelledQuantity);
+    const assigned = business + privateQuantity + damaged + cancelled;
+    return {
+      key: purchaseLineKey(item, index),
+      quantity,
+      business,
+      private: privateQuantity,
+      damaged,
+      cancelled,
+      assigned,
+      open: Math.max(0, quantity - assigned),
+      valid: assigned <= quantity,
+      materializedBusiness: wholeQuantity(item.materializedBusiness),
+      materializedPrivate: wholeQuantity(item.materializedPrivate),
+      materializedDamaged: wholeQuantity(item.materializedDamaged)
+    };
+  }
+
+  function allocatePurchaseCosts(purchase = {}, method = 'value') {
+    const items = Array.isArray(purchase.pendingItems) ? purchase.pendingItems : [];
+    const normalized = items.map((item, index) => {
+      const receipt = normalizePurchaseReceiptLine(item, index);
+      const activeQuantity = Math.max(0, receipt.quantity - receipt.cancelled);
+      const unitPrice = Math.max(0, asNumber(item.unitPrice ?? item.price));
+      return { item, index, receipt, activeQuantity, unitPrice, lineValue: activeQuantity * unitPrice };
+    });
+    const activeUnits = normalized.reduce((sum, row) => sum + row.activeQuantity, 0);
+    const activeValue = normalized.reduce((sum, row) => sum + row.lineValue, 0);
+    const shipping = Math.max(0, asNumber(purchase.shipping));
+    const extra = Math.max(0, asNumber(purchase.extra));
+    const refund = Math.max(0, asNumber(purchase.refund));
+    const declaredCardValue = Math.max(0, asNumber(purchase.cardValue));
+    const paidTotal = Math.max(0, declaredCardValue + shipping + extra - refund);
+    // Active line values omit cancelled units. The difference to the amount
+    // actually paid contains shipping, trustee costs, discounts and refunds.
+    const distributableAdjustment = paidTotal - activeValue;
+    return normalized.map(row => {
+      let share = 0;
+      if (method === 'quantity' || activeValue <= 0) share = activeUnits ? row.activeQuantity / activeUnits : 0;
+      else share = row.lineValue / activeValue;
+      const allocatedShippingTotal = shipping * share;
+      const allocatedExtraTotal = (distributableAdjustment - shipping) * share;
+      const allocatedShipping = row.activeQuantity ? allocatedShippingTotal / row.activeQuantity : 0;
+      const allocatedExtra = row.activeQuantity ? allocatedExtraTotal / row.activeQuantity : 0;
+      return {
+        ...row,
+        method: method === 'quantity' ? 'quantity' : 'value',
+        allocatedShipping,
+        allocatedExtra,
+        unitCost: Math.max(0, row.unitPrice + allocatedShipping + allocatedExtra),
+        totalCost: Math.max(0, row.lineValue + allocatedShippingTotal + allocatedExtraTotal)
+      };
+    });
+  }
+
+  function planPurchaseReceipt(purchase = {}, requestedLines = [], method = 'value') {
+    const costRows = allocatePurchaseCosts(purchase, method);
+    const requestedByKey = new Map((requestedLines || []).map((row, index) => [
+      String(row.key || purchaseLineKey(row, index)), row
+    ]));
+    const lines = [];
+    const errors = [];
+    for (const costRow of costRows) {
+      const current = costRow.receipt;
+      const request = requestedByKey.get(current.key) || {};
+      const next = {
+        business: wholeQuantity(request.business ?? current.business),
+        private: wholeQuantity(request.private ?? current.private),
+        damaged: wholeQuantity(request.damaged ?? current.damaged),
+        cancelled: wholeQuantity(request.cancelled ?? current.cancelled)
+      };
+      const assigned = next.business + next.private + next.damaged + next.cancelled;
+      if (assigned > current.quantity) errors.push(`${costRow.item.name || 'Karte'}: Aufteilung ${assigned} ist groesser als Bestellmenge ${current.quantity}.`);
+      if (next.business < current.materializedBusiness || next.private < current.materializedPrivate || next.damaged < current.materializedDamaged) {
+        errors.push(`${costRow.item.name || 'Karte'}: Bereits uebernommene Exemplare koennen nur ueber eine Bestandskorrektur reduziert werden.`);
+      }
+      lines.push({
+        ...costRow,
+        ...next,
+        assigned,
+        open: Math.max(0, current.quantity - assigned),
+        addBusiness: Math.max(0, next.business - current.materializedBusiness),
+        addPrivate: Math.max(0, next.private - current.materializedPrivate),
+        addDamaged: Math.max(0, next.damaged - current.materializedDamaged)
+      });
+    }
+    const totals = lines.reduce((sum, row) => {
+      for (const key of ['business', 'private', 'damaged', 'cancelled', 'open', 'addBusiness', 'addPrivate', 'addDamaged']) sum[key] += row[key];
+      return sum;
+    }, { business: 0, private: 0, damaged: 0, cancelled: 0, open: 0, addBusiness: 0, addPrivate: 0, addDamaged: 0 });
+    const received = totals.business + totals.private + totals.damaged;
+    const status = totals.open > 0
+      ? (received + totals.cancelled > 0 ? 'Teilweise eingetroffen' : String(purchase.status || 'Unterwegs'))
+      : (received > 0 ? 'Eingetroffen' : 'Storniert');
+    return { valid: errors.length === 0, errors, lines, totals, status, method: method === 'quantity' ? 'quantity' : 'value' };
+  }
+
+  function purchaseOwnershipTotals(purchase = {}, method = purchase.costAllocationMethod || 'value') {
+    const rows = allocatePurchaseCosts(purchase, method);
+    const totals = { business: 0, private: 0, damaged: 0, cancelled: 0, open: 0, total: 0 };
+    for (const row of rows) {
+      const receipt = row.receipt;
+      totals.business += receipt.business * row.unitCost;
+      totals.private += receipt.private * row.unitCost;
+      totals.damaged += receipt.damaged * row.unitCost;
+      totals.cancelled += receipt.cancelled * row.unitPrice;
+      totals.open += receipt.open * row.unitCost;
+      totals.total += row.totalCost;
+    }
+    return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, roundMoney(value)]));
+  }
+
+  function selectInventoryForSale(inventory = [], request = {}, quantity = request.quantity || 1) {
+    const wanted = wholeQuantity(quantity);
+    const productId = String(request.productId || '').trim();
+    const language = String(request.language || '').trim().toUpperCase();
+    const condition = String(request.condition || '').trim().toUpperCase();
+    const available = (inventory || []).filter(item =>
+      !['Verkauft', 'Reserviert', 'Storniert', 'Beschädigt', 'Rückgabe unterwegs'].includes(String(item.status || '')) &&
+      (!productId || String(item.productId || '').trim() === productId)
+    );
+    const rank = item => {
+      let value = 0;
+      if (language && String(item.language || '').toUpperCase() !== language) value += 2;
+      if (condition && String(item.condition || '').toUpperCase() !== condition) value += 1;
+      return value;
+    };
+    available.sort((a, b) => rank(a) - rank(b) ||
+      String(a.purchaseDate || '').localeCompare(String(b.purchaseDate || '')) ||
+      String(a.id || '').localeCompare(String(b.id || ''))
+    );
+    return { selected: available.slice(0, wanted), missing: Math.max(0, wanted - available.length), candidates: available };
   }
 
   function planMaterialUsageChanges(materials = [], oldUsage = [], newUsage = []) {
@@ -162,10 +328,10 @@
     const currentItems = items.filter(item => !['Verkauft', 'Storniert'].includes(String(item?.status || '')));
     const reservedItems = currentItems.filter(item => String(item?.status || '') === 'Reserviert');
     const unavailableItems = currentItems.filter(item =>
-      String(item?.status || '') === 'Beschädigt'
+      ['Beschädigt', 'Rückgabe unterwegs'].includes(String(item?.status || ''))
     );
     const availableItems = currentItems.filter(item =>
-      !['Reserviert', 'Beschädigt'].includes(String(item?.status || ''))
+      !['Reserviert', 'Beschädigt', 'Rückgabe unterwegs'].includes(String(item?.status || ''))
     );
     return {
       total: currentItems.length,
@@ -219,7 +385,7 @@
     };
   }
 
-  const realizedSale = sale => ['Bezahlt', 'Versendet', 'Abgeschlossen'].includes(String(sale?.status || ''));
+  const realizedSale = sale => ['Abgeschlossen', 'Abgerechnet', 'Erstattet', 'Rückgabe eingetroffen'].includes(String(sale?.status || ''));
 
   function buildPerformanceReport(state = {}, now = new Date()) {
     const settings = state.settings || {};
@@ -236,7 +402,7 @@
 
     (state.sales || []).filter(realizedSale).forEach(sale => {
       const result = calculateSaleProfit(sale, settings);
-      add(customerMap, sale.customer, { orders: 1, cards: sale.quantity, revenue: result.gross, cost: result.cost, profit: result.profit });
+      add(customerMap, sale.customer, { orders: 1, cards: sale.quantity, revenue: result.netRevenue, cost: result.cost, profit: result.profit });
       const items = Array.isArray(sale.items) && sale.items.length ? sale.items : [{
         name: sale.cardNames || 'Sammelverkauf', set: 'Ohne Set', quantity: Math.max(1, asNumber(sale.quantity)),
         unitPrice: result.cardValue / Math.max(1, asNumber(sale.quantity))
@@ -246,15 +412,22 @@
         const quantity = Math.max(1, asNumber(item.quantity));
         const lineRevenue = quantity * asNumber(item.unitPrice);
         const share = lineTotal > 0 ? lineRevenue / lineTotal : quantity / Math.max(1, items.reduce((sum, row) => sum + Math.max(1, asNumber(row.quantity)), 0));
-        const values = { orders: 1, cards: quantity, revenue: result.gross * share, cost: result.cost * share, profit: result.profit * share };
+        const values = { orders: 1, cards: quantity, revenue: result.netRevenue * share, cost: result.cost * share, profit: result.profit * share };
         add(cardMap, item.name, values);
         add(setMap, item.set || item.setName || 'Ohne Set', values);
       });
     });
 
     (state.purchases || []).filter(purchase => purchase.status !== 'Storniert').forEach(purchase => {
-      const total = asNumber(purchase.cardValue) + asNumber(purchase.shipping) + asNumber(purchase.extra);
-      add(sellerMap, purchase.seller, { orders: 1, cards: purchase.items, cost: total });
+      const hasLines = Array.isArray(purchase.pendingItems) && purchase.pendingItems.length;
+      const ownership = hasLines ? purchaseOwnershipTotals(purchase) : null;
+      const total = hasLines
+        ? asNumber(ownership.business) + asNumber(ownership.damaged)
+        : Math.max(0, asNumber(purchase.cardValue) + asNumber(purchase.shipping) + asNumber(purchase.extra) - asNumber(purchase.refund));
+      const cards = hasLines
+        ? purchase.pendingItems.reduce((sum, item, index) => { const receipt = normalizePurchaseReceiptLine(item, index); return sum + receipt.business + receipt.damaged; }, 0)
+        : asNumber(purchase.items);
+      if (total > 0 || cards > 0) add(sellerMap, purchase.seller, { orders: 1, cards, cost: total });
     });
 
     const nowTime = new Date(now).getTime();
@@ -297,10 +470,26 @@
     const missingPurchaseIds = (state.purchases || []).flatMap(row => row.pendingItems || []).filter(item => !String(item.productId || '').match(/\d/)).length;
     if (missingPurchaseIds) push('warning', 'Kartenzuordnung', `${missingPurchaseIds} Einkaufsposition(en) ohne Cardmarket-ID`, 'Bitte die Quelldatei oder Zuordnung prüfen.', 'purchases');
 
+    const incompletePurchasePrints = (state.purchases || []).flatMap(row => row.pendingItems || []).filter(item =>
+      String(item.productId || '').match(/\d/) && (!String(item.set || item.setName || '').trim() || !String(item.collectorNumber || '').trim() || !String(item.rarity || '').trim())
+    ).length;
+    if (incompletePurchasePrints) push('warning', 'Druckvariante', `${incompletePurchasePrints} Einkaufsposition(en) mit unvollständigen Druckdaten`, 'Set, Setnummer und Seltenheit vor dem Wareneingang prüfen.', 'purchases');
+    const unassignedPurchaseUnits = (state.purchases || []).flatMap(row => row.pendingItems || []).reduce((sum, item, index) =>
+      sum + normalizePurchaseReceiptLine(item, index).open, 0
+    );
+    if (unassignedPurchaseUnits) push('info', 'Wareneingang', `${unassignedPurchaseUnits} gekaufte Karte(n) noch nicht aufgeteilt`, 'Beim Eintreffen zwischen Geschäftsbestand, Privatsammlung, beschädigt und storniert aufteilen.', 'purchases');
+    const privateWithoutCost = (state.privateCollection || []).filter(item => asNumber(item.cost) <= 0).length;
+    if (privateWithoutCost) push('info', 'Privatsammlung', `${privateWithoutCost} private Karte(n) ohne Einstand`, 'Der private Einstand beeinflusst keine Geschäftsauswertung.', 'private');
+
     (state.sales || []).forEach(sale => {
       if (realizedSale(sale) && asNumber(sale.quantity) > 0 && asNumber(sale.cost) <= 0) push('warning', 'Kalkulation', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne Wareneinsatz`, 'Der ausgewiesene Gewinn kann zu hoch sein.', 'sales');
       if (['Versendet', 'Abgeschlossen'].includes(sale.status) && asNumber(sale.postage) <= 0) push('info', 'Versand', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne tatsächliches Porto`, 'Falls Porto angefallen ist, bitte den wirklich bezahlten Betrag ergänzen.', 'sales');
       if (asNumber(sale.shippingPaid) > asNumber(sale.revenue)) push('error', 'Kalkulation', `Versandbetrag bei ${sale.orderNo || 'Verkauf'} ist höher als die Einnahme`, 'Einnahme und Käufer-Versand prüfen.', 'sales');
+      const detailedItems = sale.items || [];
+      const requested = detailedItems.length ? detailedItems.reduce((sum, item) => sum + wholeQuantity(item.quantity), 0) : wholeQuantity(sale.quantity);
+      const linked = new Set(sale.itemIds || []).size;
+      if (realizedSale(sale) && requested > 0 && !detailedItems.length) push('warning', 'Verkaufspositionen', `Verkauf ${sale.orderNo || 'ohne Nummer'} enthält nur einen Sammeltext`, 'Karten einzeln ergänzen, damit Druckvariante, VK und Wareneinsatz lernfähig werden.', 'sales');
+      if (requested > linked) push('warning', 'Bestandszuordnung', `Verkauf ${sale.orderNo || 'ohne Nummer'}: ${requested - linked} Karte(n) ohne Einkaufslos`, 'Bestandszuordnung prüfen, damit Wareneinsatz und Gewinn stimmen.', 'sales');
     });
 
     const lastPrice = state.sync?.lastPriceUpdate || '';
@@ -336,7 +525,8 @@
     const sales = state.sales || [];
     return {
       purchasesInTransit: purchases.filter(row => row.status === 'Unterwegs').length,
-      purchasesReady: purchases.filter(row => row.status === 'Eingetroffen' && !row.inventoryCreated).length,
+      purchasesReady: purchases.filter(row => ['Eingetroffen', 'Teilweise eingetroffen'].includes(row.status) &&
+        (row.pendingItems || []).some((item, index) => normalizePurchaseReceiptLine(item, index).open > 0)).length,
       salesOpen: sales.filter(row => ['Offen', 'Bezahlt'].includes(row.status)).length,
       salesToPack: sales.filter(row => ['Kommissioniert', 'Verpackt'].includes(row.status) || ['Kommissioniert', 'Verpackt'].includes(row.workflowStage)).length,
       salesShipped: sales.filter(row => row.status === 'Versendet').length
@@ -405,6 +595,12 @@
     detectCsvImportType,
     calculateSaleProfit,
     calculateAutomaticPriceTargets,
+    purchaseLineKey,
+    normalizePurchaseReceiptLine,
+    allocatePurchaseCosts,
+    planPurchaseReceipt,
+    purchaseOwnershipTotals,
+    selectInventoryForSale,
     planMaterialUsageChanges,
     calculateInventoryBuckets,
     planInventoryTotalCorrection,

@@ -57,6 +57,19 @@
     };
   }
 
+  function parseSetCode(value = "") {
+    const compact = String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+    const match = compact.match(/^([A-Z0-9/]{2,12})-(?:([A-Z]{2}))?([0-9]{1,4}[A-Z]?)$/);
+    if (!match) return null;
+    return {
+      prefix: match[1],
+      language: match[2] || "",
+      number: match[3],
+      neutral: `${match[1]}-${match[3]}`,
+      full: compact
+    };
+  }
+
   function matchesSearch(documentOrValues, query = "") {
     const document = documentOrValues && typeof documentOrValues === "object" && !Array.isArray(documentOrValues)
       ? documentOrValues
@@ -78,6 +91,7 @@
     normalizeCompact,
     buildSearchDocument,
     queryForms,
+    parseSetCode,
     matchesSearch,
     uniqueStrings
   });

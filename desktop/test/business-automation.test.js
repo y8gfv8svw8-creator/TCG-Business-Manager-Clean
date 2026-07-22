@@ -134,3 +134,45 @@ test('ein Cardmarket-Bestandssnapshot gleicht nur verfügbare Exemplare ab', () 
   assert.equal(plan.buckets.reserved, 1);
   assert.equal(plan.buckets.sold, 1);
 });
+
+test('teilt einen Wareneingang dauerhaft in Geschäftsbestand und Privatsammlung mit echten Stückkosten auf', () => {
+  const purchase = {
+    cardValue: 30, shipping: 3, extra: 0, refund: 0,
+    pendingItems: [{ receiptLineKey: 'line-1', productId: '123', name: 'Testkarte', quantity: 3, unitPrice: 10 }]
+  };
+  const plan = automation.planPurchaseReceipt(purchase, [{ key: 'line-1', business: 2, private: 1 }], 'value');
+  assert.equal(plan.valid, true);
+  assert.equal(plan.status, 'Eingetroffen');
+  assert.equal(plan.lines[0].unitCost, 11);
+  assert.deepEqual(plan.totals, { business: 2, private: 1, damaged: 0, cancelled: 0, open: 0, addBusiness: 2, addPrivate: 1, addDamaged: 0 });
+
+  purchase.pendingItems[0].receivedBusiness = 2;
+  purchase.pendingItems[0].receivedPrivate = 1;
+  purchase.pendingItems[0].materializedBusiness = 2;
+  purchase.pendingItems[0].materializedPrivate = 1;
+  assert.deepEqual(automation.purchaseOwnershipTotals(purchase), { business: 22, private: 11, damaged: 0, cancelled: 0, open: 0, total: 33 });
+  assert.equal(automation.planPurchaseReceipt(purchase, [{ key: 'line-1', business: 1, private: 1 }]).valid, false);
+});
+
+test('ordnet Verkäufen standardmäßig das älteste exakt passende Einkaufsexemplar zu', () => {
+  const inventory = [
+    { id: 'new', productId: '42', purchaseDate: '2026-07-20', language: 'DE', condition: 'NM', status: 'Im Bestand' },
+    { id: 'old-en', productId: '42', purchaseDate: '2026-07-01', language: 'EN', condition: 'NM', status: 'Im Bestand' },
+    { id: 'old-de', productId: '42', purchaseDate: '2026-07-02', language: 'DE', condition: 'NM', status: 'Im Bestand' },
+    { id: 'reserved', productId: '42', purchaseDate: '2026-06-01', language: 'DE', condition: 'NM', status: 'Reserviert' }
+  ];
+  const result = automation.selectInventoryForSale(inventory, { productId: '42', language: 'DE', condition: 'NM' }, 2);
+  assert.deepEqual(result.selected.map(row => row.id), ['old-de', 'new']);
+  assert.equal(result.missing, 0);
+});
+
+test('zieht Erstattungen vom realisierten Verkaufsgewinn ab und sperrt laufende Rückgaben', () => {
+  const result = automation.calculateSaleProfit({ revenue: 20, refund: 5, fee: 1, postage: 1, cost: 7, packaging: 1 });
+  assert.equal(result.netRevenue, 15);
+  assert.equal(result.profit, 5);
+  const buckets = automation.calculateInventoryBuckets([{ id: 'return', status: 'Rückgabe unterwegs' }]);
+  assert.deepEqual({ total: buckets.total, available: buckets.available, unavailable: buckets.unavailable }, { total: 1, available: 0, unavailable: 1 });
+  const returned = automation.calculateSaleProfit({ status:'Rückgabe eingetroffen', revenue:20, refund:20, fee:1, postage:1, cost:7 });
+  assert.equal(returned.cost, 0, 'Nach physischem Rücklauf bleibt der Karten-EK im Bestand und wird nicht als Verkaufskosten verbraucht');
+  assert.equal(returned.profit, -2);
+});

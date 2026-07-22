@@ -97,3 +97,15 @@ Patch 9 – Bestandsabgleich, Reservierungen und Korrekturen
 - Im selben Dialog können Set, Setname, Setnummer und Version/Seltenheit korrigiert werden. Änderungen werden für dieselbe Cardmarket-Produkt-ID in Bestand, Bestellungen, Verkäufen und Marktbeobachtung übernommen.
 - Bestandszugänge, Reservierungen, Verkäufe, Rückbuchungen und manuelle Korrekturen werden produktbezogen im Bewegungsverlauf protokolliert.
 - Bereits lokal gespeicherte Cardmarket-/Yu-Gi-Oh!-Druckdaten ergänzen fehlende Set-, Setnummer- und Seltenheitsfelder beim Start und nach neuen Bestands- oder Einkaufsimporten dauerhaft.
+
+Patch 10 – Wareneingang, Privatsammlung und belastbare Preisbasis
+- Jeder Wareneingang wird positionsgenau auf Geschäftsbestand, Privatsammlung, beschädigte, stornierte und noch offene Exemplare verteilt.
+- Einkaufsversand, Zusatzkosten, Rabatte und Gutschriften fließen anteilig in den tatsächlichen Stück-EK ein; private Karten bleiben aus der Geschäftsauswertung ausgeschlossen.
+- Private Karten erhalten eine eigene Ansicht, bleiben dauerhaft in SQLite gespeichert und können später bewusst in den Geschäftsbestand verschoben werden.
+- Wiederholte Einkaufsimporte aktualisieren vorhandene Bestellungen, ohne Bestellungen zu verdoppeln oder bereits bestätigte Wareneingänge zu löschen.
+- Verkäufe werden konkreten Einkaufsexemplaren zugeordnet. FIFO ist vorausgewählt, kann aber pro Exemplar geändert werden; der echte Wareneinsatz wird automatisch übernommen.
+- Rückgaben bleiben bis zum bestätigten Eingang nicht verfügbar. Erstattungen werden vom Umsatz und Gewinn abgezogen und geben ohne Wareneingang keine Karte frei.
+- Die Kartensuche erkennt exakte Setnummern und Produkt-IDs, unterdrückt falsche Zahlentreffer und zeigt vollständige Druckvarianten einzeln an. Nicht eindeutig belegte Varianten werden sicher zusammengefasst.
+- SQLite-Schema v7 speichert Wareneingangszeilen, geschäftliche und private Bestandsobjekte, Erstattungen sowie die tägliche Historie der Preisempfehlungen.
+- Preisvorschläge unterscheiden Max-EK, normale VK-Empfehlung, Schnellverkauf und persönliche Preisuntergrenze. Eigene Preise fließen erst aus tatsächlich übernommenen Käufen und abgeschlossenen Verkäufen ein.
+- Vor der Schema-Migration wird automatisch eine SQLite-Sicherung erstellt; alle neuen Abläufe sind durch automatisierte Such-, Migrations-, Bestands-, Kosten- und Preisberechnungstests abgedeckt.

@@ -73,7 +73,7 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   const recommendation = database.getTradeRecommendations({productIds:['123456']}).recommendations[0];
   assert.equal(recommendation.ownBuyAverage, 9);
   assert.equal(recommendation.ownSellAverage, 15);
-  assert.equal(recommendation.buySampleCount, 2);
+  assert.equal(recommendation.buySampleCount, 1, 'Nur tatsächlich in den Geschäftsbestand übernommene Exemplare zählen als eigener EK');
   assert.equal(recommendation.sellSampleCount, 1);
   assert.ok(recommendation.recommendedBuy > 0);
   assert.ok(recommendation.recommendedSell > 0);
@@ -109,6 +109,7 @@ test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das ak
   `).run();
   // Simuliert eine echte v4-Datei: Die neuen Tabellen gab es vor dem Öffnen nicht.
   for (const table of [
+    'pricing_recommendation_history','inventory_assets','purchase_receipt_lines',
     'pricing_recommendations','market_observation_summary','market_observations','trade_lines',
     'trade_orders','business_events','external_entity_links','sync_runs','data_sources'
   ]) legacy.exec(`DROP TABLE IF EXISTS ${table};`);
@@ -121,11 +122,33 @@ test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das ak
   });
   database.open();
   const status = database.getTradeDatabaseStatus();
-  assert.equal(database.getStatus().schemaVersion, 6);
+  assert.equal(database.getStatus().schemaVersion, 7);
   assert.equal(status.orderCount, 2);
   assert.equal(status.marketObservationCount, 1);
   assert.equal(status.eventCount, 3);
   assert.equal(fs.readdirSync(path.join(backupRoot, 'Migrationen')).filter(name => name.endsWith('.sqlite')).length, 1);
+});
+
+test('speichert Wareneingangsaufteilung und private Karten getrennt in SQLite', t => {
+  const {database} = temporaryDatabase(t);
+  const state = sampleState();
+  state.purchases[0].pendingItems[0] = {
+    ...state.purchases[0].pendingItems[0], receiptLineKey:'line-1',
+    receivedBusiness:1, materializedBusiness:1,
+    receivedPrivate:1, materializedPrivate:1
+  };
+  state.inventory[0].purchaseLineKey='purchase-1:line-1';
+  state.privateCollection=[{
+    id:'private-1', purchaseId:'purchase-1', purchaseLineKey:'purchase-1:line-1',
+    productId:'123456', name:'Testkarte', cost:9, status:'Privatsammlung', purchaseDate:'2026-07-01'
+  }];
+
+  database.saveState(state);
+  const receipt={...database.db.prepare('SELECT business_quantity, private_quantity, open_quantity, unit_cost FROM purchase_receipt_lines WHERE archived=0').get()};
+  assert.deepEqual(receipt,{business_quantity:1,private_quantity:1,open_quantity:0,unit_cost:9});
+  const assets=database.db.prepare('SELECT ownership, inventory_id FROM inventory_assets WHERE archived=0 ORDER BY ownership').all().map(row=>({...row}));
+  assert.deepEqual(assets,[{ownership:'business',inventory_id:'inventory-1'},{ownership:'private',inventory_id:'private-1'}]);
+  assert.equal(database.getTradeRecommendations({productIds:['123456']}).recommendations[0].buySampleCount,1);
 });
 
 test('speichert Cardmarket-Abrechnungen normalisiert und API-kompatibel in SQLite', t => {

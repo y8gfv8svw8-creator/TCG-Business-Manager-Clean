@@ -292,6 +292,7 @@ CREATE TABLE IF NOT EXISTS trade_orders (
   extra REAL NOT NULL DEFAULT 0,
   fees REAL NOT NULL DEFAULT 0,
   postage REAL NOT NULL DEFAULT 0,
+  refunds REAL NOT NULL DEFAULT 0,
   cost REAL NOT NULL DEFAULT 0,
   revenue REAL NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
@@ -324,6 +325,7 @@ CREATE TABLE IF NOT EXISTS trade_lines (
   allocated_extra REAL NOT NULL DEFAULT 0,
   unit_cost REAL NOT NULL DEFAULT 0,
   unit_net REAL NOT NULL DEFAULT 0,
+  allocated_refund REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT '',
   transaction_date TEXT NOT NULL DEFAULT '',
   archived INTEGER NOT NULL DEFAULT 0,
@@ -389,6 +391,8 @@ CREATE TABLE IF NOT EXISTS pricing_recommendations (
   product_id TEXT PRIMARY KEY,
   calculated_at TEXT NOT NULL,
   recommended_buy REAL,
+  price_floor REAL,
+  quick_sell REAL,
   recommended_sell REAL,
   own_buy_average REAL,
   own_sell_average REAL,
@@ -398,6 +402,8 @@ CREATE TABLE IF NOT EXISTS pricing_recommendations (
   market_sample_count INTEGER NOT NULL DEFAULT 0,
   confidence_score REAL NOT NULL DEFAULT 0,
   confidence_level TEXT NOT NULL DEFAULT 'low',
+  model_version TEXT NOT NULL DEFAULT 'v1',
+  volatility REAL NOT NULL DEFAULT 0,
   explanation_json TEXT NOT NULL DEFAULT '[]'
 );
 
@@ -440,3 +446,79 @@ ON settlement_entries(external_order_id, transaction_date DESC);
 
 CREATE INDEX IF NOT EXISTS idx_settlement_entries_match
 ON settlement_entries(match_status, transaction_date DESC);
+
+-- Normalisierte Wareneingaenge und Eigentumszuordnung. Die Tabellen bilden
+-- den aktuellen Stand aus app_state ab; jede Aenderung bleibt zusaetzlich im
+-- append-only business_events-Protokoll erhalten.
+CREATE TABLE IF NOT EXISTS purchase_receipt_lines (
+  receipt_line_key TEXT PRIMARY KEY,
+  purchase_id TEXT NOT NULL,
+  order_no TEXT NOT NULL DEFAULT '',
+  source_row TEXT NOT NULL DEFAULT '',
+  product_id TEXT NOT NULL DEFAULT '',
+  ordered_quantity INTEGER NOT NULL DEFAULT 0,
+  business_quantity INTEGER NOT NULL DEFAULT 0,
+  private_quantity INTEGER NOT NULL DEFAULT 0,
+  damaged_quantity INTEGER NOT NULL DEFAULT 0,
+  cancelled_quantity INTEGER NOT NULL DEFAULT 0,
+  open_quantity INTEGER NOT NULL DEFAULT 0,
+  unit_price REAL NOT NULL DEFAULT 0,
+  allocated_shipping REAL NOT NULL DEFAULT 0,
+  allocated_extra REAL NOT NULL DEFAULT 0,
+  unit_cost REAL NOT NULL DEFAULT 0,
+  allocation_method TEXT NOT NULL DEFAULT 'value',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_receipt_purchase
+ON purchase_receipt_lines(purchase_id, archived);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_receipt_product
+ON purchase_receipt_lines(product_id, archived);
+
+CREATE TABLE IF NOT EXISTS inventory_assets (
+  inventory_id TEXT PRIMARY KEY,
+  ownership TEXT NOT NULL CHECK(ownership IN ('business', 'private')),
+  purchase_id TEXT NOT NULL DEFAULT '',
+  purchase_line_key TEXT NOT NULL DEFAULT '',
+  sale_id TEXT NOT NULL DEFAULT '',
+  product_id TEXT NOT NULL DEFAULT '',
+  card_name TEXT NOT NULL DEFAULT '',
+  set_name TEXT NOT NULL DEFAULT '',
+  collector_number TEXT NOT NULL DEFAULT '',
+  rarity TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT '',
+  card_condition TEXT NOT NULL DEFAULT '',
+  acquisition_cost REAL NOT NULL DEFAULT 0,
+  acquisition_date TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_assets_product
+ON inventory_assets(product_id, ownership, status, archived);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_assets_purchase
+ON inventory_assets(purchase_id, ownership, archived);
+
+-- Tagesgenaue Vorhersagen werden nicht ueberschrieben. Dadurch kann spaeter
+-- gegen den tatsaechlichen Verkaufspreis und die Haltedauer getestet werden.
+CREATE TABLE IF NOT EXISTS pricing_recommendation_history (
+  product_id TEXT NOT NULL,
+  calculated_date TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  calculated_at TEXT NOT NULL,
+  max_buy REAL,
+  price_floor REAL,
+  quick_sell REAL,
+  recommended_sell REAL,
+  confidence_score REAL NOT NULL DEFAULT 0,
+  inputs_json TEXT NOT NULL DEFAULT '{}',
+  explanation_json TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY(product_id, calculated_date, model_version)
+);

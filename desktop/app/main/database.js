@@ -2,8 +2,9 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
+const businessAutomation = require('../shared/business-automation');
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 function isoNow() {
   return new Date().toISOString();
@@ -85,7 +86,7 @@ function isCancelledStatus(status) {
 function isRealizedSaleStatus(status) {
   const value = String(status || '').trim();
   if (!value || isCancelledStatus(value)) return false;
-  return /bezahlt|paid|kommissioniert|picked|verpackt|packed|versendet|shipped|abgeschlossen|completed|received|angekommen/i.test(value);
+  return /abgeschlossen|completed|received|angekommen|abgerechnet|settled/i.test(value);
 }
 
 class TcgDatabase {
@@ -177,6 +178,7 @@ class TcgDatabase {
       if (currentVersion < 4) this.migrateToVersion4();
       if (currentVersion < 5) this.migrateToVersion5();
       if (currentVersion < 6) this.migrateToVersion6();
+      if (currentVersion < 7) this.migrateToVersion7();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -315,6 +317,20 @@ class TcgDatabase {
 
   migrateToVersion6() {
     this.ensureDataSources();
+  }
+
+  migrateToVersion7() {
+    this.ensureDataSources();
+    this.addColumnIfMissing('trade_orders', 'refunds', 'REAL NOT NULL DEFAULT 0');
+    this.addColumnIfMissing('trade_lines', 'allocated_refund', 'REAL NOT NULL DEFAULT 0');
+    this.addColumnIfMissing('pricing_recommendations', 'price_floor', 'REAL');
+    this.addColumnIfMissing('pricing_recommendations', 'quick_sell', 'REAL');
+    this.addColumnIfMissing('pricing_recommendations', 'model_version', "TEXT NOT NULL DEFAULT 'v1'");
+    this.addColumnIfMissing('pricing_recommendations', 'volatility', 'REAL NOT NULL DEFAULT 0');
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (!row?.state_json) return;
+    const state = JSON.parse(row.state_json);
+    this.materializeState(state, row.updated_at || isoNow());
   }
 
   close() {
@@ -467,6 +483,7 @@ class TcgDatabase {
       ['purchase', 'purchases'],
       ['sale', 'sales'],
       ['inventory', 'inventory'],
+      ['private_inventory', 'privateCollection'],
       ['settlement', 'reconciliations']
     ];
     const insert = this.db.prepare(`
@@ -509,6 +526,7 @@ class TcgDatabase {
     const purchases = Array.isArray(state?.purchases) ? state.purchases : [];
     const sales = Array.isArray(state?.sales) ? state.sales : [];
     const inventory = Array.isArray(state?.inventory) ? state.inventory : [];
+    const privateCollection = Array.isArray(state?.privateCollection) ? state.privateCollection : [];
     const settings = state?.settings || {};
     const inventoryById = new Map(inventory.map((row, index) => [recordId(row, index), row]));
 
@@ -517,15 +535,17 @@ class TcgDatabase {
       WHERE materialized_from = 'app_state' AND archived = 0;
       UPDATE trade_orders SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}'
       WHERE materialized_from = 'app_state' AND archived = 0;
+      UPDATE purchase_receipt_lines SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE inventory_assets SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
     `);
 
     const upsertOrder = this.db.prepare(`
       INSERT INTO trade_orders (
         order_key, trade_type, local_order_id, origin_source_id, materialized_from,
         external_order_id, order_no, transaction_date, partner, country, status,
-        card_value, shipping, extra, fees, postage, cost, revenue,
+        card_value, shipping, extra, fees, postage, refunds, cost, revenue,
         archived, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(order_key) DO UPDATE SET
         origin_source_id = excluded.origin_source_id,
         external_order_id = excluded.external_order_id,
@@ -539,6 +559,7 @@ class TcgDatabase {
         extra = excluded.extra,
         fees = excluded.fees,
         postage = excluded.postage,
+        refunds = excluded.refunds,
         cost = excluded.cost,
         revenue = excluded.revenue,
         archived = 0,
@@ -550,9 +571,9 @@ class TcgDatabase {
         line_key, order_key, trade_type, local_order_id, origin_source_id, materialized_from,
         external_article_id, product_id, metacard_id, card_name, set_name, rarity,
         language, card_condition, quantity, unit_price, allocated_shipping,
-        allocated_extra, unit_cost, unit_net, status, transaction_date,
+        allocated_extra, unit_cost, unit_net, allocated_refund, status, transaction_date,
         archived, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'app_state', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(line_key) DO UPDATE SET
         order_key = excluded.order_key,
         origin_source_id = excluded.origin_source_id,
@@ -570,12 +591,63 @@ class TcgDatabase {
         allocated_extra = excluded.allocated_extra,
         unit_cost = excluded.unit_cost,
         unit_net = excluded.unit_net,
+        allocated_refund = excluded.allocated_refund,
         status = excluded.status,
         transaction_date = excluded.transaction_date,
         archived = 0,
         raw_json = excluded.raw_json,
         updated_at = excluded.updated_at
     `);
+
+    const upsertReceiptLine = this.db.prepare(`
+      INSERT INTO purchase_receipt_lines (
+        receipt_line_key, purchase_id, order_no, source_row, product_id,
+        ordered_quantity, business_quantity, private_quantity, damaged_quantity,
+        cancelled_quantity, open_quantity, unit_price, allocated_shipping,
+        allocated_extra, unit_cost, allocation_method, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(receipt_line_key) DO UPDATE SET
+        purchase_id=excluded.purchase_id, order_no=excluded.order_no,
+        source_row=excluded.source_row, product_id=excluded.product_id,
+        ordered_quantity=excluded.ordered_quantity, business_quantity=excluded.business_quantity,
+        private_quantity=excluded.private_quantity, damaged_quantity=excluded.damaged_quantity,
+        cancelled_quantity=excluded.cancelled_quantity, open_quantity=excluded.open_quantity,
+        unit_price=excluded.unit_price, allocated_shipping=excluded.allocated_shipping,
+        allocated_extra=excluded.allocated_extra, unit_cost=excluded.unit_cost,
+        allocation_method=excluded.allocation_method, archived=0,
+        raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    const upsertAsset = this.db.prepare(`
+      INSERT INTO inventory_assets (
+        inventory_id, ownership, purchase_id, purchase_line_key, sale_id,
+        product_id, card_name, set_name, collector_number, rarity, language,
+        card_condition, acquisition_cost, acquisition_date, status, location,
+        archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(inventory_id) DO UPDATE SET
+        ownership=excluded.ownership, purchase_id=excluded.purchase_id,
+        purchase_line_key=excluded.purchase_line_key, sale_id=excluded.sale_id,
+        product_id=excluded.product_id, card_name=excluded.card_name,
+        set_name=excluded.set_name, collector_number=excluded.collector_number,
+        rarity=excluded.rarity, language=excluded.language,
+        card_condition=excluded.card_condition, acquisition_cost=excluded.acquisition_cost,
+        acquisition_date=excluded.acquisition_date, status=excluded.status,
+        location=excluded.location, archived=0, raw_json=excluded.raw_json,
+        updated_at=excluded.updated_at
+    `);
+
+    const writeAsset = (item, index, ownership) => upsertAsset.run(
+      recordId(item, index), ownership, String(item.purchaseId || ''),
+      String(item.purchaseLineKey || ''), String(item.saleId || ''),
+      /^\d+$/.test(String(item.productId || '').trim()) ? String(item.productId).trim() : '',
+      String(item.name || ''), String(item.setName || item.set || ''),
+      String(item.collectorNumber || ''), String(item.rarity || item.version || ''),
+      String(item.language || ''), String(item.condition || ''), numberValue(item.cost),
+      String(item.purchaseDate || ''), String(item.status || ''), String(item.location || ''),
+      JSON.stringify(item), updatedAt
+    );
+    inventory.forEach((item, index) => writeAsset(item, index, 'business'));
+    privateCollection.forEach((item, index) => writeAsset(item, index, 'private'));
 
     const insertLine = (order, item, index, values = {}) => {
       const rawProductId = String(values.productId ?? item?.productId ?? '').trim();
@@ -594,7 +666,7 @@ class TcgDatabase {
         positiveQuantity(values.quantity ?? item?.quantity),
         numberValue(values.unitPrice ?? item?.unitPrice),
         numberValue(values.allocatedShipping), numberValue(values.allocatedExtra),
-        numberValue(values.unitCost), numberValue(values.unitNet),
+        numberValue(values.unitCost), numberValue(values.unitNet), numberValue(values.allocatedRefund),
         String(order.status || ''), String(order.date || ''), JSON.stringify(item || {}), updatedAt
       );
     };
@@ -610,35 +682,57 @@ class TcgDatabase {
         orderKey, 'purchase', localId, sourceId,
         String(purchase.externalOrderId || purchase.orderNo || ''), String(purchase.orderNo || ''),
         String(purchase.date || ''), String(purchase.seller || ''), String(purchase.country || ''),
-        String(purchase.status || ''), cardValue, shipping, extra, 0, 0,
-        cardValue + shipping + extra, 0, JSON.stringify(purchase), updatedAt
+        String(purchase.status || ''), cardValue, shipping, extra, 0, 0, numberValue(purchase.refund),
+        Math.max(0, cardValue + shipping + extra - numberValue(purchase.refund)), 0, JSON.stringify(purchase), updatedAt
       );
       const order = { orderKey, tradeType: 'purchase', localId, sourceId, status: purchase.status, date: purchase.date };
       const pending = Array.isArray(purchase.pendingItems) ? purchase.pendingItems : [];
       const linkedInventory = inventory.filter(item => String(item.purchaseId || '') === localId);
-      const items = pending.length ? pending : linkedInventory;
-      const totalQuantity = items.length
-        ? items.reduce((sum, item) => sum + positiveQuantity(item.quantity), 0)
-        : positiveQuantity(purchase.items);
-      const allocatedShipping = totalQuantity ? shipping / totalQuantity : 0;
-      const allocatedExtra = totalQuantity ? extra / totalQuantity : 0;
-      if (items.length) {
-        items.forEach((item, index) => {
-          const fromPending = pending.length > 0;
-          const unitPrice = fromPending
-            ? numberValue(item.unitPrice)
-            : Math.max(0, numberValue(item.cost) - allocatedShipping - allocatedExtra);
-          insertLine(order, item, index, {
-            unitPrice, allocatedShipping, allocatedExtra,
-            unitCost: fromPending ? unitPrice + allocatedShipping + allocatedExtra : numberValue(item.cost),
-            quantity: item.quantity || 1
+      if (pending.length) {
+        const allocationMethod = purchase.costAllocationMethod === 'quantity' ? 'quantity' : 'value';
+        const costRows = businessAutomation.allocatePurchaseCosts(purchase, allocationMethod);
+        const claimedLegacyAssets = new Set();
+        costRows.forEach((row, index) => {
+          const item = row.item;
+          const receipt = row.receipt;
+          const receiptLineKey = `${localId}:${receipt.key}`;
+          const exactLinkedCount = linkedInventory.filter(asset =>
+            String(asset.status || '') !== 'Beschädigt' && String(asset.purchaseLineKey || '') === receiptLineKey
+          ).length;
+          const legacyMatches = linkedInventory.filter(asset =>
+            String(asset.status || '') !== 'Beschädigt' && !asset.purchaseLineKey &&
+            !claimedLegacyAssets.has(recordId(asset)) && String(asset.productId || '') === String(item.productId || '')
+          ).slice(0, Math.max(0, receipt.quantity - exactLinkedCount));
+          legacyMatches.forEach(asset => claimedLegacyAssets.add(recordId(asset)));
+          const linkedCount = exactLinkedCount + legacyMatches.length;
+          const businessQuantity = Math.max(receipt.business, linkedCount);
+          const privateQuantity = receipt.private;
+          const damagedQuantity = receipt.damaged;
+          const cancelledQuantity = receipt.cancelled;
+          const openQuantity = Math.max(0, receipt.quantity - businessQuantity - privateQuantity - damagedQuantity - cancelledQuantity);
+          upsertReceiptLine.run(
+            receiptLineKey, localId, String(purchase.orderNo || ''), String(item.sourceRow || ''),
+            /^\d+$/.test(String(item.productId || '').trim()) ? String(item.productId).trim() : '',
+            receipt.quantity, businessQuantity, privateQuantity, damagedQuantity,
+            cancelledQuantity, openQuantity, row.unitPrice, row.allocatedShipping,
+            row.allocatedExtra, row.unitCost, allocationMethod, JSON.stringify(item), updatedAt
+          );
+          if (businessQuantity > 0) insertLine(order, item, index, {
+            unitPrice: row.unitPrice, allocatedShipping: row.allocatedShipping,
+            allocatedExtra: row.allocatedExtra, unitCost: row.unitCost,
+            quantity: businessQuantity
           });
         });
-      } else {
+      } else if (linkedInventory.length) {
+        linkedInventory.forEach((item, index) => insertLine(order, item, index, {
+          unitPrice: numberValue(item.cost), unitCost: numberValue(item.cost), quantity: 1
+        }));
+      } else if (/eingetroffen|received/i.test(String(purchase.status || ''))) {
         const quantity = positiveQuantity(purchase.items);
         insertLine(order, { name: purchase.cardNames || 'Sammelbestellung' }, 0, {
           quantity, unitPrice: quantity ? cardValue / quantity : 0,
-          allocatedShipping, allocatedExtra,
+          allocatedShipping: quantity ? shipping / quantity : 0,
+          allocatedExtra: quantity ? extra / quantity : 0,
           unitCost: quantity ? (cardValue + shipping + extra) / quantity : 0
         });
       }
@@ -657,25 +751,30 @@ class TcgDatabase {
         ? sale.materialUsage.reduce((sum, usage) => sum + numberValue(usage.quantity) * numberValue(usage.unitCost), 0)
         : numberValue(sale.packaging);
       const postage = numberValue(sale.postage);
-      const cost = numberValue(sale.cost);
+      const refund = numberValue(sale.refund);
+      const linkedIds = Array.isArray(sale.itemIds) ? sale.itemIds.map(String) : [];
+      const linkedItems = linkedIds.map(id => inventoryById.get(id)).filter(Boolean);
+      const linkedCost = linkedItems.reduce((sum, item) => sum + numberValue(item.cost), 0);
+      const returnedToInventory = String(sale.status || '') === 'Rückgabe eingetroffen';
+      const cost = returnedToInventory ? 0 : (linkedItems.length ? linkedCost : numberValue(sale.cost));
       upsertOrder.run(
         orderKey, 'sale', localId, sourceId,
         String(sale.externalOrderId || sale.orderNo || ''), String(sale.orderNo || ''),
         String(sale.date || ''), String(sale.customer || ''), String(sale.country || ''),
         String(sale.status || ''), cardValue, numberValue(sale.shippingPaid), packaging,
-        fee, postage, cost, revenue, JSON.stringify(sale), updatedAt
+        fee, postage, refund, cost, revenue, JSON.stringify(sale), updatedAt
       );
       const order = { orderKey, tradeType: 'sale', localId, sourceId, status: sale.status, date: sale.date };
       const detailedItems = Array.isArray(sale.items) ? sale.items : [];
-      const linkedIds = Array.isArray(sale.itemIds) ? sale.itemIds.map(String) : [];
-      const linkedItems = linkedIds.map(id => inventoryById.get(id)).filter(Boolean);
       const items = detailedItems.length ? detailedItems : linkedItems;
       const totalQuantity = items.length
         ? items.reduce((sum, item) => sum + positiveQuantity(item.quantity), 0)
         : positiveQuantity(sale.quantity);
       const feeUnit = totalQuantity ? fee / totalQuantity : 0;
+      const shippingPaidUnit = totalQuantity ? numberValue(sale.shippingPaid) / totalQuantity : 0;
       const postageUnit = totalQuantity ? postage / totalQuantity : 0;
       const packagingUnit = totalQuantity ? packaging / totalQuantity : 0;
+      const refundUnit = totalQuantity ? refund / totalQuantity : 0;
       if (items.length) {
         items.forEach((item, index) => {
           const matchedIds = Array.isArray(item.matchedItemIds) ? item.matchedItemIds.map(String) : [];
@@ -684,12 +783,13 @@ class TcgDatabase {
           const unitPrice = detailedItems.length
             ? numberValue(item.unitPrice)
             : (cardValue > 0 ? cardValue / totalQuantity : revenue / totalQuantity);
-          const unitCost = matched.length
+          const unitCost = returnedToInventory ? 0 : matched.length
             ? matched.reduce((sum, row) => sum + numberValue(row.cost), 0) / matched.length
             : (item.cost !== undefined ? numberValue(item.cost) : (totalQuantity ? cost / totalQuantity : 0));
           insertLine(order, item, index, {
             quantity, unitPrice, unitCost,
-            unitNet: unitPrice - feeUnit - postageUnit - packagingUnit
+            unitNet: unitPrice + shippingPaidUnit - feeUnit - postageUnit - packagingUnit - refundUnit,
+            allocatedRefund: refundUnit
           });
         });
       } else {
@@ -697,7 +797,8 @@ class TcgDatabase {
         const unitPrice = quantity ? cardValue / quantity : 0;
         insertLine(order, { name: sale.cardNames || 'Sammelverkauf' }, 0, {
           quantity, unitPrice, unitCost: quantity ? cost / quantity : 0,
-          unitNet: unitPrice - feeUnit - postageUnit - packagingUnit
+          unitNet: unitPrice + shippingPaidUnit - feeUnit - postageUnit - packagingUnit - refundUnit,
+          allocatedRefund: refundUnit
         });
       }
     });
@@ -767,6 +868,9 @@ class TcgDatabase {
         (SELECT COUNT(*) FROM business_events) AS event_count,
         (SELECT COUNT(*) FROM trade_orders WHERE archived = 0) AS order_count,
         (SELECT COUNT(*) FROM trade_lines WHERE archived = 0) AS line_count,
+        (SELECT COUNT(*) FROM purchase_receipt_lines WHERE archived = 0) AS receipt_line_count,
+        (SELECT COUNT(*) FROM inventory_assets WHERE archived = 0 AND ownership = 'business') AS business_asset_count,
+        (SELECT COUNT(*) FROM inventory_assets WHERE archived = 0 AND ownership = 'private') AS private_asset_count,
         (SELECT COUNT(*) FROM market_observations) AS observation_count,
         (SELECT COUNT(*) FROM pricing_recommendations) AS recommendation_count,
         (SELECT COUNT(*) FROM settlement_imports) AS settlement_count,
@@ -794,6 +898,9 @@ class TcgDatabase {
       eventCount: Number(counts?.event_count || 0),
       orderCount: Number(counts?.order_count || 0),
       tradeLineCount: Number(counts?.line_count || 0),
+      purchaseReceiptLineCount: Number(counts?.receipt_line_count || 0),
+      businessAssetCount: Number(counts?.business_asset_count || 0),
+      privateAssetCount: Number(counts?.private_asset_count || 0),
       marketObservationCount: Number(counts?.observation_count || 0),
       recommendationCount: Number(counts?.recommendation_count || 0),
       settlementCount: Number(counts?.settlement_count || 0),
@@ -902,19 +1009,21 @@ class TcgDatabase {
     const productQuery = this.db.prepare(`
       SELECT
         COALESCE(NULLIF(name_de, ''), NULLIF(name_en, ''), NULLIF(official_name, ''), 'CM ' || product_id) AS name,
-        name_en AS english_name, set_name, rarity
+        name_en AS english_name, set_name, set_code, collector_number, rarity, variant
       FROM products WHERE product_id = ?
     `);
     const cache = this.db.prepare(`
       INSERT INTO pricing_recommendations (
-        product_id, calculated_at, recommended_buy, recommended_sell,
+        product_id, calculated_at, recommended_buy, price_floor, quick_sell, recommended_sell,
         own_buy_average, own_sell_average, market_reference,
         buy_sample_count, sell_sample_count, market_sample_count,
-        confidence_score, confidence_level, explanation_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        confidence_score, confidence_level, model_version, volatility, explanation_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(product_id) DO UPDATE SET
         calculated_at = excluded.calculated_at,
         recommended_buy = excluded.recommended_buy,
+        price_floor = excluded.price_floor,
+        quick_sell = excluded.quick_sell,
         recommended_sell = excluded.recommended_sell,
         own_buy_average = excluded.own_buy_average,
         own_sell_average = excluded.own_sell_average,
@@ -924,7 +1033,22 @@ class TcgDatabase {
         market_sample_count = excluded.market_sample_count,
         confidence_score = excluded.confidence_score,
         confidence_level = excluded.confidence_level,
+        model_version = excluded.model_version,
+        volatility = excluded.volatility,
         explanation_json = excluded.explanation_json
+    `);
+    const historyCache = this.db.prepare(`
+      INSERT INTO pricing_recommendation_history (
+        product_id, calculated_date, model_version, calculated_at,
+        max_buy, price_floor, quick_sell, recommended_sell,
+        confidence_score, inputs_json, explanation_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(product_id, calculated_date, model_version) DO UPDATE SET
+        calculated_at=excluded.calculated_at, max_buy=excluded.max_buy,
+        price_floor=excluded.price_floor, quick_sell=excluded.quick_sell,
+        recommended_sell=excluded.recommended_sell,
+        confidence_score=excluded.confidence_score,
+        inputs_json=excluded.inputs_json, explanation_json=excluded.explanation_json
     `);
 
     const recommendations = [];
@@ -936,22 +1060,31 @@ class TcgDatabase {
       const ownSellAverage = weightedAverage(sales, 'unit_price');
       const buySampleCount = purchases.reduce((sum, row) => sum + positiveQuantity(row.quantity), 0);
       const sellSampleCount = sales.reduce((sum, row) => sum + positiveQuantity(row.quantity), 0);
-      const marketSampleCount = new Set(marketRows.map(row => `${row.source_id}|${row.observed_date}`)).size;
+      const marketSampleCount = new Set(marketRows.map(row => row.observed_date)).size;
       const latestMarket = marketRows[0] || {};
-      const marketParts = [
-        [latestMarket.trend_price, 0.35],
-        [latestMarket.avg_7, 0.30],
-        [latestMarket.avg_30, 0.25],
-        [latestMarket.low_price, 0.10]
-      ].filter(([value]) => numberValue(value) > 0);
-      const weightTotal = marketParts.reduce((sum, part) => sum + part[1], 0);
-      const marketReference = weightTotal
-        ? marketParts.reduce((sum, [value, weight]) => sum + numberValue(value) * weight, 0) / weightTotal
+      const referenceFor = row => {
+        const parts = [[row.trend_price, 0.35], [row.avg_7, 0.30], [row.avg_30, 0.25], [row.low_price, 0.10]]
+          .filter(([value]) => numberValue(value) > 0);
+        const total = parts.reduce((sum, part) => sum + part[1], 0);
+        return total ? parts.reduce((sum, [value, weight]) => sum + numberValue(value) * weight, 0) / total : 0;
+      };
+      const marketReference = referenceFor(latestMarket);
+      const dailyReferences = [];
+      const seenDates = new Set();
+      for (const row of marketRows) {
+        if (seenDates.has(row.observed_date)) continue;
+        seenDates.add(row.observed_date);
+        const reference = referenceFor(row);
+        if (reference > 0) dailyReferences.push(reference);
+      }
+      const referenceAverage = dailyReferences.length ? dailyReferences.reduce((sum, value) => sum + value, 0) / dailyReferences.length : 0;
+      const volatility = dailyReferences.length > 1 && referenceAverage > 0
+        ? Math.sqrt(dailyReferences.reduce((sum, value) => sum + (value - referenceAverage) ** 2, 0) / dailyReferences.length) / referenceAverage * 100
         : 0;
 
       let recommendedSell = marketReference;
       if (ownSellAverage > 0 && marketReference > 0) {
-        const ownWeight = sellSampleCount >= 3 ? 0.45 : 0.20;
+        const ownWeight = Math.min(0.65, sellSampleCount / (sellSampleCount + 5));
         recommendedSell = ownSellAverage * ownWeight + marketReference * (1 - ownWeight);
       } else if (ownSellAverage > 0) {
         recommendedSell = ownSellAverage;
@@ -961,19 +1094,35 @@ class TcgDatabase {
         const roiSell = (ownBuyAverage * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate);
         recommendedSell = Math.max(profitSell, roiSell);
       }
-      const safeSell = recommendedSell * Math.max(0, 1 - safetyRate);
+      const dynamicSafetyRate = Math.min(0.30, safetyRate + Math.min(0.12, volatility / 200));
+      const safeSell = recommendedSell * Math.max(0, 1 - dynamicSafetyRate);
       const availableBeforeBuy = safeSell * Math.max(0, 1 - feeRate) - packaging;
       const byProfit = availableBeforeBuy - minProfit;
       const byRoi = availableBeforeBuy / Math.max(1, 1 + minRoi);
       const recommendedBuy = recommendedSell > 0 ? Math.max(0, Math.min(byProfit, byRoi)) : 0;
-
+      const priceFloor = ownBuyAverage > 0 && feeRate < 1
+        ? Math.max(
+          (ownBuyAverage + packaging + minProfit) / Math.max(0.01, 1 - feeRate),
+          (ownBuyAverage * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate)
+        )
+        : 0;
+      const quickSell = recommendedSell > 0
+        ? Math.max(numberValue(latestMarket.low_price), priceFloor, recommendedSell * (1 - Math.min(0.15, dynamicSafetyRate)))
+        : 0;
+      const productInfo = productQuery.get(productId) || {};
+      const exactVariant = Boolean(String(productInfo.set_name || '').trim() &&
+        String(productInfo.collector_number || productInfo.set_code || '').includes('-') &&
+        String(productInfo.rarity || productInfo.variant || '').trim());
       const confidenceScore = Math.min(100,
-        Math.min(25, buySampleCount * 7) +
-        Math.min(35, sellSampleCount * 10) +
-        Math.min(40, marketSampleCount * 4)
+        Math.min(20, buySampleCount * 5) +
+        Math.min(35, sellSampleCount * 7) +
+        Math.min(30, marketSampleCount * 4) +
+        (exactVariant ? 15 : 0)
       );
       const confidenceLevel = confidenceScore >= 75 ? 'high' : confidenceScore >= 45 ? 'medium' : 'low';
       const explanation = [];
+      if (!exactVariant) explanation.push('Druckvariante ist noch nicht vollstaendig belegt');
+      if (volatility > 0) explanation.push(`Marktschwankung ${volatility.toFixed(1)} % wurde als Risikopuffer beruecksichtigt`);
       if (marketReference > 0) explanation.push(`Cardmarket-Marktwert aus ${marketSampleCount} Quellen-/Tagesständen`);
       if (buySampleCount) explanation.push(`${buySampleCount} eigene Einkaufseinheit(en) berücksichtigt`);
       if (sellSampleCount) explanation.push(`${sellSampleCount} realisierte Verkaufseinheit(en) berücksichtigt`);
@@ -987,19 +1136,30 @@ class TcgDatabase {
         setName: String(product.set_name || tradeIdentity.set_name || ''),
         rarity: String(product.rarity || tradeIdentity.rarity || ''),
         recommendedBuy: roundedMoney(recommendedBuy),
+        priceFloor: roundedMoney(priceFloor),
+        quickSell: roundedMoney(quickSell),
         recommendedSell: roundedMoney(recommendedSell),
         ownBuyAverage: roundedMoney(ownBuyAverage),
         ownSellAverage: roundedMoney(ownSellAverage),
         marketReference: roundedMoney(marketReference),
         buySampleCount, sellSampleCount, marketSampleCount,
-        confidenceScore, confidenceLevel, explanation,
+        confidenceScore, confidenceLevel, volatility: roundedMoney(volatility), modelVersion: 'v2', explanation,
         calculatedAt
       };
       cache.run(
-        productId, calculatedAt, result.recommendedBuy, result.recommendedSell,
+        productId, calculatedAt, result.recommendedBuy, result.priceFloor, result.quickSell, result.recommendedSell,
         result.ownBuyAverage, result.ownSellAverage, result.marketReference,
         buySampleCount, sellSampleCount, marketSampleCount,
-        confidenceScore, confidenceLevel, JSON.stringify(explanation)
+        confidenceScore, confidenceLevel, result.modelVersion, result.volatility, JSON.stringify(explanation)
+      );
+      historyCache.run(
+        productId, calculatedAt.slice(0, 10), result.modelVersion, calculatedAt,
+        result.recommendedBuy, result.priceFloor, result.quickSell, result.recommendedSell,
+        confidenceScore, JSON.stringify({
+          ownBuyAverage: result.ownBuyAverage, ownSellAverage: result.ownSellAverage,
+          marketReference: result.marketReference, buySampleCount, sellSampleCount,
+          marketSampleCount, volatility: result.volatility
+        }), JSON.stringify(explanation)
       );
       recommendations.push(result);
     }
@@ -1415,6 +1575,8 @@ class TcgDatabase {
   searchCards({ query = '', limit = 25, offset = 0 } = {}) {
     this.open();
     const forms = cardSearch.queryForms(String(query || '').slice(0, 200));
+    const setCodeQuery = cardSearch.parseSetCode(String(query || ''));
+    const exactProductId = /^\d+$/.test(String(query || '').trim()) ? String(query).trim() : '';
     if (forms.compact.length < 2) return { totalCards: 0, offset: 0, limit: 25, cards: [] };
     const safeLimit = boundedInteger(limit, 1, 100, 25);
     const safeOffset = boundedInteger(offset, 0, 1000000, 0);
@@ -1439,8 +1601,30 @@ class TcgDatabase {
         AND ${clause('search_text', 'search_compact')}
     `).all(...parameters);
 
+    let exactRows = [];
+    if (exactProductId) {
+      exactRows = this.db.prepare(`
+        SELECT DISTINCT metacard_id AS metacardId FROM products
+        WHERE product_id = ? AND NULLIF(metacard_id, '') IS NOT NULL
+      `).all(exactProductId);
+    } else if (setCodeQuery) {
+      const full = setCodeQuery.full.toUpperCase();
+      const neutral = setCodeQuery.neutral.toUpperCase();
+      const localizedPattern = `${setCodeQuery.prefix.toUpperCase()}-??${setCodeQuery.number.toUpperCase()}`;
+      exactRows = this.db.prepare(`
+        SELECT DISTINCT metacard_id AS metacardId FROM products
+        WHERE NULLIF(metacard_id, '') IS NOT NULL AND (
+          UPPER(set_code) IN (?, ?) OR UPPER(collector_number) IN (?, ?) OR
+          UPPER(set_code) GLOB ? OR UPPER(collector_number) GLOB ?
+        )
+      `).all(full, neutral, full, neutral, localizedPattern, localizedPattern);
+    }
+
     const nameMatches = new Set(nameRows.map(row => String(row.metacardId || '')).filter(Boolean));
-    const metacardIds = [...new Set([...nameMatches, ...productRows.map(row => String(row.metacardId || '')).filter(Boolean)])];
+    const exactIds = exactRows.map(row => String(row.metacardId || '')).filter(Boolean);
+    const metacardIds = exactIds.length
+      ? [...new Set(exactIds)]
+      : [...new Set([...nameMatches, ...productRows.map(row => String(row.metacardId || '')).filter(Boolean)])];
     if (!metacardIds.length) return { totalCards: 0, offset: safeOffset, limit: safeLimit, cards: [] };
 
     const mappings = [];
@@ -1502,7 +1686,19 @@ class TcgDatabase {
         WHERE metacard_id IN (${placeholders})
         ORDER BY archived, set_name, set_code, rarity, variant, CAST(product_id AS INTEGER)
       `).all(...chunk);
-      for (const variant of variants) variantsByMetacard.get(String(variant.metacardId))?.push(variant);
+      const variantMatchesSetCode = variant => {
+        if (!setCodeQuery) return true;
+        const values = [variant.setCode, variant.collectorNumber].map(value => String(value || '').toUpperCase());
+        return values.some(value => {
+          if (!value) return false;
+          if (value === setCodeQuery.full || value === setCodeQuery.neutral) return true;
+          const parsed = cardSearch.parseSetCode(value);
+          return parsed && parsed.prefix === setCodeQuery.prefix && parsed.number === setCodeQuery.number;
+        });
+      };
+      for (const variant of variants.filter(variant =>
+        (!exactProductId || variant.productId === exactProductId) && variantMatchesSetCode(variant)
+      )) variantsByMetacard.get(String(variant.metacardId))?.push(variant);
     }
 
     return {
@@ -1874,6 +2070,7 @@ class TcgDatabase {
       this.db.exec('DELETE FROM market_snapshot_summary;');
       this.db.exec('DELETE FROM market_observation_summary;');
       this.db.exec('DELETE FROM market_observations;');
+      this.db.exec('DELETE FROM pricing_recommendation_history;');
       this.db.exec('DELETE FROM pricing_recommendations;');
       this.db.exec('DELETE FROM market_prices;');
       this.db.exec('DELETE FROM products;');

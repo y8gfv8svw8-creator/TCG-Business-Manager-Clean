@@ -769,7 +769,7 @@
       const key = cleanProductId(id);
       if (!key) return null;
       if (!map.has(key)) map.set(key, {
-        productId:key, inventory:0, reserved:0, available:0,
+        productId:key, inventory:0, reserved:0, unavailable:0, available:0,
         buyQty:0, buyTotal:0, bestBuy:null,
         sellQty:0, sellTotal:0, bestSell:null
       });
@@ -779,19 +779,25 @@
     state.inventory.forEach(item => {
       const stat = row(item.productId);
       if (!stat) return;
-      if (item.status !== "Verkauft") {
+      if (!['Verkauft','Storniert'].includes(item.status)) {
         stat.inventory++;
-        if (item.status === "Reserviert" || item.reserved || item.reservedFor || item.saleId) stat.reserved++;
+        if (item.status === "Reserviert") stat.reserved++;
+        else if (['Beschädigt','Rückgabe unterwegs'].includes(item.status)) stat.unavailable++;
+        else stat.available++;
       }
     });
 
     const purchaseProductKeys = new Set();
     state.purchases.filter(p => p.status !== "Storniert").forEach(purchase => {
-      (purchase.pendingItems || []).forEach(item => {
+      const costs=window.TcgBusinessAutomation.allocatePurchaseCosts(purchase,purchase.costAllocationMethod||'value');
+      costs.forEach((costRow,index) => {
+        const item=costRow.item;
         const stat = row(item.productId);
         if (!stat) return;
-        const qty = Math.max(0, Number(item.quantity || 1));
-        const price = Number(item.unitPrice ?? item.price ?? 0);
+        const receipt=costRow.receipt;
+        const linked=state.inventory.filter(asset=>asset.status!=="Beschädigt"&&String(asset.purchaseId||'')===String(purchase.id||'')&&(String(asset.purchaseLineKey||'')===`${purchase.id}:${receipt.key}`||(!asset.purchaseLineKey&&cleanProductId(asset.productId)===cleanProductId(item.productId)))).length;
+        const qty = Math.max(receipt.business,linked);
+        const price = Number(costRow.unitCost||0);
         if (qty <= 0 || price <= 0) return;
         stat.buyQty += qty;
         stat.buyTotal += qty * price;
@@ -811,7 +817,7 @@
     });
 
     const inventoryById = new Map(state.inventory.map(item => [item.id, item]));
-    state.sales.filter(s => s.status !== "Storniert").forEach(sale => {
+    state.sales.filter(s => ["Abgeschlossen","Abgerechnet"].includes(s.status)).forEach(sale => {
       const explicit = sale.items || [];
       if (explicit.length) {
         explicit.forEach(item => {
@@ -839,7 +845,6 @@
     });
 
     map.forEach(stat => {
-      stat.available = Math.max(0, stat.inventory - stat.reserved);
       stat.avgBuy = stat.buyQty ? stat.buyTotal / stat.buyQty : 0;
       stat.avgSell = stat.sellQty ? stat.sellTotal / stat.sellQty : 0;
       stat.bestBuy = stat.bestBuy ?? 0;
@@ -1146,6 +1151,8 @@
     return {
       recommendedSell:Number(learned.recommendedSell||calculated.recommendedSell||0),
       recommendedBuy:Number(learned.recommendedBuy||calculated.maxBuy||0),
+      priceFloor:Number(learned.priceFloor||0),
+      quickSell:Number(learned.quickSell||0),
       marketLow:Number(calculated.marketBuy||0),
       confidence:learned.confidenceLevel||calculated.scoreConfidence||"low"
     };

@@ -20,6 +20,7 @@
       <nav id="nav">
         <button class="nav-item active" data-view="dashboard">Dashboard</button>
         <button class="nav-item" data-view="inventory">Bestand</button>
+        <button class="nav-item" data-view="private">Privatsammlung</button>
         <button class="nav-item" data-view="purchases">Einkäufe</button>
         <button class="nav-item" data-view="sales">Verkäufe</button>
         <button class="nav-item" data-view="materials">Versandmaterial</button>
@@ -146,6 +147,20 @@
         </div>
       </section>
 
+      <section id="view-private" class="view">
+        <div class="toolbar">
+          <input id="privateSearch" class="search" placeholder="Private Karten nach Name, Set oder Setnummer suchen ..." />
+          <button id="addPrivateBtn" class="primary">+ Private Karte hinzufuegen</button>
+        </div>
+        <div class="private-summary" id="privateSummary"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Karte</th><th>Set / Nummer</th><th>Seltenheit</th><th>Sprache / Zustand</th><th>Einstand</th><th>Lagerort</th><th></th></tr></thead>
+            <tbody id="privateTable"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section id="view-purchases" class="view">
         <div class="toolbar">
           <input id="purchaseSearch" class="search" placeholder="Bestellnummer, Händler oder Kartenname DE/EN …" />
@@ -153,6 +168,7 @@
             <option value="">Alle Status</option>
             <option>Bestellt</option>
             <option>Unterwegs</option>
+            <option>Teilweise eingetroffen</option>
             <option>Eingetroffen</option>
             <option>Storniert</option>
           </select>
@@ -189,7 +205,11 @@
             <option>Kommissioniert</option>
             <option>Verpackt</option>
             <option>Versendet</option>
+            <option>Rückgabe offen</option>
+            <option>Rückgabe eingetroffen</option>
+            <option>Erstattet</option>
             <option>Abgeschlossen</option>
+            <option>Abgerechnet</option>
             <option>Storniert</option>
           </select>
           <button id="addSaleBtn" class="primary">+ Verkauf erfassen</button>
@@ -636,6 +656,31 @@
     </div>
     <div id="monthlyFinanceContent"></div>
     <div class="modal-actions"><button type="button" id="monthlyFinanceCloseBottom" class="primary">Schließen</button></div>
+  </dialog>
+
+  <dialog id="purchaseReceiptDialog" class="order-detail-dialog receipt-dialog">
+    <form id="purchaseReceiptForm">
+      <div class="modal-head">
+        <div><h2 id="purchaseReceiptTitle">Wareneingang aufteilen</h2><p class="muted">Geschaeftlich, privat, beschaedigt, storniert oder noch offen.</p></div>
+        <button type="button" id="purchaseReceiptClose" class="icon-button" aria-label="Schliessen">&times;</button>
+      </div>
+      <div class="receipt-toolbar">
+        <label>Kosten verteilen<select id="purchaseCostAllocation"><option value="value">nach Kartenwert</option><option value="quantity">nach Stueckzahl</option></select></label>
+        <button type="button" class="secondary" id="receiptAllBusiness">Alle offenen geschaeftlich</button>
+        <button type="button" class="secondary" id="receiptAllPrivate">Alle offenen privat</button>
+      </div>
+      <div id="purchaseReceiptContent"></div>
+      <label class="receipt-note">Buchungsgrund / Notiz<input id="purchaseReceiptNote" placeholder="z. B. Teillieferung vom 22.07.2026" /></label>
+      <div class="modal-actions"><button type="button" id="purchaseReceiptCancel" class="secondary">Abbrechen</button><button type="submit" class="primary">Aufteilung bestaetigen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="saleAllocationDialog" class="order-detail-dialog receipt-dialog">
+    <form id="saleAllocationForm">
+      <div class="modal-head"><div><h2>Bestandszuordnung pruefen</h2><p class="muted">Konkrete Einkaufsexemplare auswaehlen; FIFO ist vorausgewaehlt.</p></div><button type="button" id="saleAllocationClose" class="icon-button">&times;</button></div>
+      <div id="saleAllocationContent"></div>
+      <div class="modal-actions"><button type="button" id="saleAllocationCancel" class="secondary">Abbrechen</button><button type="submit" class="primary">Zuordnung speichern</button></div>
+    </form>
   </dialog>
 
   <dialog id="importPreviewDialog" class="order-detail-dialog import-preview-dialog">

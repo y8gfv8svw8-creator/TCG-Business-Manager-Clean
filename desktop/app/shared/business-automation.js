@@ -385,6 +385,105 @@
     };
   }
 
+  function legacyStockSnapshotKey(item = {}) {
+    const value = String(item.importKey || item.lotId || '').trim();
+    return /^STOCK-/i.test(value) ? value : '';
+  }
+
+  function legacyStockVariantKey(item = {}) {
+    const productId = String(item.productId || '').replace(/\D/g, '');
+    if (!productId) return '';
+    return [
+      productId,
+      String(item.language || '').trim().toUpperCase(),
+      String(item.condition || '').trim().toUpperCase()
+    ].join('|');
+  }
+
+  function legacySnapshotTime(item = {}, sourceKey = '') {
+    const keyDate = String(sourceKey).match(/(20\d{2})-(\d{2})-(\d{2})/);
+    if (keyDate) return Date.parse(`${keyDate[1]}-${keyDate[2]}-${keyDate[3]}T00:00:00Z`) || 0;
+    return Date.parse(item.purchaseDate || item.importedAt || 0) || 0;
+  }
+
+  // Aeltere Programmstaende haben komplette Cardmarket-Bestandsexporte addiert.
+  // Diese Planung fasst nur eindeutig erkennbare STOCK-Snapshots zusammen. Manuelle,
+  // gekaufte, reservierte oder verkaufte Exemplare werden niemals als Altduplikat entfernt.
+  function planLegacyStockSnapshotCleanup(items = []) {
+    const current = (items || []).filter(item => !['Verkauft', 'Storniert'].includes(String(item?.status || '')));
+    const byVariant = new Map();
+    const currentByVariant = new Map();
+    current.forEach(item => {
+      const variantKey = legacyStockVariantKey(item);
+      if (variantKey) {
+        if (!currentByVariant.has(variantKey)) currentByVariant.set(variantKey, []);
+        currentByVariant.get(variantKey).push(item);
+      }
+      const sourceKey = legacyStockSnapshotKey(item);
+      if (!sourceKey || !item?.id) return;
+      if (!variantKey) return;
+      if (!byVariant.has(variantKey)) byVariant.set(variantKey, []);
+      byVariant.get(variantKey).push({ item, sourceKey, time: legacySnapshotTime(item, sourceKey) });
+    });
+
+    const groups = [];
+    for (const [variantKey, snapshotItems] of byVariant) {
+      const sourceKeys = [...new Set(snapshotItems.map(row => row.sourceKey))];
+      if (sourceKeys.length < 2) continue;
+      const newestKey = sourceKeys.slice().sort((left, right) => {
+        const leftRows = snapshotItems.filter(row => row.sourceKey === left);
+        const rightRows = snapshotItems.filter(row => row.sourceKey === right);
+        const leftTime = Math.max(0, ...leftRows.map(row => row.time));
+        const rightTime = Math.max(0, ...rightRows.map(row => row.time));
+        return rightTime - leftTime || String(right).localeCompare(String(left));
+      })[0];
+      const newestQuantity = snapshotItems.filter(row => row.sourceKey === newestKey).length;
+      const matchingCurrent = currentByVariant.get(variantKey) || [];
+      const protectedCount = matchingCurrent.filter(item =>
+        ['Reserviert', 'Rückgabe unterwegs'].includes(String(item.status || '')) || item.saleId
+      ).length;
+      const nonSnapshotCount = matchingCurrent.filter(item => !legacyStockSnapshotKey(item)).length;
+      const target = Math.max(newestQuantity, protectedCount, nonSnapshotCount);
+      const removeCount = Math.max(0, matchingCurrent.length - target);
+      if (!removeCount) continue;
+      const removable = snapshotItems
+        .filter(row => !['Reserviert', 'Rückgabe unterwegs'].includes(String(row.item.status || '')) && !row.item.saleId)
+        .sort((left, right) => {
+          const leftNewest = left.sourceKey === newestKey ? 1 : 0;
+          const rightNewest = right.sourceKey === newestKey ? 1 : 0;
+          return leftNewest - rightNewest || left.time - right.time || String(left.item.id).localeCompare(String(right.item.id));
+        });
+      const removeIds = removable.slice(0, removeCount).map(row => row.item.id);
+      if (!removeIds.length) continue;
+      groups.push({ variantKey, newestKey, newestQuantity, target, sourceKeys, removeIds });
+    }
+    return {
+      groups,
+      removeIds: groups.flatMap(group => group.removeIds),
+      removedCount: groups.reduce((sum, group) => sum + group.removeIds.length, 0)
+    };
+  }
+
+  function planInventoryMovementReversal(items = [], movement = {}) {
+    const quantity = Math.trunc(asNumber(movement?.quantity));
+    if (!movement?.id || !quantity) return { valid: false, reason: 'Diese Bewegung verändert keinen Bestand.' };
+    if (movement.cancelledAt || movement.reversalOf) return { valid: false, reason: 'Diese Bewegung ist bereits storniert oder selbst eine Gegenbuchung.' };
+    if (!['Bestandskorrektur', 'Manueller Bestand'].includes(String(movement.type || ''))) {
+      return { valid: false, reason: 'Automatische Buchungen müssen über den zugehörigen Import oder Auftrag korrigiert werden.' };
+    }
+    if (quantity < 0) return { valid: true, addCount: Math.abs(quantity), removeIds: [], quantity };
+    const buckets = calculateInventoryBuckets(items);
+    const preferredIds = new Set(Array.isArray(movement.addedIds) ? movement.addedIds : []);
+    const removable = buckets.availableItems.slice().sort((left, right) =>
+      Number(preferredIds.has(right.id)) - Number(preferredIds.has(left.id)) ||
+      String(right.purchaseDate || '').localeCompare(String(left.purchaseDate || ''))
+    );
+    if (removable.length < quantity) {
+      return { valid: false, reason: `Es sind nur ${removable.length} freie Exemplare vorhanden. Reservierte oder verkaufte Karten werden nicht entfernt.` };
+    }
+    return { valid: true, addCount: 0, removeIds: removable.slice(0, quantity).map(item => item.id), quantity };
+  }
+
   const realizedSale = sale => ['Abgeschlossen', 'Abgerechnet', 'Erstattet', 'Rückgabe eingetroffen'].includes(String(sale?.status || ''));
 
   function buildPerformanceReport(state = {}, now = new Date()) {
@@ -605,6 +704,8 @@
     calculateInventoryBuckets,
     planInventoryTotalCorrection,
     planAvailableInventorySnapshot,
+    planLegacyStockSnapshotCleanup,
+    planInventoryMovementReversal,
     buildPerformanceReport,
     buildDataQualityIssues,
     buildPriceAlerts,

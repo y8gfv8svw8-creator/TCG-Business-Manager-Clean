@@ -109,3 +109,10 @@ Patch 10 – Wareneingang, Privatsammlung und belastbare Preisbasis
 - SQLite-Schema v7 speichert Wareneingangszeilen, geschäftliche und private Bestandsobjekte, Erstattungen sowie die tägliche Historie der Preisempfehlungen.
 - Preisvorschläge unterscheiden Max-EK, normale VK-Empfehlung, Schnellverkauf und persönliche Preisuntergrenze. Eigene Preise fließen erst aus tatsächlich übernommenen Käufen und abgeschlossenen Verkäufen ein.
 - Vor der Schema-Migration wird automatisch eine SQLite-Sicherung erstellt; alle neuen Abläufe sind durch automatisierte Such-, Migrations-, Bestands-, Kosten- und Preisberechnungstests abgedeckt.
+
+Patch 11 – Snapshot-Bereinigung und stornierbare Bestandskorrekturen
+- Alte Cardmarket-Vollsnapshots werden nicht mehr addiert. Bereits vorhandene freie Alt-Doppelungen aus mehreren Bestandsdateien werden beim Start vorsichtig auf den neuesten Snapshot zusammengeführt.
+- Vor dieser Bestandsbereinigung legt die SQLite-Migration auf Schema v8 automatisch eine wiederherstellbare Sicherung an.
+- Reservierte, verkaufte, manuell erfasste und einkaufsbezogene Exemplare sind von der automatischen Altbereinigung geschützt.
+- Manuelle Bestandskorrekturen können im Bewegungsverlauf storniert werden. Die ursprüngliche Buchung bleibt erhalten und erhält eine nachvollziehbare Gegenbuchung mit Pflichtgrund.
+- Positive Bewegungen werden mit grüner, negative Bewegungen mit roter Zeilenfläche dargestellt. Stornierte Ursprungsbuchungen erscheinen neutral und durchgestrichen.

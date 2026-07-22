@@ -176,3 +176,42 @@ test('zieht Erstattungen vom realisierten Verkaufsgewinn ab und sperrt laufende 
   assert.equal(returned.cost, 0, 'Nach physischem Rücklauf bleibt der Karten-EK im Bestand und wird nicht als Verkaufskosten verbraucht');
   assert.equal(returned.profit, -2);
 });
+
+test('bereinigt addierte alte Cardmarket-Vollsnapshots, ohne geschützte oder manuelle Exemplare zu löschen', () => {
+  const rows = [
+    { id:'old', productId:'42', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
+    { id:'new', productId:'42', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-20.csv' },
+    { id:'manual', productId:'77', language:'DE', condition:'NM', status:'Im Bestand', purchaseId:'purchase-1' },
+    { id:'old-with-purchase', productId:'77', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
+    { id:'new-with-purchase', productId:'77', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-20.csv' },
+    { id:'reserved-old', productId:'99', language:'DE', condition:'NM', status:'Reserviert', saleId:'sale-1', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
+    { id:'free-new', productId:'99', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-20.csv' },
+    { id:'single-source', productId:'100', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
+    { id:'unknown-old', productId:'', name:'Unbekannt A', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
+    { id:'unknown-new', productId:'', name:'Unbekannt B', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-20.csv' }
+  ];
+  const plan = automation.planLegacyStockSnapshotCleanup(rows);
+  assert.deepEqual(new Set(plan.removeIds), new Set(['old','old-with-purchase','new-with-purchase','free-new']));
+  assert.equal(plan.removedCount, 4);
+  assert.ok(!plan.removeIds.includes('manual'));
+  assert.ok(!plan.removeIds.includes('reserved-old'));
+  assert.ok(!plan.removeIds.includes('single-source'));
+  assert.ok(!plan.removeIds.includes('unknown-old'));
+  assert.ok(!plan.removeIds.includes('unknown-new'));
+});
+
+test('storniert manuelle Bestandsbewegungen nur mit freien Karten und immer als Gegenbuchung', () => {
+  const items = [
+    { id:'added', status:'Im Bestand', purchaseDate:'2026-07-22' },
+    { id:'reserved', status:'Reserviert' }
+  ];
+  const positive = automation.planInventoryMovementReversal(items,{id:'move-1',type:'Bestandskorrektur',quantity:1,addedIds:['added']});
+  assert.equal(positive.valid,true);
+  assert.deepEqual(positive.removeIds,['added']);
+  const negative = automation.planInventoryMovementReversal(items,{id:'move-2',type:'Bestandskorrektur',quantity:-2});
+  assert.deepEqual({valid:negative.valid,addCount:negative.addCount},{valid:true,addCount:2});
+  const blocked = automation.planInventoryMovementReversal([{id:'reserved',status:'Reserviert'}],{id:'move-3',type:'Bestandskorrektur',quantity:1});
+  assert.equal(blocked.valid,false);
+  assert.match(blocked.reason,/Reservierte oder verkaufte Karten/);
+  assert.equal(automation.planInventoryMovementReversal(items,{id:'move-4',type:'Cardmarket-Bestandsabgleich',quantity:1}).valid,false);
+});

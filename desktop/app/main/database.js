@@ -4,7 +4,7 @@ const path = require('path');
 const cardSearch = require('../shared/card-search');
 const businessAutomation = require('../shared/business-automation');
 
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 
 function isoNow() {
   return new Date().toISOString();

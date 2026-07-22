@@ -399,3 +399,12 @@ dialog::backdrop { background: rgba(16, 24, 40, .48); }
 .private-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:0 0 14px}.private-summary>div{padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}.private-summary small{display:block;color:var(--muted);margin-bottom:5px}.private-summary strong{font-size:17px}
 .receipt-dialog{width:min(1180px,96vw)}.receipt-toolbar{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:14px 0}.receipt-toolbar label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px}.receipt-table{min-width:900px}.receipt-table td{vertical-align:top}.receipt-table td small{display:block;margin-top:4px;color:var(--muted)}.receipt-quantity{width:74px;min-width:74px}.receipt-note{display:flex;flex-direction:column;gap:5px;margin-top:13px}.receipt-validation{margin-top:10px}.order-detail-actions{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.inventory-incomplete-warning{display:flex;flex-direction:column;gap:4px;padding:11px 12px;border:1px solid #e2b96d;border-radius:9px;background:#fff8e8;color:#6f6044}.inventory-incomplete-warning strong{color:#684f1c}.inventory-incomplete-warning span{font-size:12px;line-height:1.4}
 @media(max-width:760px){.receipt-toolbar>*{width:100%}.receipt-toolbar button{width:100%}.order-detail-actions button{width:100%}}
+
+/* Bewegungen: Richtung auf der gesamten Zeile sichtbar machen */
+.movement-table tbody tr.movement-row-positive>td{background:#e8f7ed;color:#204f31;border-color:#c7e7d2}
+.movement-table tbody tr.movement-row-negative>td{background:#fdebec;color:#6f2528;border-color:#f2c8ca}
+.movement-table tbody tr.movement-row-neutral>td{background:#f8fafc}
+.movement-table tbody tr.movement-row-cancelled>td{background:#eef1f4;color:#6c7782;text-decoration:line-through}
+.movement-table tbody tr.movement-row-cancelled button,.movement-table tbody tr.movement-row-cancelled a{text-decoration:none}
+.movement-table tbody tr:hover>td{filter:brightness(.985)}
+.compact-button{padding:6px 9px;min-height:30px;font-size:12px;white-space:nowrap}

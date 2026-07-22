@@ -397,6 +397,35 @@ function migrateState(data) {
 
   // Karten aus noch nicht eingetroffenen Einkäufen dürfen nicht im Bestand stehen.
   // Ältere Backups werden dabei automatisch in offene Wareneingangspositionen umgewandelt.
+  // Bis Patch 9 wurden vollstaendige Cardmarket-Bestandsexporte teilweise wie
+  // einzelne Zugaenge addiert. Eindeutig erkennbare, noch freie Alt-Snapshots
+  // werden einmalig auf den neuesten Stand zusammengefuehrt. Reservierte,
+  // verkaufte, manuell erfasste und einkaufsbezogene Exemplare bleiben erhalten.
+  const legacyCleanup=window.TcgBusinessAutomation?.planLegacyStockSnapshotCleanup?.(migrated.inventory);
+  if(legacyCleanup?.removedCount){
+    const removeIds=new Set(legacyCleanup.removeIds);
+    legacyCleanup.groups.forEach(group=>{
+      const removed=migrated.inventory.filter(item=>group.removeIds.includes(item.id));
+      removed.forEach(item=>{
+        if(item.movementRecorded)return;
+        migrated.movements.push({
+          id:(globalThis.crypto?.randomUUID?.()||`migration-${Date.now()}-${Math.random()}`),timestamp:item.purchaseDate||new Date().toISOString(),type:"Historischer Bestandseintrag",quantity:1,
+          productId:cleanProductId(item.productId),inventoryGroupKey:inventoryGroupKey(item),inventoryItemId:item.id,
+          reference:item.importKey||item.lotId||"Früherer Bestand",note:item.location||""
+        });
+      });
+      const example=removed[0]||migrated.inventory.find(item=>inventoryVariantKey(item)===group.variantKey);
+      migrated.movements.push({
+        id:(globalThis.crypto?.randomUUID?.()||`migration-${Date.now()}-${Math.random()}`),timestamp:new Date().toISOString(),type:"Automatische Korrektur doppelter Bestandssnapshots",
+        quantity:-group.removeIds.length,productId:cleanProductId(example?.productId),
+        inventoryGroupKey:example?inventoryGroupKey(example):"",reference:"Bestandsmigration",
+        note:`${group.sourceKeys.length} alte Vollsnapshots erkannt; der neueste Stand bleibt erhalten.`,
+        removedIds:[...group.removeIds],systemRepair:true
+      });
+    });
+    migrated.inventory=migrated.inventory.filter(item=>!removeIds.has(item.id));
+  }
+
   const purchaseById = Object.fromEntries(migrated.purchases.map(p=>[p.id,p]));
   migrated.purchases.forEach(p=>{
     if (!Array.isArray(p.pendingItems)) p.pendingItems = [];
@@ -988,6 +1017,67 @@ function addMovement(entry={}) {
   state.movements ||= [];
   state.movements.unshift({id:uid(), timestamp:new Date().toISOString(), ...entry});
 }
+function movementRowClass(movement={}){
+  if(movement.cancelledAt)return "movement-row-cancelled";
+  const quantity=Number(movement.quantity||0);
+  return quantity>0?"movement-row-positive":quantity<0?"movement-row-negative":"movement-row-neutral";
+}
+function canCancelInventoryMovement(movement={}){
+  return Boolean(movement.id&&!movement.cancelledAt&&!movement.reversalOf&&Number(movement.quantity||0)!==0&&["Bestandskorrektur","Manueller Bestand"].includes(movement.type));
+}
+function inventoryItemsForMovement(movement={}){
+  const exact=movement.inventoryGroupKey?state.inventory.filter(item=>inventoryGroupKey(item)===movement.inventoryGroupKey):[];
+  if(exact.length)return exact;
+  const productId=cleanProductId(movement.productId);
+  const matches=state.inventory.filter(item=>productId&&cleanProductId(item.productId)===productId);
+  const keys=new Set(matches.map(inventoryGroupKey));
+  return keys.size<=1?matches:[];
+}
+function cancelInventoryMovement(movementId){
+  const movement=(state.movements||[]).find(row=>row.id===movementId);
+  if(!canCancelInventoryMovement(movement)){alert("Diese Bewegung kann nicht einzeln storniert werden. Automatische Buchungen werden über den zugehörigen Import oder Auftrag korrigiert.");return;}
+  const matchingItems=inventoryItemsForMovement(movement);
+  const plan=TcgBusinessAutomation.planInventoryMovementReversal(matchingItems,movement);
+  if(!plan.valid){alert(plan.reason);return;}
+  const reason=prompt(`Grund für die Stornierung von „${movement.type} ${Number(movement.quantity)>0?"+":""}${Number(movement.quantity)}“:`,"Fehlbuchung");
+  if(reason===null)return;
+  if(!String(reason).trim()){alert("Bitte einen Grund für die Stornierung eingeben.");return;}
+  if(!confirm("Die Bewegung wird nicht gelöscht, sondern mit einer nachvollziehbaren Gegenbuchung storniert. Fortfahren?"))return;
+
+  const reversalAddedIds=[];
+  const reversalRemovedItems=[];
+  if(plan.removeIds.length){
+    const ids=new Set(plan.removeIds);
+    state.inventory.filter(item=>ids.has(item.id)).forEach(item=>{
+      reversalRemovedItems.push(structuredClone(item));
+      adjustPurchaseOwnershipForAsset(item,purchaseBucketForAsset(item,"business"),null);
+    });
+    state.inventory=state.inventory.filter(item=>!ids.has(item.id));
+  }
+  if(plan.addCount){
+    const stored=Array.isArray(movement.removedItems)?movement.removedItems:[];
+    const fallback=movement.inventorySnapshot||matchingItems[0]||state.productCatalog?.[cleanProductId(movement.productId)];
+    if(!fallback){alert("Die ursprünglichen Kartendaten fehlen. Bitte den Bestand stattdessen über „Bestand korrigieren“ berichtigen.");return;}
+    for(let index=0;index<plan.addCount;index++){
+      const source=stored[index]||stored[0]||fallback;
+      const restored={...structuredClone(source),id:source.id&&!state.inventory.some(item=>item.id===source.id)?source.id:uid(),status:"Im Bestand",movementRecorded:true};
+      delete restored.saleId;delete restored.saleOrderNo;delete restored.saleDate;delete restored.saleImportKey;
+      state.inventory.push(restored);reversalAddedIds.push(restored.id);
+      adjustPurchaseOwnershipForAsset(restored,null,purchaseBucketForAsset(restored,"business"));
+    }
+  }
+  const reversalId=uid();
+  movement.cancelledAt=new Date().toISOString();movement.cancelReason=String(reason).trim();movement.cancelledByMovementId=reversalId;
+  addMovement({
+    id:reversalId,type:`Stornierung: ${movement.type}`,quantity:-Number(movement.quantity||0),productId:cleanProductId(movement.productId),
+    inventoryGroupKey:movement.inventoryGroupKey||inventoryGroupKey(state.inventory.find(item=>reversalAddedIds.includes(item.id))||matchingItems[0]||{}),
+    reference:`Gegenbuchung zu ${fmtDate(movement.timestamp)}`,note:String(reason).trim(),reversalOf:movement.id,
+    addedIds:reversalAddedIds,removedIds:plan.removeIds,removedItems:reversalRemovedItems
+  });
+  saveState();renderAll();
+  const nextGroup=getInventoryGroups().find(group=>group.key===(movement.inventoryGroupKey||""))||getInventoryGroups().find(group=>cleanProductId(group.first.productId)===cleanProductId(movement.productId));
+  if(nextGroup)openInventoryDetails(nextGroup.key);else document.getElementById("orderDetailDialog")?.close();
+}
 function adjustPurchaseOwnershipForAsset(asset,fromBucket,toBucket){
   if(!asset?.purchaseId||!asset.purchaseLineKey||fromBucket===toBucket)return;
   const purchase=state.purchases.find(row=>row.id===asset.purchaseId);if(!purchase)return;
@@ -1047,7 +1137,7 @@ function openInventoryDetails(groupKey){
     <h3>Reserviert für</h3>
     <div class="table-wrap"><table><thead><tr><th>Bestellung</th><th>Menge</th><th>Status</th></tr></thead><tbody>${reservationRows.length?reservationRows.map(r=>`<tr><td>${r.saleId?`<button class="link-button" data-show-sale="${escapeHtml(r.saleId)}">#${escapeHtml(r.orderNo)}</button>`:`#${escapeHtml(r.orderNo)}`}</td><td><strong>${r.quantity}</strong></td><td>${statusBadge(r.status)}</td></tr>`).join(""):`<tr><td colspan="3" class="empty">Aktuell keine Reservierungen.</td></tr>`}</tbody></table></div>
     <h3>Bewegungsverlauf</h3>
-    <div class="table-wrap"><table><thead><tr><th>Datum</th><th>Bewegung</th><th>Menge</th><th>Referenz</th><th>Info</th></tr></thead><tbody>${rows.length?rows.map(m=>`<tr><td>${fmtDate(m.timestamp)}</td><td>${escapeHtml(m.type||"Bewegung")}</td><td><strong>${Number(m.quantity||0)>0?"+":""}${Number(m.quantity||0)}</strong></td><td>${escapeHtml(m.reference||"-")}</td><td>${escapeHtml(m.note||"")}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap"><table class="movement-table"><thead><tr><th>Datum</th><th>Bewegung</th><th>Menge</th><th>Referenz</th><th>Info</th><th>Aktion</th></tr></thead><tbody>${rows.length?rows.map(m=>`<tr class="${movementRowClass(m)}"><td>${fmtDate(m.timestamp)}</td><td>${escapeHtml(m.type||"Bewegung")}${m.cancelledAt?`<br><small>Storniert: ${escapeHtml(m.cancelReason||"Gegenbuchung erstellt")}</small>`:""}</td><td class="${Number(m.quantity||0)>0?"money-positive":Number(m.quantity||0)<0?"money-negative":""}"><strong>${Number(m.quantity||0)>0?"+":""}${Number(m.quantity||0)}</strong></td><td>${escapeHtml(m.reference||"-")}</td><td>${escapeHtml(m.note||"")}</td><td>${canCancelInventoryMovement(m)?`<button type="button" class="secondary compact-button" data-cancel-movement="${escapeHtml(m.id)}">Stornieren</button>`:"–"}</td></tr>`).join(""):`<tr><td colspan="6" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
   dialog.dataset.saleId="";
   if(dialog.open) dialog.close();
   try { dialog.showModal(); } catch(error) { dialog.setAttribute("open",""); }
@@ -1212,6 +1302,7 @@ function correctInventoryGroup(groupKey) {
     const desiredMetadata={set:String(data.set||"").trim(),setName:String(data.setName||"").trim(),collectorNumber:String(data.collectorNumber||"").trim(),rarity:String(data.rarity||"").trim()};
     const metadataChanged=Object.entries(desiredMetadata).some(([field,value])=>String(first[field]||"")!==value);
     const removeIds=new Set(plan.removeIds||[]);
+    const removedItems=currentStats.items.filter(item=>removeIds.has(item.id)).map(item=>structuredClone(item));
     recordLegacyInventoryEntries(currentStats.items.filter(item=>removeIds.has(item.id)));
     currentStats.items.filter(item=>removeIds.has(item.id)).forEach(item=>adjustPurchaseOwnershipForAsset(item,purchaseBucketForAsset(item,"business"),null));
     if(removeIds.size)state.inventory=state.inventory.filter(item=>!removeIds.has(item.id));
@@ -1236,7 +1327,7 @@ function correctInventoryGroup(groupKey) {
     }
     if(productId){const current=state.productCatalog[productId]||{};state.productCatalog[productId]={...current,...exactMetadata,productId,name:first.name||current.name||"",germanName:first.germanName||current.germanName||"",englishName:first.englishName||current.englishName||"",productUrl:first.productUrl||current.productUrl||""};}
     const delta=Number(plan.addCount||0)-removeIds.size;
-    addMovement({type:delta?"Bestandskorrektur":metadataChanged?"Druckdatenkorrektur":"Bestandsprüfung",quantity:delta,productId,inventoryGroupKey:inventoryGroupKey({...first,...desiredMetadata}),reference:"Manuelle Korrektur",note:String(data.reason||"").trim(),addedIds,removedIds:[...removeIds]});
+    addMovement({type:delta?"Bestandskorrektur":metadataChanged?"Druckdatenkorrektur":"Bestandsprüfung",quantity:delta,productId,inventoryGroupKey:inventoryGroupKey({...first,...desiredMetadata}),reference:"Manuelle Korrektur",note:String(data.reason||"").trim(),addedIds,removedIds:[...removeIds],removedItems,inventorySnapshot:{...first,...desiredMetadata},previousTotal:currentStats.total,desiredTotal:Number(data.desiredTotal)});
   });
 }
 
@@ -1336,7 +1427,7 @@ function showMaterialHistory(materialId){
   if(dialog.open)dialog.close();
   dialog.dataset.saleId="";
   document.getElementById("orderDetailTitle").textContent=`Materialverlauf · ${material.name}`;
-  document.getElementById("orderDetailContent").innerHTML=`<div class="order-summary-grid"><div><small>Aktueller Bestand</small><strong>${Number(material.stock||0)} ${escapeHtml(material.unit||"Stück")}</strong></div><div><small>Stückkosten</small><strong>${money(material.unitCost)}</strong></div><div><small>Buchungen</small><strong>${movements.length}</strong></div><div><small>Zugänge im Verlauf</small><strong>+${incoming}</strong></div><div><small>Verbrauch im Verlauf</small><strong>−${outgoing}</strong></div></div><div class="table-wrap material-history-table"><table><thead><tr><th>Zeitpunkt</th><th>Bewegung</th><th>Menge</th><th>Wofür</th><th>Information</th></tr></thead><tbody>${movements.length?movements.map(row=>`<tr><td>${row.timestamp?new Date(row.timestamp).toLocaleString("de-DE"):fmtDate(row.date)}</td><td>${escapeHtml(row.type||"Bewegung")}</td><td class="${Number(row.quantity||0)>=0?"money-positive":"money-negative"}"><strong>${Number(row.quantity||0)>0?"+":""}${Number(row.quantity||0)}</strong></td><td>${row.saleId&&state.sales.some(sale=>sale.id===row.saleId)?`<button class="link-button" type="button" data-show-sale="${escapeHtml(row.saleId)}">${escapeHtml(row.reference||"Bestellung öffnen")}</button>`:escapeHtml(row.reference||"–")}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
+  document.getElementById("orderDetailContent").innerHTML=`<div class="order-summary-grid"><div><small>Aktueller Bestand</small><strong>${Number(material.stock||0)} ${escapeHtml(material.unit||"Stück")}</strong></div><div><small>Stückkosten</small><strong>${money(material.unitCost)}</strong></div><div><small>Buchungen</small><strong>${movements.length}</strong></div><div><small>Zugänge im Verlauf</small><strong>+${incoming}</strong></div><div><small>Verbrauch im Verlauf</small><strong>−${outgoing}</strong></div></div><div class="table-wrap material-history-table"><table class="movement-table"><thead><tr><th>Zeitpunkt</th><th>Bewegung</th><th>Menge</th><th>Wofür</th><th>Information</th></tr></thead><tbody>${movements.length?movements.map(row=>`<tr class="${movementRowClass(row)}"><td>${row.timestamp?new Date(row.timestamp).toLocaleString("de-DE"):fmtDate(row.date)}</td><td>${escapeHtml(row.type||"Bewegung")}</td><td class="${Number(row.quantity||0)>=0?"money-positive":"money-negative"}"><strong>${Number(row.quantity||0)>0?"+":""}${Number(row.quantity||0)}</strong></td><td>${row.saleId&&state.sales.some(sale=>sale.id===row.saleId)?`<button class="link-button" type="button" data-show-sale="${escapeHtml(row.saleId)}">${escapeHtml(row.reference||"Bestellung öffnen")}</button>`:escapeHtml(row.reference||"–")}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
   dialog.showModal();
 }
 function renderExpenses(){
@@ -2004,7 +2095,7 @@ function addInventory(initial={}, collection="business") {
     const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
     const target=isPrivate?state.privateCollection:state.inventory;
     if(initial.id){const current=target.find(row=>row.id===initial.id);const before=current?structuredClone(current):null;const beforeBucket=!isPrivate&&current?purchaseBucketForAsset(current,"business"):null;Object.assign(current,obj);if(beforeBucket)adjustPurchaseOwnershipForAsset(current,beforeBucket,purchaseBucketForAsset(current,"business"));if(before){const fields=Object.keys(obj).filter(key=>JSON.stringify(before[key])!==JSON.stringify(current[key]));if(fields.length)addMovement({type:isPrivate?"Privatkorrektur":"Kartenkorrektur",quantity:0,productId:cleanProductId(current.productId),reference:isPrivate?"Privatsammlung":"Bestand",note:`Geändert: ${fields.join(", ")}`});}}
-    else {target.push({...obj,id:uid()});addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),reference:isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte"});}
+    else {const created={...obj,id:uid(),movementRecorded:true};target.push(created);addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created),reference:isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte",addedIds:[created.id],inventorySnapshot:structuredClone(created)});}
     return true;
   };
   let searchTimer;
@@ -2538,10 +2629,13 @@ function rememberFieldChanges(item,patch,target) {
 }
 
 function recordLegacyInventoryEntries(items=[]) {
-  items.filter(item=>!item.movementRecorded).forEach(item=>addMovement({
-    type:"Historischer Bestandseintrag",quantity:1,productId:cleanProductId(item.productId),inventoryGroupKey:inventoryGroupKey(item),
-    timestamp:item.purchaseDate||todayISO(),reference:item.purchaseId?`Einkauf ${item.purchaseId}`:(item.lotId||"Früherer Bestand"),note:item.location||""
-  }));
+  items.filter(item=>!item.movementRecorded).forEach(item=>{
+    addMovement({
+      type:"Historischer Bestandseintrag",quantity:1,productId:cleanProductId(item.productId),inventoryGroupKey:inventoryGroupKey(item),inventoryItemId:item.id,
+      timestamp:item.purchaseDate||todayISO(),reference:item.purchaseId?`Einkauf ${item.purchaseId}`:(item.lotId||"Früherer Bestand"),note:item.location||""
+    });
+    item.movementRecorded=true;
+  });
 }
 
 function removeImport(importRecord, ask=true) {
@@ -3505,7 +3599,7 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
-  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
+  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
   if(d.editPrivate) addInventory(state.privateCollection.find(x=>x.id===d.editPrivate),"private");
@@ -3523,6 +3617,7 @@ document.body.addEventListener("click",e=>{
   if(d.editInventoryGroup) editInventoryGroup(d.editInventoryGroup);
   if(d.inventoryDetails) openInventoryDetails(d.inventoryDetails);
   if(d.correctInventory) correctInventoryGroup(d.correctInventory);
+  if(d.cancelMovement) cancelInventoryMovement(d.cancelMovement);
   if(d.editPurchase) addPurchase(state.purchases.find(x=>x.id===d.editPurchase));
   if(d.receivePurchase) openPurchaseReceipt(d.receivePurchase);
   if(d.editSale) addSale(state.sales.find(x=>x.id===d.editSale));

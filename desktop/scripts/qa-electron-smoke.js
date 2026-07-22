@@ -75,6 +75,14 @@ async function main() {
       const ocrCanvas=document.createElement('canvas');ocrCanvas.width=620;ocrCanvas.height=160;
       const ocrContext=ocrCanvas.getContext('2d');ocrContext.fillStyle='#fff';ocrContext.fillRect(0,0,620,160);ocrContext.fillStyle='#000';ocrContext.font='bold 58px Arial';ocrContext.fillText('RA01-EN008',45,102);
       const ocrResult=await window.desktopApp.recognizeCardImage({imageDataUrl:ocrCanvas.toDataURL('image/png')});
+      const scanCanvas=document.createElement('canvas');scanCanvas.width=900;scanCanvas.height=1300;
+      const scanContext=scanCanvas.getContext('2d');scanContext.fillStyle='#c7b18d';scanContext.fillRect(0,0,900,1300);
+      scanContext.fillStyle='#171717';scanContext.fillRect(154,214,592,912);scanContext.fillStyle='#b77b55';scanContext.fillRect(162,222,576,896);
+      scanContext.fillStyle='#f1e5d1';scanContext.fillRect(178,258,544,95);scanContext.fillStyle='#111';scanContext.font='bold 36px Arial';scanContext.fillText('TELLARKNIGHT CYGNIAN',194,320);
+      scanContext.fillStyle='#f5f1e8';scanContext.fillRect(510,800,205,58);scanContext.font='bold 28px Arial';scanContext.fillText('BLGG-EN017',520,840);
+      scanContext.fillStyle='#f5f1e8';scanContext.fillRect(175,1045,330,52);scanContext.font='bold 25px Arial';scanContext.fillText('60700283 1st Edition',186,1080);
+      const preparedScan=await window.TcgScannerImageProcessing.prepareRecognitionPayload(scanCanvas.toDataURL('image/png'));
+      const regionalOcr=await window.desktopApp.recognizeCardImage({...preparedScan,hint:''});
       return {
         ready:document.readyState,
         title:document.title,
@@ -90,13 +98,19 @@ async function main() {
         scannerOcrSetCode:(ocrResult?.setCodes||[]).includes('RA01-EN008'),
         scannerOcrText:ocrResult?.text||'',
         scannerRecognitionParser:typeof window.TcgScannerRecognition?.extractSetCodes==='function',
+        scannerImageProcessing:typeof window.TcgScannerImageProcessing?.prepareRecognitionPayload==='function',
+        scannerRegionalEngine:regionalOcr?.engine||'',
+        scannerRegionalSetCode:(regionalOcr?.setCodes||[]).includes('BLGG-EN017'),
+        scannerRegionalPasscode:(regionalOcr?.passcodes||[]).includes('60700283'),
+        scannerRegionalEdition:regionalOcr?.edition||'',
+        scannerRegionalPasses:regionalOcr?.regionResults?.length||0,
         scannerSeriesQueue:typeof queueScannerSubmission==='function'&&typeof finishScannerCardReview==='function',
         darkContrastMinimum:Math.min(...samples.map(row=>row.ratio)),
         darkContrastSamples:samples,
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || !result.scannerRegionalSetCode || !result.scannerRegionalPasscode || result.scannerRegionalEdition !== '1st Edition' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

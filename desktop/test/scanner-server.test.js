@@ -16,6 +16,8 @@ test('stellt eine zeitlich begrenzte iPhone-Verbindung bereit und übernimmt nur
   const pageHtml = await page.text();
   assert.match(pageHtml, /Yu-Gi-Oh!-Karte erfassen/);
   assert.match(pageHtml, /direkt weitere Karten fotografieren/i);
+  assert.match(pageHtml, /Setnummer rechts unter dem Bild/i);
+  assert.match(pageHtml, /const max=2600/);
 
   const invalidUrl = new URL(info.localUrl);
   invalidUrl.searchParams.set('token', 'ungueltig');

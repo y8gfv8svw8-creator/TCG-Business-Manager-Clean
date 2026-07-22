@@ -97,9 +97,84 @@
       .slice(0, 8);
   }
 
-  function buildQueries({ hint = "", text = "" } = {}) {
-    const values = [cleanLine(hint), ...extractSetCodes(text), ...extractTitleCandidates(text)];
-    return values.filter((value, index) => value && values.findIndex(other => compact(other) === compact(value)) === index).slice(0, 10);
+  function titleQueryAliases(value = "") {
+    const original = cleanLine(value);
+    if (!original) return [];
+    const words = original.split(/\s+/).filter(Boolean);
+    const aliases = [original];
+    for (let remove = 1; remove <= Math.min(2, words.length - 1); remove += 1) {
+      if (words.slice(0, remove).every(word => compact(word).length <= 3)) {
+        const remaining = words.slice(remove).join(" ");
+        if (compact(remaining).length >= 6) aliases.push(remaining);
+      }
+    }
+    const withoutSingleLetters = words.filter(word => compact(word).length > 1).join(" ");
+    if (compact(withoutSingleLetters).length >= 6) aliases.push(withoutSingleLetters);
+    return aliases.filter((alias, index, rows) => rows.findIndex(other => compact(other) === compact(alias)) === index);
+  }
+
+  function extractPasscodes(text = "") {
+    const upper = String(text ?? "").toUpperCase();
+    const matches = [];
+    for (const match of upper.matchAll(/(?:^|[^A-Z0-9])([0-9OIL]{8})(?![A-Z0-9])/g)) {
+      const value = match[1].replace(/O/g, "0").replace(/[IL]/g, "1");
+      if (/^\d{8}$/.test(value) && !matches.includes(value)) matches.push(value);
+    }
+    return matches;
+  }
+
+  function extractEdition(text = "") {
+    const value = cleanLine(text).toUpperCase();
+    if (/\b(?:1ST|1|FIRST)\s*EDITION\b/.test(value)) return "1st Edition";
+    if (/\bLIMITED\s*EDITION\b/.test(value)) return "Limited Edition";
+    if (/\bUNLIMITED(?:\s*EDITION)?\b/.test(value)) return "Unlimited";
+    return "";
+  }
+
+  function levenshteinDistance(left = "", right = "") {
+    const a = compact(left);
+    const b = compact(right);
+    if (!a) return b.length;
+    if (!b) return a.length;
+    const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+    for (let row = 1; row <= a.length; row += 1) {
+      const current = [row];
+      for (let column = 1; column <= b.length; column += 1) {
+        current[column] = Math.min(
+          current[column - 1] + 1,
+          previous[column] + 1,
+          previous[column - 1] + (a[row - 1] === b[column - 1] ? 0 : 1)
+        );
+      }
+      previous.splice(0, previous.length, ...current);
+    }
+    return previous[b.length];
+  }
+
+  function titleSimilarity(left = "", right = "") {
+    const a = compact(left);
+    const b = compact(right);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length > b.length ? a : b;
+    const substringScore = longer.includes(shorter) && shorter.length >= 5
+      ? 0.78 + 0.2 * (shorter.length / longer.length)
+      : 0;
+    const editScore = 1 - levenshteinDistance(a, b) / Math.max(a.length, b.length);
+    const wordsA = cleanLine(left).toUpperCase().split(/[^A-Z0-9]+/).filter(word => word.length > 1);
+    const wordsB = cleanLine(right).toUpperCase().split(/[^A-Z0-9]+/).filter(word => word.length > 1);
+    const shared = wordsA.filter(word => wordsB.some(other => other === word || (word.length >= 5 && (word.includes(other) || other.includes(word))))).length;
+    const wordScore = shared ? shared / Math.max(wordsA.length, wordsB.length) : 0;
+    return Math.max(substringScore, editScore, wordScore * 0.92);
+  }
+
+  function buildQueries({ hint = "", text = "", titleTexts = [], setCodeTexts = [] } = {}) {
+    const combinedCodes = [text, ...setCodeTexts].flatMap(extractSetCodes);
+    const targetedTitles = titleTexts.flatMap(value => extractTitleCandidates(value).flatMap(titleQueryAliases));
+    const generalTitles = extractTitleCandidates(text).flatMap(titleQueryAliases);
+    const values = [cleanLine(hint), ...combinedCodes, ...targetedTitles, ...generalTitles];
+    return values.filter((value, index) => value && values.findIndex(other => compact(other) === compact(value)) === index).slice(0, 16);
   }
 
   function productCollectorCodes(product = {}) {
@@ -121,6 +196,11 @@
     setCodeAliases,
     extractSetCodes,
     extractTitleCandidates,
+    titleQueryAliases,
+    extractPasscodes,
+    extractEdition,
+    levenshteinDistance,
+    titleSimilarity,
     buildQueries,
     productCollectorCodes,
     exactCodeMatches

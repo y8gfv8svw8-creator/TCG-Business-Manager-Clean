@@ -2255,13 +2255,13 @@ function scannerMappingMatch(fingerprint){
 
 function rememberScannerChoice(scan, product){
   if(!scan?.fingerprint||!product?.productId)return;
-  const record={fingerprint:scan.fingerprint,productId:String(product.productId),name:product.name||product.germanName||"",updatedAt:new Date().toISOString()};
+  const record={fingerprint:scan.fingerprint,productId:String(product.productId),name:product.name||product.germanName||"",setCode:scan.recognition?.setCodes?.[0]||product.collectorNumber||product.setCode||"",cardPasscode:scan.recognition?.passcodes?.[0]||product.cardPasscode||"",edition:scan.recognition?.edition||product.edition||"",updatedAt:new Date().toISOString()};
   if(state.settings.scannerRememberMappings!==false){
     const existing=(state.scannerMappings||[]).find(row=>row.fingerprint===scan.fingerprint);
     if(existing)Object.assign(existing,record,{confirmations:Number(existing.confirmations||0)+1});
     else state.scannerMappings.push({...record,confirmations:1});
   }
-  state.scannerHistory.push({id:scan.id||uid(),timestamp:scan.receivedAt||new Date().toISOString(),mode:scan.mode||"business",fingerprint:scan.fingerprint,hint:scan.hint||"",productId:String(product.productId),confirmed:true});
+  state.scannerHistory.push({id:scan.id||uid(),timestamp:scan.receivedAt||new Date().toISOString(),mode:scan.mode||"business",fingerprint:scan.fingerprint,hint:scan.hint||"",productId:String(product.productId),setCode:record.setCode,cardPasscode:record.cardPasscode,edition:record.edition,confirmed:true});
   state.scannerHistory=state.scannerHistory.slice(-200);
 }
 
@@ -2296,24 +2296,49 @@ function scannerProductComplete(product={}){
   return Boolean(String(product.productId||"").trim()&&String(product.setName||product.set||product.setCode||"").trim()&&String(product.collectorNumber||product.setCode||"").trim()&&String(product.rarity||product.variant||"").trim());
 }
 
+function scannerProductNames(product={}){
+  return [product.germanName,product.englishName,product.name,product.officialName].filter(Boolean);
+}
+
+function scannerVerifiedUniqueVariant(products=[],setCode=""){
+  const language=String(setCode).match(/-([A-Z]{2})[0-9]/)?.[1]||"";
+  const verified=products.filter(product=>scannerProductComplete(product)&&/cardmarket\.com/i.test(String(product.productUrl||""))&&(!language||!product.language||String(product.language).toUpperCase()===language));
+  return verified.length===1?verified[0]:null;
+}
+
 async function scannerCatalogMatch(scan){
   const recognition=scan.recognition||{};
-  const queries=(recognition.queries?.length?recognition.queries:TcgScannerRecognition.buildQueries({hint:scan.hint,text:recognition.text})).slice(0,10);
+  const queries=(recognition.queries?.length?recognition.queries:TcgScannerRecognition.buildQueries({hint:scan.hint,text:recognition.text})).slice(0,16);
   const setCodes=recognition.setCodes?.length?recognition.setCodes:TcgScannerRecognition.extractSetCodes(recognition.text||"");
-  let hintFallback=null;
-  for(const query of queries){
-    if(normalizeCardName(query).length<2)continue;
-    const products=await searchInventoryCardVariants(query);
-    const complete=products.filter(scannerProductComplete);
-    if(!complete.length)continue;
-    const codeMatches=TcgScannerRecognition.exactCodeMatches(complete,setCodes.length?setCodes:[query]);
-    if(codeMatches.length)return {query,products:codeMatches,selected:codeMatches.length===1?codeMatches[0]:null,reason:"set-code"};
-    const normalizedQuery=normalizeCardName(query);
-    const exactNames=complete.filter(product=>[product.germanName,product.englishName,product.name,product.officialName].some(name=>name&&normalizeCardName(name)===normalizedQuery));
-    if(exactNames.length)return {query,products:exactNames,selected:exactNames.length===1?exactNames[0]:null,reason:"card-name"};
-    if(scan.hint&&normalizeCardName(query)===normalizeCardName(scan.hint)&&!hintFallback)hintFallback={query,products:complete,selected:complete.length===1?complete[0]:null,reason:"hint"};
+  for(const code of setCodes){
+    const products=await searchInventoryCardVariants(code);
+    const codeMatches=TcgScannerRecognition.exactCodeMatches(products, [code]);
+    if(codeMatches.length){
+      const selected=codeMatches.length===1&&scannerProductComplete(codeMatches[0])?codeMatches[0]:scannerVerifiedUniqueVariant(codeMatches,code);
+      return {query:code,products:codeMatches,selected,reason:"set-code",score:1};
+    }
   }
-  return hintFallback;
+
+  let best=null;
+  for(const query of queries){
+    if(normalizeCardName(query).length<2||setCodes.some(code=>TcgScannerRecognition.compact(code)===TcgScannerRecognition.compact(query)))continue;
+    const products=await searchInventoryCardVariants(query);
+    if(!products.length)continue;
+    const scored=products.map(product=>({product,score:Math.max(0,...scannerProductNames(product).map(name=>TcgScannerRecognition.titleSimilarity(query,name)))})).sort((left,right)=>right.score-left.score);
+    const top=scored[0];
+    if(!top||top.score<0.54)continue;
+    const groupKey=String(top.product.metacardId||"")||normalizeCardName(scannerProductNames(top.product)[0]||"");
+    const variants=products.filter(product=>{
+      const candidateKey=String(product.metacardId||"")||normalizeCardName(scannerProductNames(product)[0]||"");
+      return candidateKey===groupKey;
+    });
+    const exact=scannerProductNames(top.product).some(name=>normalizeCardName(name)===normalizeCardName(query));
+    const candidate={query,products:variants.length?variants:[top.product],selected:null,reason:scan.hint&&normalizeCardName(query)===normalizeCardName(scan.hint)?"hint":exact?"card-name":"fuzzy-name",score:top.score};
+    if(candidate.products.length===1&&scannerProductComplete(candidate.products[0])&&(exact||top.score>=0.94))candidate.selected=candidate.products[0];
+    if(!best||candidate.score>best.score)best=candidate;
+    if(exact)break;
+  }
+  return best;
 }
 
 async function resolveRememberedScannerProduct(mapping){
@@ -2326,21 +2351,30 @@ async function resolveRememberedScannerProduct(mapping){
 
 async function acceptScannerSubmission(submission){
   if(!submission?.imageDataUrl)return;
-  updateScannerSeriesStatus(`Foto wird lokal erkannt … ${scannerSubmissionQueue.length?`${scannerSubmissionQueue.length} weitere in der Warteschlange` : ""}`.trim());
+  updateScannerSeriesStatus(`Foto wird zugeschnitten und lokal erkannt … ${scannerSubmissionQueue.length?`${scannerSubmissionQueue.length} weitere in der Warteschlange` : ""}`.trim());
+  let prepared={imageDataUrl:submission.imageDataUrl};
+  try{
+    if(window.TcgScannerImageProcessing?.prepareRecognitionPayload)prepared=await window.TcgScannerImageProcessing.prepareRecognitionPayload(submission.imageDataUrl);
+  }catch(error){console.error("Scanner-Bildaufbereitung fehlgeschlagen:",error);}
   let fingerprint="";
-  try{fingerprint=await scannerImageFingerprint(submission.imageDataUrl);}catch(error){console.error("Scanner-Fingerabdruck fehlgeschlagen:",error);}
-  const scan={...submission,fingerprint};
+  try{fingerprint=await scannerImageFingerprint(prepared.fingerprintImageDataUrl||submission.imageDataUrl);}catch(error){console.error("Scanner-Fingerabdruck fehlgeschlagen:",error);}
+  const scan={...submission,fingerprint,cardBounds:prepared.cardBounds||[]};
   const mapping=scannerMappingMatch(fingerprint);
+  try{
+    scan.recognition=await window.desktopApp?.recognizeCardImage?.({...prepared,hint:submission.hint||""})||{queries:TcgScannerRecognition.buildQueries({hint:submission.hint})};
+  }catch(error){
+    console.error("Lokale Karten-Texterkennung fehlgeschlagen:",error);
+    scan.recognition={text:"",confidence:0,queries:TcgScannerRecognition.buildQueries({hint:submission.hint}),setCodes:[],passcodes:[],edition:"",error:error.message||String(error)};
+  }
   if(mapping){
-    scan.recognizedProduct=await resolveRememberedScannerProduct(mapping);
-    scan.recognitionMatch={query:mapping.name||mapping.productId,products:[scan.recognizedProduct],selected:scan.recognizedProduct,reason:"remembered",confidence:mapping.confidence};
-  }else{
-    try{
-      scan.recognition=await window.desktopApp?.recognizeCardImage?.({imageDataUrl:submission.imageDataUrl,hint:submission.hint||""})||{queries:TcgScannerRecognition.buildQueries({hint:submission.hint})};
-    }catch(error){
-      console.error("Lokale Karten-Texterkennung fehlgeschlagen:",error);
-      scan.recognition={text:"",confidence:0,queries:TcgScannerRecognition.buildQueries({hint:submission.hint}),setCodes:[],error:error.message||String(error)};
+    const remembered=await resolveRememberedScannerProduct(mapping);
+    const recognizedCodes=scan.recognition?.setCodes||[];
+    if(remembered&&(!recognizedCodes.length||TcgScannerRecognition.exactCodeMatches([remembered],recognizedCodes).length)){
+      scan.recognizedProduct=remembered;
+      scan.recognitionMatch={query:mapping.name||mapping.productId,products:[remembered],selected:remembered,reason:"remembered",confidence:mapping.confidence};
     }
+  }
+  if(!scan.recognitionMatch){
     scan.recognitionMatch=await scannerCatalogMatch(scan);
     scan.recognizedProduct=scan.recognitionMatch?.selected||null;
   }
@@ -2423,7 +2457,7 @@ async function inventoryPricingSuggestion(product={}){
   return {recommendedSell:Number(learned.recommendedSell||marketValues[0]||0),recommendedBuy:Number(learned.recommendedBuy||0),priceFloor:Number(learned.priceFloor||0),quickSell:Number(learned.quickSell||0),confidence:learned.confidenceLevel||"low"};
 }
 
-async function chooseInventoryVariant(productId){
+async function chooseInventoryVariant(productId,preserveResults=false){
   const product=inventoryModalVariants.get(String(productId));if(!product)return;
   const priceSequence=++inventoryPriceSequence;
   const wrap=document.getElementById("modalFields");
@@ -2436,7 +2470,8 @@ async function chooseInventoryVariant(productId){
   document.getElementById("inventorySetDisplay").value=values.setName||values.set;
   document.getElementById("inventoryRarityDisplay").value=values.rarity;
   document.getElementById("inventoryNumberDisplay").value=values.collectorNumber;
-  document.getElementById("inventoryCardResults").innerHTML="";
+  if(!preserveResults)document.getElementById("inventoryCardResults").innerHTML="";
+  else document.querySelectorAll("#inventoryCardResults [data-select-inventory-product]").forEach(button=>button.classList.toggle("selected",button.dataset.selectInventoryProduct===String(productId)));
   const suggestion=await inventoryPricingSuggestion(product);
   if(priceSequence!==inventoryPriceSequence||document.querySelector('#modalFields [name="productId"]')?.value!==String(productId))return;
   const suggestionField=document.querySelector('#modalFields [name="suggestedSell"]');if(suggestionField)suggestionField.value=Number(suggestion.recommendedSell||0).toFixed(2);
@@ -2453,7 +2488,8 @@ function scannerReviewTitle(scan={}){
 function scannerReviewDescription(scan={}){
   const detected=scan.recognitionMatch?.query||scan.hint||"";
   const source=scan.recognitionMatch?.reason==="remembered"?"Aus einer früheren Bestätigung wiedererkannt":detected?`Im Foto erkannt: ${detected}`:"Im Foto wurde kein sicherer Kartenname gelesen";
-  return `${source}. Der Scan speichert niemals automatisch; alle Angaben bleiben vor dem Speichern korrigierbar.`;
+  const details=[scan.recognition?.setCodes?.[0]&&`Setnummer ${scan.recognition.setCodes[0]}`,scan.recognition?.passcodes?.[0]&&`Karten-ID ${scan.recognition.passcodes[0]}`,scan.recognition?.edition].filter(Boolean).join(" · ");
+  return `${source}${details?` · ${details}`:""}. Der Scan speichert niemals automatisch; alle Angaben bleiben vor dem Speichern korrigierbar.`;
 }
 
 function renderInventoryProductChoices(products=[],scan=null){
@@ -2461,7 +2497,7 @@ function renderInventoryProductChoices(products=[],scan=null){
   const complete=products.filter(scannerProductComplete);
   const incomplete=products.filter(product=>!complete.includes(product));
   inventoryModalVariants=new Map(complete.map(product=>[String(product.productId),product]));
-  const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe und Seltenheit kontrollieren.</span></div>`:"";
+  const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":scan.recognitionMatch?.reason==="fuzzy-name"?"Ähnlicher Kartenname gefunden":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe, Seltenheit und Edition kontrollieren.</span></div>`:"";
   const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
   const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} noch nicht eindeutig auswählbar</strong><span>Setnummer oder Seltenheit fehlt in der Quelldatei. Diese Varianten werden zusammengefasst, damit nicht versehentlich die falsche Produkt-ID gespeichert wird.</span></div>`:"";
   target.innerHTML=products.length?recognitionHtml+completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
@@ -2471,12 +2507,20 @@ function applyScannerModalRecognition(scan){
   if(!scan)return false;
   const match=scan.recognitionMatch;
   const search=document.getElementById("inventoryCardSearch");
+  const detectedCode=scan.recognition?.setCodes?.[0]||"";
+  const detectedLanguage=detectedCode.match(/-([A-Z]{2})[0-9]/)?.[1]||"";
+  const languageField=document.querySelector('#modalFields [name="language"]');
+  if(languageField&&[...languageField.options].some(option=>option.value===detectedLanguage))languageField.value=detectedLanguage;
+  const editionField=document.querySelector('#modalFields [name="edition"]');
+  if(editionField&&scan.recognition?.edition&&[...editionField.options].some(option=>option.value===scan.recognition.edition))editionField.value=scan.recognition.edition;
+  const passcodeField=document.querySelector('#modalFields [name="cardPasscode"]');
+  if(passcodeField)passcodeField.value=scan.recognition?.passcodes?.[0]||"";
   if(search&&match?.query)search.value=match.query;
   if(match?.products?.filter(Boolean).length){
     const products=match.products.filter(Boolean);
     renderInventoryProductChoices(products,scan);
     const selected=scan.recognizedProduct||match.selected;
-    if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}
+    if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId,true);}
     return true;
   }
   const fallback=scan.hint||scan.recognition?.queries?.[0]||"";
@@ -2501,17 +2545,18 @@ function addInventory(initial={}, collection="business", scan=null) {
   inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent=isPrivate?(initial.id?"Private Karte bearbeiten":"Private Karte hinzufügen"):(initial.id?"Karte bearbeiten":"Karte hinzufügen");
   const wrap=document.getElementById("modalFields");
-  const language=initial.language||"DE",condition=initial.condition||"NM",status=initial.status||(isPrivate?"Privatsammlung":"Im Bestand");
+  const language=initial.language||"DE",condition=initial.condition||"NM",edition=initial.edition||"Unbekannt",status=initial.status||(isPrivate?"Privatsammlung":"Im Bestand");
   wrap.innerHTML=`
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
     <label>Set<input id="inventorySetDisplay" value="${escapeHtml(initial.setName||initial.set||"")}" readonly></label>
     <label>Setnummer<input id="inventoryNumberDisplay" value="${escapeHtml(initial.collectorNumber||"")}" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" value="${escapeHtml(initial.rarity||"")}" readonly></label>
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option ${language===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option ${condition===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    <label>Edition<select name="edition">${["Unbekannt","1st Edition","Unlimited","Limited Edition"].map(value=>`<option ${edition===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Einstand (€)<input name="cost" type="number" min="0" step="0.01" value="${Number(initial.cost||0)||""}"></label>
     ${isPrivate?'':`<label>Gewünschter Inseratspreis (€)<input name="listingPrice" type="number" min="0" step="0.01" value="${Number(initial.listingPrice||0)||""}"></label>`}
     ${isPrivate?`<label>Verkaufsbereitschaft<select name="saleIntent">${["Nicht verkaufen","Vielleicht","Verkaufsbereit"].map(value=>`<option ${String(initial.saleIntent||"Nicht verkaufen")===value?"selected":""}>${value}</option>`).join("")}</select></label><label>Wunschpreis bei Verkauf (€)<input name="desiredSalePrice" type="number" min="0" step="0.01" value="${Number(initial.desiredSalePrice||0)||""}"></label>`:""}
@@ -2553,13 +2598,14 @@ function addPurchaseLine(purchaseId,scan=null){
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="z. B. Aschenblüte oder RA01-008" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <label>Menge<input name="quantity" type="number" min="1" step="1" value="1" required></label>
     <label>Stückpreis (€)<input name="unitPrice" type="number" min="0" step="0.01" required></label>
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option>${value}</option>`).join("")}</select></label>
     <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option>${value}</option>`).join("")}</select></label>
+    <label>Edition<select name="edition">${["Unbekannt","1st Edition","Unlimited","Limited Edition"].map(value=>`<option>${value}</option>`).join("")}</select></label>
     <input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen; der Marktpreis dient nur als Orientierung.</span></div>`;
   wrap.dataset.inventorySelection="required";
   modalHandler=data=>{
@@ -2590,10 +2636,11 @@ function addSaleLine(saleId,scan=null){
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <label>Menge<input name="quantity" type="number" min="1" step="1" value="1" required></label><label>Verkaufspreis pro Stück (€)<input name="unitPrice" type="number" min="0" step="0.01" required></label>
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option>${value}</option>`).join("")}</select></label><label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option>${value}</option>`).join("")}</select></label>
+    <label>Edition<select name="edition">${["Unbekannt","1st Edition","Unlimited","Limited Edition"].map(value=>`<option>${value}</option>`).join("")}</select></label>
     <input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen, um den VK-Vorschlag zu sehen.</span></div>`;
   wrap.dataset.inventorySelection="required";
   modalHandler=data=>{
@@ -2624,7 +2671,7 @@ function refreshPurchaseAssetCosts(purchase){
     const key=`${purchase.id}:${row.receipt.key}`;
     [...state.inventory,...state.privateCollection].filter(asset=>asset.purchaseLineKey===key).forEach(asset=>{
       asset.cost=Number(row.unitCost||0);
-      ["name","germanName","englishName","set","setName","collectorNumber","rarity","productUrl"].forEach(field=>{if(row.item[field]!==undefined)asset[field]=row.item[field];});
+      ["name","germanName","englishName","set","setName","collectorNumber","rarity","productUrl","cardPasscode","edition"].forEach(field=>{if(row.item[field]!==undefined)asset[field]=row.item[field];});
     });
   });
 }
@@ -2637,11 +2684,12 @@ function editPurchaseLine(purchaseId,index){
     {name:"unitPrice",label:"Stückpreis (€)",type:"number",step:"0.01",required:true},
     {name:"set",label:"Set / Setkürzel"},{name:"setName",label:"Setname"},{name:"collectorNumber",label:"Setnummer"},
     {name:"rarity",label:"Version / Seltenheit"},{name:"language",label:"Sprache"},{name:"condition",label:"Zustand"},
+    {name:"edition",label:"Edition"},{name:"cardPasscode",label:"Yu-Gi-Oh!-Karten-ID"},
     {name:"reason",label:"Grund der Korrektur",required:true,full:true}
   ],{...line,reason:""},data=>{
     const quantity=Math.max(0,Math.round(Number(data.quantity||0)));
     if(quantity<receipt.assigned){alert(`${receipt.assigned} Exemplare sind bereits zugeteilt. Reduziere diese zuerst über eine Bestands-/Eigentumskorrektur.`);return false;}
-    Object.assign(line,{quantity,unitPrice:Math.max(0,Number(data.unitPrice||0)),set:String(data.set||"").trim(),setName:String(data.setName||"").trim(),collectorNumber:String(data.collectorNumber||"").trim(),rarity:String(data.rarity||"").trim(),language:String(data.language||"").trim(),condition:String(data.condition||"").trim()});
+    Object.assign(line,{quantity,unitPrice:Math.max(0,Number(data.unitPrice||0)),set:String(data.set||"").trim(),setName:String(data.setName||"").trim(),collectorNumber:String(data.collectorNumber||"").trim(),rarity:String(data.rarity||"").trim(),language:String(data.language||"").trim(),condition:String(data.condition||"").trim(),edition:String(data.edition||"").trim(),cardPasscode:String(data.cardPasscode||"").trim()});
     const productId=cleanProductId(line.productId);
     if(productId){const metadata={set:line.set,setName:line.setName,collectorNumber:line.collectorNumber,rarity:line.rarity};state.productCatalog[productId]={...(state.productCatalog[productId]||{}),...metadata,productId,name:line.name||state.productCatalog[productId]?.name||""};state.inventory.filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,metadata));state.privateCollection.filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,metadata));state.sales.forEach(order=>(order.items||[]).filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,metadata)));}
     recalculatePurchaseTotals(purchase);purchase.inventoryCreated=(purchase.pendingItems||[]).every((item,rowIndex)=>TcgBusinessAutomation.normalizePurchaseReceiptLine(item,rowIndex).open===0);
@@ -2679,7 +2727,7 @@ function purchaseLineAssetBase(purchase,row){
   return {
     productId:item.productId||"",metacardId:item.metacardId||"",name:item.name||item.germanName||item.englishName||"Unbekannte Karte",
     germanName:item.germanName||item.name||"",englishName:item.englishName||"",set:item.set||"",setName:item.setName||"",
-    rarity:item.rarity||item.variant||"",language:item.language||"DE",condition:item.condition||"NM",
+    rarity:item.rarity||item.variant||"",language:item.language||"DE",condition:item.condition||"NM",edition:item.edition||"Unbekannt",cardPasscode:item.cardPasscode||"",
     collectorNumber:item.collectorNumber||item.setCode||"",productUrl:item.productUrl||"",cost:Number(row.unitCost||0),
     purchaseDate:purchase.date||todayISO(),receivedDate:todayISO(),location:"",source:"Einkauf / Wareneingang",
     lotId:purchase.orderNo||purchase.id,importKey:purchase.importKey||purchase.orderNo||purchase.id,sourceRow:item.sourceRow,

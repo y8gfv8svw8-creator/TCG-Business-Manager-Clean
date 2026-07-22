@@ -1,0 +1,26 @@
+TCG Business Manager 6.0.2 – Verbesserte Karten-Scanner-Erkennung
+================================================================
+
+- Scannerfotos werden automatisch auf die Kartenfläche untersucht und in gezielte
+  OCR-Bereiche für Kartenname, Setnummer und unteren Kartenrand aufgeteilt.
+- Mehrere lokale Kontrast- und Farbkanal-Auswertungen verbessern insbesondere die
+  Erkennung von Foil-Karten und kleinen Setnummern.
+- Die iPhone-Übertragung erhält Bilder mit höherer Auflösung und geringerer
+  Komprimierung, damit kleine Druckdaten lesbar bleiben.
+- Neben Kartenname und Setnummer werden die achtstellige Yu-Gi-Oh!-Karten-ID sowie
+  1st Edition, Unlimited und Limited Edition erkannt.
+- Karten-ID und Edition werden dauerhaft mit gescannten Bestands-, Privat-,
+  Einkaufs- und Verkaufspositionen gespeichert.
+- Die Sprache wird aus lokalisierten Setnummern wie BLGG-EN017 vorgeschlagen.
+- Teilweise gelesene Kartennamen werden fehlertolerant mit dem vollständigen
+  deutschen und englischen SQLite-Katalog abgeglichen.
+- Bei einer erkannten Karte werden alle passenden Cardmarket-Druckvarianten zur
+  Kontrolle angeboten. Eine Produkt-ID wird nur bei eindeutiger Zuordnung
+  vorausgewählt.
+- Frühere bestätigte Karten werden anhand des Kartenbildbereichs statt des
+  wechselnden Fotohintergrunds wiedererkannt.
+- Die Scannerverbindung bleibt für Serienaufnahmen geöffnet und ihre Ablaufzeit
+  wird nach jeder erfolgreich übertragenen Karte erneuert.
+- Alle erkannten Angaben bleiben vor dem Speichern vollständig manuell änderbar.
+- Die achtstellige Yu-Gi-Oh!-Karten-ID wird ausdrücklich nicht als
+  Cardmarket-Produkt-ID behandelt.

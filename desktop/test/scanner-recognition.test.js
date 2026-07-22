@@ -10,8 +10,20 @@ test('liest typische Yu-Gi-Oh!-Setnummern aus OCR-Text', () => {
 
 test('korrigiert häufige OCR-Verwechslungen im Zahlenteil', () => {
   assert.equal(recognition.normalizeSetCode('RA01-ENO08'), 'RA01-EN008');
+  assert.equal(recognition.normalizeSetCode('BLGG-ENO17'), 'BLGG-EN017');
   assert.equal(recognition.normalizeSetCode('RA01 - 0I8'), 'RA01-018');
   assert.deepEqual(recognition.setCodeAliases('RAO01-EN008'), ['RAO01-EN008', 'RA01-EN008']);
+});
+
+test('liest Kartenpasscode und Edition aus dem unteren Kartenrand', () => {
+  assert.deepEqual(recognition.extractPasscodes('60700283 1st Edition'), ['60700283']);
+  assert.equal(recognition.extractEdition('60700283 1 Edition'), '1st Edition');
+});
+
+test('erzeugt fehlertolerante Suchbegriffe aus teilweise erkanntem Kartennamen', () => {
+  const aliases = recognition.titleQueryAliases('dx LARKNIGHT CYGNIAN');
+  assert.ok(aliases.includes('LARKNIGHT CYGNIAN'));
+  assert.ok(recognition.titleSimilarity('LARKNIGHT CYGNIAN', 'Tellarknight Cygnian') > 0.75);
 });
 
 test('bevorzugt Kartenname und verwirft Regeltext sowie Werte', () => {

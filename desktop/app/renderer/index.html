@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 5.2.0</title>
+  <title>TCG Business Manager 6.0.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 5.2.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.0.0 · SQLite</div>
         </div>
       </div>
 
@@ -49,7 +49,9 @@
           <p id="pageSubtitle">Zentrale Übersicht über Bestand, Käufe, Verkäufe und Gewinn.</p>
         </div>
         <div class="top-actions">
+          <div class="global-search-wrap"><input id="globalSearch" type="search" placeholder="Überall suchen …" aria-label="Bestand, Bestellungen und Kontakte durchsuchen" autocomplete="off" /><div id="globalSearchResults" class="global-search-results" hidden></div></div>
           <span id="saveStatus" class="save-status">Lokal gespeichert</span>
+          <button id="themeToggleBtn" class="theme-toggle" type="button" aria-label="Darstellung wechseln" title="Darstellung wechseln">Mond</button>
           <button id="quickAddBtn" class="primary">+ Schnell erfassen</button>
         </div>
       </header>
@@ -61,7 +63,9 @@
           <article class="metric-card"><span>Investiertes Kapital</span><strong id="mInvestedCapital">0,00 €</strong><small>Einstand des verfügbaren Bestands</small></article>
           <article id="monthlyRevenueCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Einnahmen dieses Monats anzeigen"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>bezahlte und abgeschlossene Verkäufe</small><span class="metric-detail-link">Details anzeigen →</span></article>
           <article id="monthlyExpensesCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Ausgaben dieses Monats anzeigen"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Karten, Versand, Material und Sonstiges</small><span class="metric-detail-link">Details anzeigen →</span></article>
-          <article class="metric-card"><span>Gewinn Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>Einnahmen minus Ausgaben</small></article>
+          <article class="metric-card"><span>Cashflow Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>Geldeingänge minus tatsächliche Auszahlungen</small></article>
+          <article class="metric-card"><span>Realisierter Gewinn</span><strong id="mRealizedProfit">0,00 €</strong><small>Abgeschlossene Verkäufe nach direkten Kosten</small></article>
+          <article class="metric-card"><span>Betriebsergebnis</span><strong id="mOperatingResult">0,00 €</strong><small>Realisierter Gewinn minus allgemeine Betriebsausgaben</small></article>
           <article class="metric-card"><span>Offene Einkäufe</span><strong id="mOpenPurchases">0</strong><small>bestellt / unterwegs</small></article>
           <article class="metric-card"><span>Kaufchancen</span><strong id="mBuyOpportunities">0</strong><small>Watchlist: Kaufen / Top Deal</small></article>
         </div>
@@ -135,8 +139,20 @@
             <option>Verkauft</option>
             <option>Beschädigt</option>
           </select>
+          <button id="scanInventoryBtn" class="secondary">Mit iPhone scannen</button>
           <button id="addInventoryBtn" class="primary">+ Karte hinzufügen</button>
         </div>
+        <div class="filter-panel" aria-label="Bestand filtern">
+          <label>Set<select id="inventorySetFilter"><option value="">Alle Sets</option></select></label>
+          <label>Seltenheit<select id="inventoryRarityFilter"><option value="">Alle Seltenheiten</option></select></label>
+          <label>Sprache<select id="inventoryLanguageFilter"><option value="">Alle Sprachen</option></select></label>
+          <label>Zustand<select id="inventoryConditionFilter"><option value="">Alle Zustände</option></select></label>
+          <label>Lagerdauer<select id="inventoryAgeFilter"><option value="">Jedes Alter</option><option value="0-30">0–30 Tage</option><option value="31-60">31–60 Tage</option><option value="61-90">61–90 Tage</option><option value="91+">Über 90 Tage</option></select></label>
+          <label>Datenqualität<select id="inventoryQualityFilter"><option value="">Alle Daten</option><option value="complete">Vollständig</option><option value="incomplete">Druckdaten fehlen</option><option value="unpriced">Ohne Inseratspreis</option></select></label>
+          <label>Sortierung<select id="inventorySort"><option value="name">Kartenname</option><option value="set">Set</option><option value="age-desc">Älteste zuerst</option><option value="age-asc">Neueste zuerst</option><option value="value-desc">Höchster VK zuerst</option><option value="quantity-desc">Höchster Bestand zuerst</option></select></label>
+          <button type="button" class="secondary filter-reset" id="inventoryFilterReset">Filter zurücksetzen</button>
+        </div>
+        <div class="collection-summary" id="inventorySummary"></div>
         <div class="table-wrap">
           <table>
             <thead><tr>
@@ -150,12 +166,21 @@
       <section id="view-private" class="view">
         <div class="toolbar">
           <input id="privateSearch" class="search" placeholder="Private Karten nach Name, Set oder Setnummer suchen ..." />
-          <button id="addPrivateBtn" class="primary">+ Private Karte hinzufuegen</button>
+          <button id="scanPrivateBtn" class="secondary">Mit iPhone scannen</button>
+          <button id="addPrivateBtn" class="primary">+ Private Karte hinzufügen</button>
+        </div>
+        <div class="filter-panel" aria-label="Privatsammlung filtern">
+          <label>Set<select id="privateSetFilter"><option value="">Alle Sets</option></select></label>
+          <label>Seltenheit<select id="privateRarityFilter"><option value="">Alle Seltenheiten</option></select></label>
+          <label>Sprache<select id="privateLanguageFilter"><option value="">Alle Sprachen</option></select></label>
+          <label>Zustand<select id="privateConditionFilter"><option value="">Alle Zustände</option></select></label>
+          <label>Verkaufsbereitschaft<select id="privateSaleIntentFilter"><option value="">Alle Karten</option><option value="Nicht verkaufen">Nicht verkaufen</option><option value="Vielleicht">Vielleicht</option><option value="Verkaufsbereit">Verkaufsbereit</option></select></label>
+          <button type="button" class="secondary filter-reset" id="privateFilterReset">Filter zurücksetzen</button>
         </div>
         <div class="private-summary" id="privateSummary"></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Karte</th><th>Set / Nummer</th><th>Seltenheit</th><th>Sprache / Zustand</th><th>Einstand</th><th>Lagerort</th><th></th></tr></thead>
+            <thead><tr><th>Karte</th><th>Set / Nummer</th><th>Seltenheit</th><th>Sprache / Zustand</th><th>Einstand</th><th>Verkauf</th><th>Lagerort</th><th></th></tr></thead>
             <tbody id="privateTable"></tbody>
           </table>
         </div>
@@ -174,11 +199,18 @@
           </select>
           <button id="addPurchaseBtn" class="primary">+ Einkauf erfassen</button>
         </div>
+        <div class="filter-panel" aria-label="Einkäufe filtern">
+          <label>Händler<select id="purchaseSellerFilter"><option value="">Alle Händler</option></select></label>
+          <label>Zahlung<select id="purchasePaymentFilter"><option value="">Jeder Zahlungsstatus</option><option>Offen</option><option>Bezahlt</option><option>Teilweise erstattet</option><option>Erstattet</option><option>Storniert</option></select></label>
+          <label>Wareneingang<select id="purchaseAllocationFilter"><option value="">Jede Aufteilung</option><option value="open">Noch aufzuteilen</option><option value="business">Geschäftsbestand</option><option value="mixed">Privat / gemischt</option><option value="cancelled">Storniert / beschädigt</option></select></label>
+          <button type="button" class="secondary filter-reset" id="purchaseFilterReset">Filter zurücksetzen</button>
+        </div>
+        <div class="collection-summary" id="purchaseSummary"></div>
         <div class="table-wrap">
           <table>
             <thead><tr>
               <th>Bestellnr.</th><th>Datum</th><th>Händler</th><th>Land</th>
-              <th>Karten</th><th>Kartenwert</th><th>Versand</th><th>Trustee/Zusatz</th><th>Gesamt</th><th>Status</th><th></th>
+              <th>Karten</th><th>Kartenwert</th><th>Versand</th><th>Trustee/Zusatz</th><th>Gesamt</th><th>Zahlung</th><th>Lieferung</th><th></th>
             </tr></thead>
             <tbody id="purchaseTable"></tbody>
           </table>
@@ -214,11 +246,18 @@
           </select>
           <button id="addSaleBtn" class="primary">+ Verkauf erfassen</button>
         </div>
+        <div class="filter-panel" aria-label="Verkäufe filtern">
+          <label>Kunde<select id="salesCustomerFilter"><option value="">Alle Kunden</option></select></label>
+          <label>Zahlung<select id="salesPaymentFilter"><option value="">Jeder Zahlungsstatus</option><option>Offen</option><option>Bezahlt</option><option>Erstattet</option><option>Storniert</option></select></label>
+          <label>Ergebnis<select id="salesProfitFilter"><option value="">Jedes Ergebnis</option><option value="profit">Gewinn</option><option value="loss">Verlust</option><option value="incomplete">Kalkulation unvollständig</option></select></label>
+          <button type="button" class="secondary filter-reset" id="salesFilterReset">Filter zurücksetzen</button>
+        </div>
+        <div class="collection-summary" id="salesSummary"></div>
         <div class="table-wrap">
           <table>
             <thead><tr>
               <th>Bestellnr.</th><th>Datum</th><th>Kunde</th><th>Karten</th>
-              <th>Umsatz</th><th>Gebühren</th><th>Gewinn</th><th>Status</th><th></th>
+              <th>Umsatz</th><th>Gebühren</th><th>Gewinn</th><th>Zahlung</th><th>Vorgang</th><th></th>
             </tr></thead>
             <tbody id="salesTable"></tbody>
           </table>
@@ -240,7 +279,7 @@
         </div>
         <div class="two-col material-layout">
           <div>
-            <div class="table-wrap"><table><thead><tr><th>Material</th><th>Bestand</th><th>Stückkosten</th><th>Wert</th><th>Mindestbestand</th><th>Status</th><th></th></tr></thead><tbody id="materialTable"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Material</th><th>Bestand</th><th>Stückkosten</th><th>Wert</th><th>Mindestbestand</th><th>Verbrauch 30 T.</th><th>Reichweite</th><th>Status / Empfehlung</th><th></th></tr></thead><tbody id="materialTable"></tbody></table></div>
           </div>
           <article class="panel">
             <div class="panel-head"><h2>Versandvorlagen</h2><small>Bei Bestellungen auswählbar</small></div>
@@ -253,14 +292,16 @@
         <div class="metric-grid expense-metrics">
           <article class="metric-card"><span>Ausgaben aktueller Monat</span><strong id="expenseMonthTotal">0,00 €</strong><small>alle erfassten Ausgaben</small></article>
           <article class="metric-card"><span>Versandmaterial-Einkäufe</span><strong id="expenseMaterialMonth">0,00 €</strong><small>aktueller Monat</small></article>
-          <article class="metric-card"><span>Sonstige Ausgaben</span><strong id="expenseOtherMonth">0,00 €</strong><small>aktueller Monat</small></article>
+          <article class="metric-card"><span>Allgemeine Betriebsausgaben</span><strong id="expenseOtherMonth">0,00 €</strong><small>fließen nicht in Karten-EK/VK ein</small></article>
+          <article class="metric-card"><span>Direkte Ausgaben</span><strong id="expenseDirectMonth">0,00 €</strong><small>einem Verkauf direkt zugeordnet</small></article>
         </div>
         <div class="toolbar">
           <input id="expenseSearch" class="search" placeholder="Ausgaben durchsuchen..." />
-          <select id="expenseCategoryFilter"><option value="">Alle Kategorien</option><option>Versandmaterial</option><option>Porto</option><option>Software</option><option>Bürobedarf</option><option>Sonstiges</option></select>
+          <select id="expenseCategoryFilter"><option value="">Alle Kategorien</option><option>Versandmaterial</option><option>Porto</option><option>Verkaufsgebühr</option><option>Lagerausstattung</option><option>Software</option><option>Bürobedarf</option><option>Werbung</option><option>Bank / Zahlungsdienst</option><option>Steuerberatung</option><option>Reisekosten</option><option>Sonstiges</option></select>
+          <select id="expenseTypeFilter"><option value="">Alle Kostenarten</option><option value="overhead">Allgemeine Betriebsausgaben</option><option value="direct">Direkte Verkaufskosten</option><option value="inventory">Materialeinkäufe</option></select>
           <button id="addExpenseBtn" class="primary">+ Ausgabe erfassen</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th>Datum</th><th>Kategorie</th><th>Beschreibung</th><th>Betrag</th><th>Notiz</th><th></th></tr></thead><tbody id="expenseTable"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Datum</th><th>Kategorie</th><th>Kostenart</th><th>Beschreibung</th><th>Betrag</th><th>Zuordnung / Notiz</th><th>Status</th><th></th></tr></thead><tbody id="expenseTable"></tbody></table></div>
       </section>
 
       <section id="view-watchlist" class="view">
@@ -278,6 +319,14 @@
           </select>
           <button id="addWatchBtn" class="primary">+ Karte beobachten</button>
         </div>
+        <div class="filter-panel" aria-label="Marktbeobachtung filtern">
+          <label>Priorität<select id="watchPriorityFilter"><option value="">Alle Prioritäten</option><option>A</option><option>B</option><option>C</option></select></label>
+          <label>Bestandsziel<select id="watchStockFilter"><option value="">Jeder Bestand</option><option value="below">Unter Sollbestand</option><option value="reached">Sollbestand erreicht</option></select></label>
+          <label>Preisdaten<select id="watchDataFilter"><option value="">Alle Preisstände</option><option value="fresh">Aktuell</option><option value="stale">Veraltet</option><option value="missing">Fehlen</option></select></label>
+          <label>Preisgrenzen<select id="watchPricingFilter"><option value="">Automatisch und manuell</option><option value="automatic">Automatisch</option><option value="manual">Manuell</option></select></label>
+          <button type="button" class="secondary filter-reset" id="watchFilterReset">Filter zurücksetzen</button>
+        </div>
+        <div class="collection-summary" id="watchSummary"></div>
         <section class="purchase-analysis-panel">
           <div class="panel-head">
             <div>
@@ -292,7 +341,7 @@
             <thead><tr>
               <th>Prio</th><th>Karte</th><th>Set / Version</th><th>Bestand</th><th>Soll</th>
               <th>Max EK</th><th>Ziel VK</th><th>CM Trend</th><th>Ø 30 Tage</th>
-              <th>Gewinn</th><th>ROI</th><th>Empfehlung</th><th></th>
+              <th>Gewinn</th><th>ROI</th><th>Preisstand</th><th>Empfehlung</th><th></th>
             </tr></thead>
             <tbody id="watchTable"></tbody>
           </table>
@@ -518,15 +567,25 @@
       </section>
 
       <section id="view-reports" class="view">
+        <div class="toolbar report-period-toolbar">
+          <label>Von<input id="reportDateFrom" type="date" /></label>
+          <label>Bis<input id="reportDateTo" type="date" /></label>
+          <button id="reportPeriodReset" class="secondary" type="button">Gesamter Zeitraum</button>
+          <button id="exportReportCsv" class="secondary" type="button">Finanzbericht als CSV</button>
+        </div>
         <div class="metric-grid">
-          <article class="metric-card"><span>Gesamtumsatz</span><strong id="rRevenue">0,00 €</strong></article>
-          <article class="metric-card"><span>Gesamtgewinn</span><strong id="rProfit">0,00 €</strong></article>
+          <article class="metric-card"><span>Geldeingänge</span><strong id="rCashIn">0,00 €</strong><small>tatsächlich erhalten</small></article>
+          <article class="metric-card"><span>Geldausgänge</span><strong id="rCashOut">0,00 €</strong><small>tatsächlich bezahlt</small></article>
+          <article class="metric-card"><span>Cashflow</span><strong id="rCashflow">0,00 €</strong><small>Einzahlungen minus Auszahlungen</small></article>
+          <article class="metric-card"><span>Realisierter Umsatz</span><strong id="rRevenue">0,00 €</strong><small>abgeschlossene Verkäufe</small></article>
+          <article class="metric-card"><span>Realisierter Gewinn</span><strong id="rProfit">0,00 €</strong><small>nach direkten Kosten</small></article>
+          <article class="metric-card"><span>Betriebsergebnis</span><strong id="rOperatingResult">0,00 €</strong><small>nach allgemeinen Kosten</small></article>
           <article class="metric-card"><span>Ø ROI</span><strong id="rRoi">0,0 %</strong></article>
           <article class="metric-card"><span>Ø Lagerdauer</span><strong id="rDays">0 Tage</strong></article>
         </div>
         <div class="dashboard-grid">
           <article class="panel">
-            <h2>Gewinn nach Monat</h2>
+            <h2>Finanzen nach Monat</h2>
             <div id="monthlyReport"></div>
           </article>
           <article class="panel">
@@ -587,41 +646,76 @@
       </section>
 
       <section id="view-settings" class="view">
-        <div class="settings-grid">
-          <label>Cardmarket-Gebühr (%)
-            <input id="settingFee" type="number" min="0" step="0.1" />
-          </label>
-          <label>Verpackung pro Karte (€)
-            <input id="settingPackaging" type="number" min="0" step="0.01" />
-          </label>
-          <label>Mindestgewinn (€)
-            <input id="settingMinProfit" type="number" min="0" step="0.01" />
-          </label>
-          <label>Mindest-ROI (%)
-            <input id="settingMinRoi" type="number" min="0" step="1" />
-          </label>
-          <label>Preiswarnung nach Tagen
-            <input id="settingPriceAge" type="number" min="1" step="1" />
-          </label>
-          <label>Standardzustand
-            <select id="settingCondition">
-              <option>NM</option><option>EX</option><option>GD</option><option>LP</option>
-            </select>
-          </label>
-          <label>Bevorzugte Sprachen
-            <input id="settingLanguages" />
-          </label>
-          <label>Standard-Sollbestand
-            <input id="settingTargetStock" type="number" min="0" step="1" />
-          </label>
-          <label>Sicherheitsabschlag Marktpreis (%)
-            <input id="settingSafetyPercent" type="number" min="0" max="50" step="0.5" />
-          </label>
+        <div class="settings-sections">
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Allgemein &amp; Darstellung</h2><small>Der graue Dunkelmodus gilt für die gesamte App und wird dauerhaft gespeichert.</small></div></div>
+            <div class="settings-grid">
+              <label>Darstellung
+                <select id="settingThemeMode"><option value="system">Systemeinstellung</option><option value="light">Heller Modus</option><option value="dark">Dunkler Grau-Modus</option></select>
+              </label>
+              <label>Tabellendarstellung
+                <select id="settingDensity"><option value="comfortable">Komfortabel</option><option value="compact">Kompakt</option></select>
+              </label>
+              <label>Startseite
+                <select id="settingStartView"><option value="dashboard">Dashboard</option><option value="inventory">Bestand</option><option value="purchases">Einkäufe</option><option value="sales">Verkäufe</option><option value="watchlist">Marktbeobachtung</option></select>
+              </label>
+            </div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Preise &amp; Wirtschaftlichkeit</h2><small>Tatsächliche Gebühren und Materialien haben immer Vorrang vor diesen Schätzwerten.</small></div></div>
+            <div class="settings-grid">
+              <label>Standardgebühr, falls unbekannt (%)<input id="settingFee" type="number" min="0" max="100" step="0.1" /></label>
+              <label>Verpackungsschätzung, falls unbekannt (€)<input id="settingPackaging" type="number" min="0" step="0.01" /></label>
+              <label>Mindestgewinn (€)<input id="settingMinProfit" type="number" min="0" step="0.01" /></label>
+              <label>Mindest-ROI (%)<input id="settingMinRoi" type="number" min="0" step="1" /></label>
+              <label>Sicherheitsabschlag Marktpreis (%)<input id="settingSafetyPercent" type="number" min="0" max="50" step="0.5" /></label>
+              <label>Schnellverkaufsabschlag (%)<input id="settingQuickSellDiscount" type="number" min="0" max="50" step="0.5" /></label>
+              <label>Preiswarnung nach Tagen<input id="settingPriceAge" type="number" min="1" step="1" /></label>
+            </div>
+            <div id="settingsCalculationPreview" class="settings-preview"></div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Bestand</h2><small>Standardwerte können bei jeder Karte weiterhin einzeln geändert werden.</small></div></div>
+            <div class="settings-grid">
+              <label>Standardzustand<select id="settingCondition"><option>NM</option><option>EX</option><option>GD</option><option>LP</option></select></label>
+              <label>Bevorzugte Sprachen<input id="settingLanguages" placeholder="DE/EN" /></label>
+              <label>Standard-Sollbestand<input id="settingTargetStock" type="number" min="0" step="1" /></label>
+              <label>Lagerhüter-Warnung nach Tagen<input id="settingStockAgeWarning" type="number" min="1" step="1" /></label>
+              <label>Kritisches Lageralter nach Tagen<input id="settingStockAgeCritical" type="number" min="1" step="1" /></label>
+            </div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Scanner &amp; sichere Importe</h2><small>Scans bleiben immer manuell korrigierbar; Dateien werden standardmäßig vor dem Speichern geprüft.</small></div></div>
+            <div class="settings-grid">
+              <label class="switch-label"><input id="settingScannerEnabled" type="checkbox" /> iPhone-Scanner aktivieren</label>
+              <label>Mindest-Erkennungssicherheit (%)<input id="settingScannerConfidence" type="number" min="0" max="100" step="1" /></label>
+              <label class="switch-label"><input id="settingScannerRemember" type="checkbox" /> bestätigte Zuordnungen merken</label>
+              <label class="switch-label"><input id="settingScannerKeepImages" type="checkbox" /> Scanbilder nach Bestätigung behalten</label>
+              <label class="switch-label"><input id="settingImportReview" type="checkbox" /> Importe immer vor dem Speichern prüfen</label>
+              <label class="switch-label"><input id="settingArchiveImports" type="checkbox" /> Originaldateien später archivieren</label>
+            </div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Backups &amp; Daten</h2><small>SQLite bleibt die dauerhafte Datenquelle. Automatische Sicherungen schützen bestehende Nutzerdaten.</small></div></div>
+            <div id="settingsDatabaseStatus" class="settings-status-grid"><div class="muted">Datenbankstatus wird gelesen …</div></div>
+            <div class="settings-actions">
+              <button id="openDataFolderBtn" class="secondary" type="button">Datenordner öffnen</button>
+              <button id="backupBtn2" class="secondary" type="button">Vollständiges Backup exportieren</button>
+              <label class="secondary file-label">Backup prüfen und laden<input id="backupInput2" type="file" accept=".json" hidden /></label>
+            </div>
+          </article>
+
+          <article class="panel settings-section danger-zone">
+            <div class="panel-head"><div><h2>Gefahrenbereich</h2><small>Vor dem Zurücksetzen wird automatisch ein vollständiges JSON-Backup angeboten.</small></div></div>
+            <label>Zum Freischalten <strong>LÖSCHEN</strong> eingeben<input id="resetConfirmation" autocomplete="off" placeholder="LÖSCHEN" /></label>
+            <div class="settings-actions"><button id="resetDemoBtn" class="danger" type="button" disabled>Alle Geschäftsdaten löschen</button></div>
+          </article>
         </div>
-        <div class="settings-actions">
-          <button id="saveSettingsBtn" class="primary">Einstellungen speichern</button>
-          <button id="resetDemoBtn" class="danger">Alle Daten löschen</button>
-        </div>
+        <div class="settings-savebar"><button id="saveSettingsBtn" class="primary">Einstellungen speichern</button></div>
       </section>
     </main>
   </div>
@@ -695,6 +789,14 @@
     </div>
   </dialog>
 
+  <dialog id="scannerDialog" class="scanner-dialog">
+    <div class="modal-head"><div><h2>iPhone-Kartenscanner</h2><p class="muted" id="scannerSubtitle">Kamera sicher mit diesem Manager verbinden.</p></div><button type="button" id="scannerClose" class="icon-button">×</button></div>
+    <div id="scannerContent" class="scanner-content">
+      <div class="scanner-loading">Scanner-Verbindung wird vorbereitet …</div>
+    </div>
+    <div class="modal-actions"><button type="button" id="scannerStop" class="secondary">Scanner beenden</button></div>
+  </dialog>
+
   <script>
     (() => {
       const DB_KEY = "tcgWawiState_v31";
@@ -715,14 +817,18 @@
         try {
           const databaseState = await window.desktopApp.loadState();
           const localRaw = localStorage.getItem(DB_KEY);
-          const localUpdatedAt = localStorage.getItem(UPDATED_KEY) || "";
           const databaseUpdatedAt = databaseState?.updatedAt || "";
 
-          if (databaseState?.state && (!localRaw || databaseUpdatedAt >= localUpdatedAt)) {
+          // In der Desktop-App ist SQLite die einzige dauerhafte Hauptdatenquelle.
+          // localStorage dient nur als wiederaufbaubarer Cache. Nur beim allerersten
+          // Start einer alten Installation wird der vorhandene Browserstand übernommen.
+          if (databaseState?.state) {
             localStorage.setItem(DB_KEY, JSON.stringify(databaseState.state));
             localStorage.setItem(UPDATED_KEY, databaseUpdatedAt);
-          } else if (localRaw && (!databaseState?.state || localUpdatedAt > databaseUpdatedAt)) {
-            await window.desktopApp.saveState(JSON.parse(localRaw));
+          } else if (localRaw) {
+            const migrated = JSON.parse(localRaw);
+            const result = await window.desktopApp.saveState(migrated);
+            localStorage.setItem(UPDATED_KEY, result?.updatedAt || new Date().toISOString());
           }
         } catch (error) {
           console.error("SQLite-Startabgleich fehlgeschlagen:", error);
@@ -731,6 +837,7 @@
 
       (async () => {
         await prepareDesktopState();
+        await loadScript("../shared/app-config.js");
         await loadScript("../shared/card-search.js");
         await loadScript("../shared/business-automation.js");
         await loadScript("app.js");

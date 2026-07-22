@@ -469,7 +469,9 @@ class TcgDatabase {
       throw error;
     }
 
-    this.createDailyBackup(json, updatedAt);
+    if (state?.settings?.autoBackup !== false) {
+      this.createDailyBackup(json, updatedAt, state?.settings?.backupRetentionDays);
+    }
     return {
       ok: true,
       updatedAt,
@@ -517,6 +519,22 @@ class TcgDatabase {
         insert.run(
           entityType, entityId, 'delete', savedAt, recordSource(before),
           JSON.stringify(before), null, JSON.stringify(Object.keys(before || {}).sort()), savedAt
+        );
+      }
+    }
+
+    const beforeSettings = previousState?.settings && typeof previousState.settings === 'object'
+      ? previousState.settings
+      : null;
+    const afterSettings = nextState?.settings && typeof nextState.settings === 'object'
+      ? nextState.settings
+      : {};
+    if (beforeSettings) {
+      const fields = changedFields(beforeSettings, afterSettings);
+      if (fields.length) {
+        insert.run(
+          'settings', 'global', 'update', savedAt, 'manual',
+          JSON.stringify(beforeSettings), JSON.stringify(afterSettings), JSON.stringify(fields), savedAt
         );
       }
     }
@@ -840,7 +858,7 @@ class TcgDatabase {
     });
   }
 
-  createDailyBackup(json, updatedAt) {
+  createDailyBackup(json, updatedAt, retentionDays = 30) {
     const automaticRoot = path.join(this.backupRoot, 'Automatisch');
     ensureDirectory(automaticRoot);
 
@@ -856,7 +874,8 @@ class TcgDatabase {
       .sort()
       .reverse();
 
-    for (const oldName of backups.slice(30)) {
+    const retention = Math.max(1, Math.min(3650, Math.round(Number(retentionDays) || 30)));
+    for (const oldName of backups.slice(retention)) {
       fs.rmSync(path.join(automaticRoot, oldName), { force: true });
     }
   }

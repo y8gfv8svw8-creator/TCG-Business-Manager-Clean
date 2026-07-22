@@ -86,6 +86,12 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.deepEqual(update.changedFields, ['shipping']);
   assert.equal(database.getTradeRecommendations({productIds:['123456']}).recommendations[0].ownBuyAverage, 10);
 
+  changed.settings.minProfit = 3;
+  database.saveState(changed);
+  const settingUpdate = database.getBusinessEvents({entityType:'settings', entityId:'global', limit:1})[0];
+  assert.equal(settingUpdate.eventType, 'update');
+  assert.deepEqual(settingUpdate.changedFields, ['minProfit']);
+
   changed.sales = [];
   database.saveState(changed);
   const deletion = database.getBusinessEvents({entityType:'sale', entityId:'sale-1', limit:1})[0];

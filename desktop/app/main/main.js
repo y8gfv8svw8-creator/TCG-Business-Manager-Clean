@@ -2,13 +2,24 @@ const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { TcgDatabase } = require('./database');
+const { ScannerServer } = require('./scanner-server');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 5.2.0';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.0.0';
 let database = null;
 let dataRoot = '';
+let mainWindow = null;
+const scannerServer = new ScannerServer({
+  onSubmission: submission => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
+  }
+});
 
 function ensureUserFolders() {
-  const root = path.join(app.getPath('documents'), 'TCG Business Manager');
+  // Der optionale Pfad ist ausschließlich für isolierte QA-/Entwicklungsstarts.
+  // Normale Installationen verwenden weiterhin unverändert den Dokumente-Ordner.
+  const root = process.env.TCG_MANAGER_DATA_ROOT
+    ? path.resolve(process.env.TCG_MANAGER_DATA_ROOT)
+    : path.join(app.getPath('documents'), 'TCG Business Manager');
   const folders = ['Daten', 'Backups', 'Imports', 'Exports', 'Logs'];
   for (const folder of folders) fs.mkdirSync(path.join(root, folder), { recursive: true });
   return root;
@@ -35,6 +46,9 @@ function setupIpcHandlers() {
     const result = await shell.openPath(dataRoot);
     return { ok: !result, error: result || '' };
   });
+  ipcMain.handle('scanner:start', (_event, payload) => scannerServer.start(payload?.mode, payload?.targetId));
+  ipcMain.handle('scanner:stop', () => scannerServer.stop());
+  ipcMain.handle('scanner:status', () => scannerServer.status());
 
   ipcMain.handle('data:load-state', () => database.loadState());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));
@@ -58,7 +72,7 @@ function setupIpcHandlers() {
 }
 
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1540,
     height: 980,
     minWidth: 1100,
@@ -94,6 +108,7 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
@@ -114,6 +129,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  scannerServer.stop().catch(error => console.error('Scanner-Server konnte nicht beendet werden:', error));
   try {
     database?.close();
   } catch (error) {

@@ -11,18 +11,14 @@ const WATCHLIST_REFERENCE = {
   "Ausgeglichener Zweikampf": {productUrl:"https://www.cardmarket.com/de/YuGiOh/Products/Singles/25th-Anniversary-Rarity-Collection/Evenly-Matched-V3-Secret-Rare", currentBuy:2.29, trend:"", avg30:""}
 };
 
+const DEFAULT_SETTINGS = window.TcgAppConfig?.DEFAULT_SETTINGS || {
+  feePercent: 5, packaging: 0.12, minProfit: 0.75, minRoi: 20,
+  priceAgeDays: 7, condition: "NM", languages: "DE/EN", targetStock: 3,
+  safetyPercent: 5, themeMode: "system", density: "comfortable", startView: "dashboard"
+};
+
 const defaultState = {
-  settings: {
-    feePercent: 5,
-    packaging: 0.12,
-    minProfit: 0.75,
-    minRoi: 20,
-    priceAgeDays: 7,
-    condition: "NM",
-    languages: "DE/EN",
-    targetStock: 3,
-    safetyPercent: 5
-  },
+  settings: structuredClone(DEFAULT_SETTINGS),
   inventory: [],
   privateCollection: [],
   purchases: [],
@@ -42,12 +38,15 @@ const defaultState = {
   materialTemplates: [],
   movements: [],
   reconciliations: [],
+  scannerMappings: [],
+  scannerHistory: [],
   sync: {autoFolder:true, autoPrices:true, lastPriceUpdate:"", processedFiles:{}, pendingFiles:[]},
   partnerExclusions: {sellers: [], customers: []},
   productCatalog: structuredClone(BUILTIN_PRODUCT_CATALOG)
 };
 
 let state = loadState();
+let systemThemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") || null;
 let modalHandler = null;
 let cardNameLookup = new Map();
 let cardNameByNormalizedName = new Map();
@@ -56,6 +55,7 @@ let cardNameLookupPromise = null;
 let activePerformanceReport = "cards";
 let businessHealthDatabaseStatus = null;
 let businessHealthStatusPromise = null;
+let scannerSessionMode = "business";
 
 const views = {
   private: ["Privatsammlung", "Private Karten getrennt vom Geschaeftsbestand verwalten."],
@@ -277,6 +277,7 @@ function normalizePartnerRecord(record={}, kind="seller") {
     id: record.id || crypto.randomUUID(),
     name: record.name || "",
     cardmarketName: record.cardmarketName || record.name || "",
+    externalId: record.externalId || record.cardmarketId || "",
     realName: record.realName || "",
     country: record.country || "",
     language: record.language || "",
@@ -356,7 +357,9 @@ function customerStats(customer) {
 
 function migrateState(data) {
   const migrated = {...structuredClone(defaultState), ...data};
-  migrated.settings = {...defaultState.settings, ...(data.settings||{})};
+  migrated.settings = window.TcgAppConfig?.normalizeSettings
+    ? window.TcgAppConfig.normalizeSettings(data.settings||{})
+    : {...defaultState.settings, ...(data.settings||{})};
   migrated.inventory = Array.isArray(data.inventory) ? data.inventory : [];
   migrated.privateCollection = Array.isArray(data.privateCollection) ? data.privateCollection : [];
   migrated.purchases = Array.isArray(data.purchases) ? data.purchases : [];
@@ -367,6 +370,8 @@ function migrateState(data) {
   migrated.materialTemplates = Array.isArray(data.materialTemplates) ? data.materialTemplates : [];
   migrated.movements = Array.isArray(data.movements) ? data.movements : [];
   migrated.reconciliations = Array.isArray(data.reconciliations) ? data.reconciliations : [];
+  migrated.scannerMappings = Array.isArray(data.scannerMappings) ? data.scannerMappings : [];
+  migrated.scannerHistory = Array.isArray(data.scannerHistory) ? data.scannerHistory.slice(-200) : [];
   migrated.sellers = (Array.isArray(data.sellers) ? data.sellers : []).map(s=>normalizePartnerRecord(s,"seller"));
   migrated.customers = (Array.isArray(data.customers) ? data.customers : []).map(c=>normalizePartnerRecord(c,"customer"));
   migrated.imports = Array.isArray(data.imports) ? data.imports : [];
@@ -586,10 +591,10 @@ const uid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `tcg-${
 function statusBadge(status) {
   const s = String(status||"");
   let c = "blue";
-  if (["TOP DEAL","KAUFEN","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen"].includes(s)) c="green";
-  if (["BEOBACHTEN","KEINE PREISDATEN","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen"].includes(s)) c="yellow";
+  if (["TOP DEAL","KAUFEN","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen","Verkaufsbereit","Gebucht"].includes(s)) c="green";
+  if (["BEOBACHTEN","KEINE PREISDATEN","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen","Teilweise erstattet","Vielleicht"].includes(s)) c="yellow";
   if (["STOP","NICHT KAUFEN","FALLEND","Storniert","Beschädigt","Verlustverkauf","Erstattet"].includes(s)) c="red";
-  if (["Reserviert","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe unterwegs"].includes(s)) c="purple";
+  if (["Reserviert","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe unterwegs","Nicht verkaufen"].includes(s)) c="purple";
   return `<span class="badge ${c}">${escapeHtml(s||"-")}</span>`;
 }
 
@@ -725,6 +730,8 @@ function saleMaterialCost(sale){
   return sale?.packaging!==undefined && sale.packaging!=="" ? Number(sale.packaging) : 0;
 }
 function calculateSaleProfit(sale) {
+  const shared=window.TcgBusinessAutomation?.calculateSaleProfit?.(sale,state.settings);
+  if(shared)return shared;
   const gross = Number(sale.revenue||0);
   const refund = Math.max(0,Number(sale.refund||0));
   const feeBase = Number(sale.cardValue||Math.max(0,gross-Number(sale.shippingPaid||0)));
@@ -790,6 +797,50 @@ function showView(name) {
   renderAll();
 }
 
+let globalSearchActions=[];
+function renderGlobalSearch(query){
+  const target=document.getElementById("globalSearchResults");if(!target)return;
+  const term=String(query||"").trim();
+  if(term.length<2){target.hidden=true;target.innerHTML="";globalSearchActions=[];return;}
+  const rows=[];
+  const push=(kind,title,subtitle,action)=>{if(rows.length<30)rows.push({kind,title,subtitle,action});};
+  getInventoryGroups().filter(group=>cardRecordMatchesSearch(group.first,term)).slice(0,8).forEach(group=>push("Bestand",cardDisplayNames(group.first).primary,[group.first.setName||group.first.set,group.first.collectorNumber,group.first.rarity,`${group.quantity}×`].filter(Boolean).join(" · "),()=>{showView("inventory");document.getElementById("inventorySearch").value=term;renderAll();}));
+  state.privateCollection.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(row=>push("Privat",cardDisplayNames(row).primary,[row.setName||row.set,row.collectorNumber,row.rarity].filter(Boolean).join(" · "),()=>{showView("private");document.getElementById("privateSearch").value=term;renderAll();}));
+  state.purchases.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(row=>push("Einkauf",`#${row.orderNo||"–"}`,`${row.seller||"Unbekannter Händler"} · ${fmtDate(row.date)}`,()=>openOrderDetails("purchase",row.id)));
+  state.sales.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(row=>push("Verkauf",`#${row.orderNo||"–"}`,`${row.customer||"Unbekannter Kunde"} · ${fmtDate(row.date)}`,()=>openOrderDetails("sale",row.id)));
+  [...state.sellers.map(row=>({row,kind:"Händler"})),...state.customers.map(row=>({row,kind:"Kunde"}))].filter(({row})=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(({row,kind})=>push(kind,row.cardmarketName||row.name,[row.realName,row.country].filter(Boolean).join(" · "),()=>{showView("partners");kind==="Händler"?showSellerDetails(row.id):showCustomerDetails(row.id);}));
+  state.materials.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,3).forEach(row=>push("Material",row.name,`${Number(row.stock||0)} ${row.unit||"Stück"}`,()=>{showView("materials");document.getElementById("materialSearch").value=term;renderAll();}));
+  globalSearchActions=rows.map(row=>row.action);
+  target.innerHTML=rows.length?rows.map((row,index)=>`<button type="button" data-global-result="${index}"><span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.subtitle||"")}</small></span><span class="global-search-kind">${escapeHtml(row.kind)}</span></button>`).join(""):'<div class="empty">Keine passenden Daten gefunden.</div>';
+  target.hidden=false;
+}
+
+function applyAppearanceSettings() {
+  const settings = state?.settings || DEFAULT_SETTINGS;
+  const resolved = window.TcgAppConfig?.resolveTheme
+    ? window.TcgAppConfig.resolveTheme(settings.themeMode, Boolean(systemThemeQuery?.matches))
+    : (settings.themeMode === "dark" ? "dark" : "light");
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themeMode = settings.themeMode || "system";
+  document.body.dataset.density = settings.density || "comfortable";
+  const toggle = document.getElementById("themeToggleBtn");
+  if (toggle) {
+    toggle.textContent = resolved === "dark" ? "Sonne" : "Mond";
+    toggle.title = resolved === "dark" ? "Zum hellen Modus wechseln" : "Zum dunklen Grau-Modus wechseln";
+    toggle.setAttribute("aria-label", toggle.title);
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme || "light";
+  state.settings = window.TcgAppConfig?.normalizeSettings
+    ? window.TcgAppConfig.normalizeSettings({...state.settings, themeMode:current === "dark" ? "light" : "dark"})
+    : {...state.settings, themeMode:current === "dark" ? "light" : "dark"};
+  applyAppearanceSettings();
+  renderSettings();
+  saveState();
+}
+
 function renderAll() {
   syncWatchStock();
   syncAutomaticWatchPrices();
@@ -813,16 +864,25 @@ function syncWatchStock() {
   });
 }
 
-function completedOrPaidSale(s){ return ["Bezahlt","Kommissioniert","Verpackt","Versendet","Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(s.status); }
 function monthlyBusinessFigures(year,month){
-  const sales=state.sales.filter(s=>isSameMonth(s.date,year,month) && completedOrPaidSale(s));
-  const purchases=state.purchases.filter(p=>isSameMonth(p.date,year,month) && p.status!=="Storniert");
-  const income=sales.reduce((a,s)=>a+Math.max(0,Number(s.revenue||0)-Number(s.refund||0)),0);
-  const cardPurchases=purchases.reduce((a,p)=>a+purchaseBusinessCost(p),0);
-  const saleCosts=sales.reduce((a,s)=>{const c=calculateSaleProfit(s);return a+c.fee+c.postage+c.packaging;},0);
-  const other=(state.expenses||[]).filter(e=>isSameMonth(e.date,year,month)&&e.status!=="Storniert").reduce((a,e)=>a+Number(e.amount||0),0);
-  const expenses=cardPurchases+saleCosts+other;
-  return {sales,purchases,income,cardPurchases,saleCosts,other,expenses,profit:income-expenses};
+  const monthNumber=String(month+1).padStart(2,"0");
+  const lastDay=String(new Date(year,month+1,0).getDate()).padStart(2,"0");
+  const summary=window.TcgBusinessAutomation?.buildFinancialSummary?.(state,{from:`${year}-${monthNumber}-01`,to:`${year}-${monthNumber}-${lastDay}`});
+  if(summary){
+    const saleIds=new Set(summary.entries.filter(row=>row.category==="sale_receipt").map(row=>String(row.sourceId||"")));
+    const purchaseIds=new Set(summary.entries.filter(row=>row.category==="card_purchase").map(row=>String(row.sourceId||"")));
+    const categoryOut=name=>Number(summary.byCategory?.[name]?.cashOut||0);
+    const cardPurchases=categoryOut("card_purchase");
+    const saleCosts=categoryOut("sale_fee")+categoryOut("sale_postage")+categoryOut("customer_refund");
+    const other=categoryOut("material_purchase")+categoryOut("direct_expense")+categoryOut("overhead");
+    return {
+      ...summary,
+      sales:state.sales.filter(row=>saleIds.has(String(row.id||""))),
+      purchases:state.purchases.filter(row=>purchaseIds.has(String(row.id||""))),
+      income:summary.cashIn,cardPurchases,saleCosts,other,expenses:summary.cashOut,profit:summary.cashflow
+    };
+  }
+  return {sales:[],purchases:[],entries:[],income:0,cardPurchases:0,saleCosts:0,other:0,expenses:0,profit:0,realizedProfit:0,overhead:0,operatingResult:0};
 }
 
 function financeCardDescription(record, type) {
@@ -846,8 +906,9 @@ function monthlyFinanceDetails(type,year,month){
     rows.push({date,category,reference,description,amount:value,orderType,orderId});
   };
   if(type==="income"){
-    figures.sales.forEach(sale=>{
-      const totalIncome=Math.max(0,Number(sale.revenue||0)-Number(sale.refund||0));
+    figures.entries.filter(entry=>entry.category==="sale_receipt").forEach(entry=>{
+      const sale=state.sales.find(row=>String(row.id||"")===String(entry.sourceId||""))||{};
+      const totalIncome=Math.max(0,Number(entry.cashIn||0));
       // Cardmarket-Importe speichern den Käufer-Versand bereits im Gesamtumsatz.
       // Für die Anzeige wird er abgezogen und separat ausgewiesen; die Summe
       // bleibt dadurch unverändert und wird nicht doppelt gezählt.
@@ -855,27 +916,25 @@ function monthlyFinanceDetails(type,year,month){
       const cardIncome=Math.max(0,totalIncome-customerShipping);
       const reference=`Bestellung ${sale.orderNo||"–"}`;
       const description=`${sale.customer||"Unbekannter Kunde"} · ${financeCardDescription(sale,"sale")}`;
-      add(sale.date,"Kartenverkauf",reference,description,cardIncome,"sale",sale.id);
-      add(sale.date,"Versand vom Käufer",reference,`${sale.customer||"Unbekannter Kunde"} · vom Käufer bezahlter Versand`,customerShipping,"sale",sale.id);
+      add(entry.date,"Kartenverkauf",reference,description,cardIncome,"sale",sale.id);
+      add(entry.date,"Versand vom Käufer",reference,`${sale.customer||"Unbekannter Kunde"} · vom Käufer bezahlter Versand`,customerShipping,"sale",sale.id);
     });
   }else{
-    figures.purchases.forEach(purchase=>{
-      const reference=`Einkauf ${purchase.orderNo||"–"}`;
-      const cards=`${purchase.seller||"Unbekannter Händler"} · ${financeCardDescription(purchase,"purchase")}`;
-      const businessCost=purchaseBusinessCost(purchase);
-      add(purchase.date,"Geschäftlicher Wareneingang",reference,`${cards} · inklusive anteiliger Einkaufsnebenkosten`,businessCost,"purchase",purchase.id);
+    const categoryLabels={card_purchase:"Geschäftlicher Wareneingang",customer_refund:"Kundenerstattung",sale_fee:"Verkaufsgebühr",sale_postage:"Verkaufsporto",material_purchase:"Versandmaterial-Einkauf",direct_expense:"Direkte Ausgabe",overhead:"Betriebsausgabe"};
+    figures.entries.filter(entry=>Number(entry.cashOut||0)>0).forEach(entry=>{
+      if(entry.sourceType==="purchase"){
+        const purchase=state.purchases.find(row=>String(row.id||"")===String(entry.sourceId||""))||{};
+        add(entry.date,categoryLabels[entry.category]||"Einkauf",`Einkauf ${purchase.orderNo||"–"}`,`${purchase.seller||"Unbekannter Händler"} · ${financeCardDescription(purchase,"purchase")} · geschäftlicher Anteil`,entry.cashOut,"purchase",purchase.id);
+        return;
+      }
+      if(entry.sourceType==="sale"){
+        const sale=state.sales.find(row=>String(row.id||"")===String(entry.sourceId||""))||{};
+        add(entry.date,categoryLabels[entry.category]||"Verkaufskosten",`Verkauf ${sale.orderNo||"–"}`,financeCardDescription(sale,"sale"),entry.cashOut,"sale",sale.id);
+        return;
+      }
+      const expense=(state.expenses||[]).find(row=>String(row.id||"")===String(entry.sourceId||""))||{};
+      add(entry.date,categoryLabels[entry.category]||expense.category||"Sonstiges",expense.description||entry.label||"Sonstige Ausgabe",expense.note||"Manuell erfasste Ausgabe",entry.cashOut);
     });
-    figures.sales.forEach(sale=>{
-      const costs=calculateSaleProfit(sale);
-      const reference=`Verkauf ${sale.orderNo||"–"}`;
-      const cards=financeCardDescription(sale,"sale");
-      add(sale.date,"Verkaufsgebühr",reference,cards,costs.fee,"sale",sale.id);
-      add(sale.date,"Verkaufsporto",reference,cards,costs.postage,"sale",sale.id);
-      add(sale.date,"Verpackungsmaterial",reference,cards,costs.packaging,"sale",sale.id);
-    });
-    (state.expenses||[]).filter(expense=>isSameMonth(expense.date,year,month)&&expense.status!=="Storniert").forEach(expense=>add(
-      expense.date,expense.category||"Sonstiges",expense.description||"Sonstige Ausgabe",expense.note||"Manuell erfasste Ausgabe",expense.amount
-    ));
   }
   rows.sort((a,b)=>new Date(b.date)-new Date(a.date)||a.category.localeCompare(b.category,"de"));
   return {figures,rows,total:type==="income"?figures.income:figures.expenses};
@@ -933,6 +992,10 @@ function renderDashboard() {
   document.getElementById("mMonthlyExpenses").textContent = money(figures.expenses);
   document.getElementById("mMonthlyProfit").textContent = money(figures.profit);
   document.getElementById("mMonthlyProfit").className = figures.profit >= 0 ? "money-positive" : "money-negative";
+  document.getElementById("mRealizedProfit").textContent = money(figures.realizedProfit);
+  document.getElementById("mRealizedProfit").className = figures.realizedProfit >= 0 ? "money-positive" : "money-negative";
+  document.getElementById("mOperatingResult").textContent = money(figures.operatingResult);
+  document.getElementById("mOperatingResult").className = figures.operatingResult >= 0 ? "money-positive" : "money-negative";
   document.getElementById("mOpenPurchases").textContent = openPurchases;
   document.getElementById("mBuyOpportunities").textContent = opp;
 
@@ -1099,6 +1162,8 @@ function reserveSaleInventory(sale){
   if(!sale || sale.reservationCreated) return;
   sale.reservationCreated=true;
   sale.paidDate=sale.paidDate||todayISO();
+  recordWorkflowChange(sale,"Zahlungsstatus",sale.paymentStatus||"Offen","Bezahlt");
+  sale.paymentStatus="Bezahlt";
   syncSaleInventoryStatus(sale);
 }
 function inventoryGroupStats(group){
@@ -1208,15 +1273,72 @@ function getInventoryGroups() {
   return [...map.values()].filter(group=>group.quantity>0);
 }
 
+function syncFilterOptions(id, values, emptyLabel) {
+  const select=document.getElementById(id);if(!select)return;
+  const current=select.value;
+  const options=[...new Set(values.map(value=>String(value||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"de",{numeric:true,sensitivity:"base"}));
+  select.innerHTML=`<option value="">${escapeHtml(emptyLabel)}</option>${options.map(value=>`<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+  if(options.includes(current))select.value=current;
+}
+
+function inventoryPrintComplete(item={}) {
+  return Boolean(cleanProductId(item.productId)&&String(item.setName||item.set||"").trim()&&String(item.collectorNumber||"").trim()&&String(item.rarity||"").trim());
+}
+
+function inventoryAgeMatches(days, filter) {
+  if(!filter)return true;
+  if(filter==="0-30")return days<=30;
+  if(filter==="31-60")return days>=31&&days<=60;
+  if(filter==="61-90")return days>=61&&days<=90;
+  return filter==="91+"?days>=91:true;
+}
+
 function renderInventory() {
   const q = document.getElementById("inventorySearch").value;
   const f = document.getElementById("inventoryStatusFilter").value;
-  const rows = getInventoryGroups().filter(group => {
+  const groups=getInventoryGroups();
+  syncFilterOptions("inventorySetFilter",groups.map(group=>group.first.setName||group.first.set),"Alle Sets");
+  syncFilterOptions("inventoryRarityFilter",groups.map(group=>group.first.rarity),"Alle Seltenheiten");
+  syncFilterOptions("inventoryLanguageFilter",groups.map(group=>group.first.language),"Alle Sprachen");
+  syncFilterOptions("inventoryConditionFilter",groups.map(group=>group.first.condition),"Alle Zustände");
+  const setFilter=document.getElementById("inventorySetFilter")?.value||"";
+  const rarityFilter=document.getElementById("inventoryRarityFilter")?.value||"";
+  const languageFilter=document.getElementById("inventoryLanguageFilter")?.value||"";
+  const conditionFilter=document.getElementById("inventoryConditionFilter")?.value||"";
+  const ageFilter=document.getElementById("inventoryAgeFilter")?.value||"";
+  const qualityFilter=document.getElementById("inventoryQualityFilter")?.value||"";
+  const sort=document.getElementById("inventorySort")?.value||"name";
+  const rows = groups.filter(group => {
     const i = group.first;
     const stats=inventoryGroupStats(group);
     const displayStatus = inventoryGroupDisplayStatus(group);
-    return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q) && (!f || displayStatus === f || stats.currentItems.some(item=>item.status===f));
+    const complete=inventoryPrintComplete(i);
+    const qualityMatches=!qualityFilter||(qualityFilter==="complete"&&complete)||(qualityFilter==="incomplete"&&!complete)||(qualityFilter==="unpriced"&&!stats.currentItems.some(item=>item.listed&&Number(item.listingPrice||0)>0));
+    return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q)
+      && (!f || displayStatus === f || stats.currentItems.some(item=>item.status===f))
+      && (!setFilter||String(i.setName||i.set||"")===setFilter)
+      && (!rarityFilter||String(i.rarity||"")===rarityFilter)
+      && (!languageFilter||String(i.language||"")===languageFilter)
+      && (!conditionFilter||String(i.condition||"")===conditionFilter)
+      && inventoryAgeMatches(daysBetween(group.oldestDate),ageFilter)
+      && qualityMatches;
+  }).sort((a,b)=>{
+    if(sort==="set")return String(a.first.setName||a.first.set||"").localeCompare(String(b.first.setName||b.first.set||""),"de",{numeric:true,sensitivity:"base"})||String(a.first.name||"").localeCompare(String(b.first.name||""),"de",{sensitivity:"base"});
+    if(sort==="age-desc")return daysBetween(b.oldestDate)-daysBetween(a.oldestDate);
+    if(sort==="age-asc")return daysBetween(a.oldestDate)-daysBetween(b.oldestDate);
+    if(sort==="value-desc")return Number(b.first.listingPrice||0)-Number(a.first.listingPrice||0);
+    if(sort==="quantity-desc")return b.quantity-a.quantity;
+    return cardDisplayNames(a.first).primary.localeCompare(cardDisplayNames(b.first).primary,"de",{numeric:true,sensitivity:"base"});
   });
+
+  const visibleStats=rows.map(inventoryGroupStats);
+  const summary=document.getElementById("inventorySummary");
+  if(summary)summary.innerHTML=`
+    <div><small>Angezeigte Druckvarianten</small><strong>${rows.length}</strong></div>
+    <div><small>Gesamtbestand</small><strong>${visibleStats.reduce((sum,row)=>sum+row.total,0)}</strong></div>
+    <div><small>Verfügbar</small><strong class="money-positive">${visibleStats.reduce((sum,row)=>sum+row.available,0)}</strong></div>
+    <div><small>Reserviert</small><strong>${visibleStats.reduce((sum,row)=>sum+row.reserved,0)}</strong></div>
+    <div><small>Unvollständige Druckdaten</small><strong class="${rows.some(group=>!inventoryPrintComplete(group.first))?"money-negative":"money-positive"}">${rows.filter(group=>!inventoryPrintComplete(group.first)).length}</strong></div>`;
 
   document.getElementById("inventoryTable").innerHTML = rows.length ? rows.map(group => {
     const i = group.first;
@@ -1334,38 +1456,74 @@ function correctInventoryGroup(groupKey) {
 function renderPrivateCollection(){
   const target=document.getElementById("privateTable");if(!target)return;
   const q=String(document.getElementById("privateSearch")?.value||"");
-  const rows=(state.privateCollection||[]).filter(item=>cardRecordMatchesSearch(item,q));
+  const all=state.privateCollection||[];
+  syncFilterOptions("privateSetFilter",all.map(item=>item.setName||item.set),"Alle Sets");
+  syncFilterOptions("privateRarityFilter",all.map(item=>item.rarity),"Alle Seltenheiten");
+  syncFilterOptions("privateLanguageFilter",all.map(item=>item.language),"Alle Sprachen");
+  syncFilterOptions("privateConditionFilter",all.map(item=>item.condition),"Alle Zustände");
+  const setFilter=document.getElementById("privateSetFilter")?.value||"",rarityFilter=document.getElementById("privateRarityFilter")?.value||"";
+  const languageFilter=document.getElementById("privateLanguageFilter")?.value||"",conditionFilter=document.getElementById("privateConditionFilter")?.value||"";
+  const saleIntentFilter=document.getElementById("privateSaleIntentFilter")?.value||"";
+  const rows=all.filter(item=>cardRecordMatchesSearch(item,q)&&(!setFilter||String(item.setName||item.set||"")===setFilter)&&(!rarityFilter||String(item.rarity||"")===rarityFilter)&&(!languageFilter||String(item.language||"")===languageFilter)&&(!conditionFilter||String(item.condition||"")===conditionFilter)&&(!saleIntentFilter||String(item.saleIntent||"Nicht verkaufen")===saleIntentFilter));
   const capital=rows.reduce((sum,item)=>sum+Number(item.cost||0),0);
+  const saleReady=rows.filter(item=>item.saleIntent==="Verkaufsbereit").length;
   const summary=document.getElementById("privateSummary");
-  if(summary)summary.innerHTML=`<div><small>Private Karten</small><strong>${rows.length}</strong></div><div><small>Dokumentierter Einstand</small><strong>${money(capital)}</strong></div><div><small>Geschäftsauswertung</small><strong>nicht enthalten</strong></div>`;
+  if(summary)summary.innerHTML=`<div><small>Angezeigte private Karten</small><strong>${rows.length}</strong></div><div><small>Dokumentierter Einstand</small><strong>${money(capital)}</strong></div><div><small>Verkaufsbereit</small><strong>${saleReady}</strong></div><div><small>Geschäftsauswertung</small><strong>nicht enthalten</strong></div>`;
   target.innerHTML=rows.length?rows.map(item=>{const names=cardDisplayNames(item);return `<tr>
     <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}</td>
     <td>${escapeHtml(item.setName||item.set||"-")}<br><small>${escapeHtml(item.collectorNumber||"-")}</small></td>
     <td>${escapeHtml(item.rarity||"-")}</td><td>${escapeHtml(item.language||"-")} · ${escapeHtml(item.condition||"-")}</td>
-    <td>${money(item.cost)}</td><td>${escapeHtml(item.location||"-")}</td><td><div class="row-actions"><button class="icon-button" data-edit-private="${item.id}">Bearbeiten</button><button class="icon-button" data-private-to-business="${item.id}">In Geschäftsbestand</button><button class="icon-button" data-delete-private="${item.id}">Löschen</button></div></td>
-  </tr>`}).join(""):`<tr><td colspan="7" class="empty">Noch keine privaten Karten gespeichert.</td></tr>`;
+    <td>${money(item.cost)}</td><td>${statusBadge(item.saleIntent||"Nicht verkaufen")}${Number(item.desiredSalePrice||0)>0?`<br><small>Wunsch ${money(item.desiredSalePrice)}</small>`:""}</td><td>${escapeHtml(item.location||"-")}</td><td><div class="row-actions"><button class="icon-button" data-edit-private="${item.id}">Bearbeiten</button><button class="icon-button" data-private-to-business="${item.id}">In Geschäftsbestand</button><button class="icon-button" data-delete-private="${item.id}">Löschen</button></div></td>
+  </tr>`}).join(""):`<tr><td colspan="8" class="empty">Noch keine privaten Karten gespeichert.</td></tr>`;
 }
 
 function renderPurchases() {
   const q = document.getElementById("purchaseSearch").value;
   const f = document.getElementById("purchaseStatusFilter").value;
-  const rows = state.purchases.filter(p=>cardRecordMatchesSearch(p,q) && (!f || p.status===f));
+  syncFilterOptions("purchaseSellerFilter",state.purchases.map(row=>row.seller),"Alle Händler");
+  const sellerFilter=document.getElementById("purchaseSellerFilter")?.value||"";
+  const paymentFilter=document.getElementById("purchasePaymentFilter")?.value||"";
+  const allocationFilter=document.getElementById("purchaseAllocationFilter")?.value||"";
+  const paymentState=p=>p.status==="Storniert"?"Storniert":p.paymentStatus||(Number(p.refund||0)>=Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0)&&Number(p.refund||0)>0?"Erstattet":Number(p.refund||0)>0?"Teilweise erstattet":"Bezahlt");
+  const allocationState=p=>{
+    if(!p.pendingItems?.length)return "business";
+    const totals=purchaseOwnershipTotals(p);
+    if(totals.open>0)return "open";
+    if(totals.cancelled>0||totals.damaged>0)return "cancelled";
+    if(totals.private>0)return "mixed";
+    return "business";
+  };
+  const rows = state.purchases.filter(p=>cardRecordMatchesSearch(p,q) && (!f || p.status===f)&&(!sellerFilter||p.seller===sellerFilter)&&(!paymentFilter||paymentState(p)===paymentFilter)&&(!allocationFilter||allocationState(p)===allocationFilter));
+  const purchaseSummary=document.getElementById("purchaseSummary");
+  if(purchaseSummary)purchaseSummary.innerHTML=`<div><small>Angezeigte Einkäufe</small><strong>${rows.length}</strong></div><div><small>Geschäftlicher Zahlungsabfluss</small><strong>${money(rows.reduce((sum,row)=>sum+purchaseBusinessCost(row),0))}</strong></div><div><small>Unterwegs</small><strong>${rows.filter(row=>["Bestellt","Unterwegs","Teilweise eingetroffen"].includes(row.status)).length}</strong></div><div><small>Karten noch aufzuteilen</small><strong>${rows.reduce((sum,row)=>sum+Number(purchaseOwnershipTotals(row).open||0),0)}</strong></div>`;
   document.getElementById("purchaseTable").innerHTML = rows.length ? rows.map(p=>`
     <tr><td><strong>${escapeHtml(p.orderNo)}</strong></td><td>${fmtDate(p.date)}</td><td>${escapeHtml(p.seller||"")}</td>
     <td>${escapeHtml(p.country||"")}</td><td>${Number(p.items||0)}</td><td>${money(p.cardValue)}</td><td>${money(p.shipping)}</td>
-    <td>${money(p.extra)}</td><td title="Abzüglich ${money(p.refund||0)} Gutschrift">${money(Math.max(0,Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0)-Number(p.refund||0)))}</td><td>${statusBadge(p.status)}</td>
-    <td><div class="row-actions"><button class="icon-button" data-show-purchase="${p.id}">Bestellung öffnen</button>${p.pendingItems?.length?`<button class="icon-button" data-receive-purchase="${p.id}">Wareneingang</button>`:""}<button class="icon-button" data-edit-purchase="${p.id}">Bearbeiten</button><button class="icon-button" data-delete-purchase="${p.id}">Löschen</button></div></td></tr>`).join("") : `<tr><td colspan="11" class="empty">Keine Einkäufe gefunden</td></tr>`;
+    <td>${money(p.extra)}</td><td title="Abzüglich ${money(p.refund||0)} Gutschrift">${money(Math.max(0,Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0)-Number(p.refund||0)))}</td><td>${statusBadge(paymentState(p))}</td><td>${statusBadge(p.status)}</td>
+    <td><div class="row-actions"><button class="icon-button" data-show-purchase="${p.id}">Bestellung öffnen</button>${p.pendingItems?.length?`<button class="icon-button" data-receive-purchase="${p.id}">Wareneingang</button>`:""}<button class="icon-button" data-edit-purchase="${p.id}">Bearbeiten</button><button class="icon-button" data-delete-purchase="${p.id}">Löschen</button></div></td></tr>`).join("") : `<tr><td colspan="12" class="empty">Keine Einkäufe gefunden</td></tr>`;
 }
 
 function renderSales() {
   const q = document.getElementById("salesSearch").value;
   const f = document.getElementById("salesStatusFilter").value;
-  const rows = state.sales.filter(s=>cardRecordMatchesSearch(s,q) && (!f || s.status===f));
+  syncFilterOptions("salesCustomerFilter",state.sales.map(row=>row.customer),"Alle Kunden");
+  const customerFilter=document.getElementById("salesCustomerFilter")?.value||"";
+  const paymentFilter=document.getElementById("salesPaymentFilter")?.value||"";
+  const profitFilter=document.getElementById("salesProfitFilter")?.value||"";
+  const paymentState=s=>s.status==="Storniert"?"Storniert":s.status==="Erstattet"||Number(s.refund||0)>=Number(s.revenue||0)&&Number(s.refund||0)>0?"Erstattet":s.paymentStatus||(["Offen"].includes(s.status)?"Offen":"Bezahlt");
+  const rows = state.sales.filter(s=>{
+    const calc=calculateSaleProfit(s);
+    const profitMatches=!profitFilter||(profitFilter==="profit"&&calc.profit>=0)||(profitFilter==="loss"&&calc.profit<0)||(profitFilter==="incomplete"&&calc.quality==="incomplete");
+    return cardRecordMatchesSearch(s,q)&&(!f||s.status===f)&&(!customerFilter||s.customer===customerFilter)&&(!paymentFilter||paymentState(s)===paymentFilter)&&profitMatches;
+  });
+  const realized=rows.filter(row=>["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(row.status));
+  const salesSummary=document.getElementById("salesSummary");
+  if(salesSummary)salesSummary.innerHTML=`<div><small>Angezeigte Verkäufe</small><strong>${rows.length}</strong></div><div><small>Offene Vorgänge</small><strong>${rows.filter(row=>!["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen","Storniert"].includes(row.status)).length}</strong></div><div><small>Realisierter Gewinn</small><strong class="${realized.reduce((sum,row)=>sum+calculateSaleProfit(row).profit,0)>=0?"money-positive":"money-negative"}">${money(realized.reduce((sum,row)=>sum+calculateSaleProfit(row).profit,0))}</strong></div><div><small>Unvollständige Kalkulation</small><strong class="${rows.some(row=>calculateSaleProfit(row).quality==="incomplete")?"money-negative":"money-positive"}">${rows.filter(row=>calculateSaleProfit(row).quality==="incomplete").length}</strong></div>`;
   document.getElementById("salesTable").innerHTML = rows.length ? rows.map(s=>{const calc=calculateSaleProfit(s); return `
     <tr><td><strong>${escapeHtml(s.orderNo)}</strong></td><td>${fmtDate(s.date)}</td><td>${escapeHtml(s.customer||"")}</td>
     <td>${Number(s.quantity||0)}</td><td>${money(s.revenue)}</td><td>${money(calc.fee)}</td>
-    <td class="${calc.profit>=0?"money-positive":"money-negative"}">${money(calc.profit)}</td><td>${statusBadge(s.status)}</td>
-    <td><div class="row-actions"><button class="icon-button" data-show-sale="${s.id}">Packen</button><button class="icon-button" data-edit-sale="${s.id}">Bearbeiten</button><button class="icon-button" data-delete-sale="${s.id}">Löschen</button></div></td></tr>`}).join("") : `<tr><td colspan="9" class="empty">Keine Verkäufe gefunden</td></tr>`;
+    <td class="${calc.profit>=0?"money-positive":"money-negative"}" title="Datenqualität: ${escapeHtml(calc.quality||"unbekannt")}">${money(calc.profit)}</td><td>${statusBadge(paymentState(s))}</td><td>${statusBadge(s.status)}</td>
+    <td><div class="row-actions"><button class="icon-button" data-show-sale="${s.id}">Packen</button><button class="icon-button" data-edit-sale="${s.id}">Bearbeiten</button><button class="icon-button" data-delete-sale="${s.id}">Löschen</button></div></td></tr>`}).join("") : `<tr><td colspan="10" class="empty">Keine Verkäufe gefunden</td></tr>`;
   renderShippingWorkbench();
 }
 
@@ -1409,7 +1567,9 @@ function renderMaterials(){
   document.getElementById("materialValue").textContent=money(state.materials.reduce((a,m)=>a+Number(m.stock||0)*Number(m.unitCost||0),0));
   document.getElementById("materialLowCount").textContent=state.materials.filter(m=>Number(m.stock||0)<=Number(m.minStock||0)).length;
   document.getElementById("materialMonthCost").textContent=money(monthCost);
-  table.innerHTML=rows.length?rows.map(m=>{const low=Number(m.stock||0)<=Number(m.minStock||0);return `<tr><td><button class="material-name-link" type="button" data-show-material="${m.id}"><strong>${escapeHtml(m.name)}</strong><small>${escapeHtml(m.unit||"Stück")} · Verlauf anzeigen</small></button></td><td>${Number(m.stock||0)}</td><td>${money(m.unitCost)}</td><td>${money(Number(m.stock||0)*Number(m.unitCost||0))}</td><td>${Number(m.minStock||0)}</td><td class="${low?'stock-low':'stock-ok'}">${low?'Nachbestellen':'Ausreichend'}</td><td><div class="row-actions"><button class="icon-button" data-buy-material="${m.id}">Einkaufen</button><button class="icon-button" data-edit-material="${m.id}">Bearbeiten</button><button class="icon-button" data-delete-material="${m.id}">Löschen</button></div></td></tr>`}).join(""):'<tr><td colspan="7" class="empty">Noch kein Versandmaterial angelegt</td></tr>';
+  const cutoff=Date.now()-30*86400000;
+  const materialPlan=m=>{const consumed=Math.abs((state.movements||[]).filter(row=>row.materialId===m.id&&Number(row.quantity||0)<0&&new Date(row.timestamp||row.date||0).getTime()>=cutoff).reduce((sum,row)=>sum+Number(row.quantity||0),0));const daily=consumed/30;const coverage=daily>0?Math.floor(Number(m.stock||0)/daily):Infinity;const target=Math.max(Number(m.minStock||0)*2,Math.ceil(daily*60));const reorder=Math.max(0,Math.ceil(target-Number(m.stock||0)));return{consumed,coverage,reorder};};
+  table.innerHTML=rows.length?rows.map(m=>{const low=Number(m.stock||0)<=Number(m.minStock||0),plan=materialPlan(m),critical=low||plan.coverage<Number(m.leadTimeDays||7);return `<tr><td><button class="material-name-link" type="button" data-show-material="${m.id}"><strong>${escapeHtml(m.name)}</strong><small>${escapeHtml(m.unit||"Stück")} · Verlauf anzeigen</small></button></td><td>${Number(m.stock||0)}</td><td>${money(m.unitCost)}</td><td>${money(Number(m.stock||0)*Number(m.unitCost||0))}</td><td>${Number(m.minStock||0)}</td><td>${plan.consumed}</td><td>${Number.isFinite(plan.coverage)?`${plan.coverage} Tage`:"noch ohne Verbrauch"}</td><td class="${critical?'stock-low':'stock-ok'}">${critical?`Nachbestellen${plan.reorder?` · Vorschlag ${plan.reorder}`:""}`:"Ausreichend"}</td><td><div class="row-actions"><button class="icon-button" data-buy-material="${m.id}">Einkaufen</button><button class="icon-button" data-edit-material="${m.id}">Bearbeiten</button><button class="icon-button" data-delete-material="${m.id}">Löschen</button></div></td></tr>`}).join(""):'<tr><td colspan="9" class="empty">Noch kein Versandmaterial angelegt</td></tr>';
   const list=document.getElementById("templateList");
   list.innerHTML=state.materialTemplates.length?state.materialTemplates.map(t=>`<div class="template-chip"><div><strong>${escapeHtml(t.name)}</strong><small>${escapeHtml(t.shippingType||"Keine Versandart")} · ${(t.items||[]).map(i=>`${Number(i.quantity||0)}× ${escapeHtml(state.materials.find(m=>m.id===i.materialId)?.name||"Material")}`).join(", ")||"Keine Materialien"}</small></div><div class="row-actions"><button class="icon-button" data-edit-template="${t.id}">Bearbeiten</button><button class="icon-button" data-delete-template="${t.id}">Löschen</button></div></div>`).join(""):'<div class="empty">Noch keine Versandvorlagen gespeichert</div>';
 }
@@ -1432,28 +1592,46 @@ function showMaterialHistory(materialId){
 }
 function renderExpenses(){
   const table=document.getElementById("expenseTable"); if(!table) return;
-  const q=(document.getElementById("expenseSearch")?.value||"").toLowerCase(); const f=document.getElementById("expenseCategoryFilter")?.value||"";
-  const rows=(state.expenses||[]).filter(e=>(!q||JSON.stringify(e).toLowerCase().includes(q))&&(!f||e.category===f)).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const q=(document.getElementById("expenseSearch")?.value||"").toLowerCase(); const f=document.getElementById("expenseCategoryFilter")?.value||"";const typeFilter=document.getElementById("expenseTypeFilter")?.value||"";
+  const expenseType=e=>e.category==="Versandmaterial"?"inventory":e.costType==="direct"||e.saleId?"direct":"overhead";
+  const rows=(state.expenses||[]).filter(e=>(!q||JSON.stringify(e).toLowerCase().includes(q))&&(!f||e.category===f)&&(!typeFilter||expenseType(e)===typeFilter)).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const now=new Date(); const monthRows=state.expenses.filter(e=>isSameMonth(e.date,now.getFullYear(),now.getMonth())&&e.status!=="Storniert");
-  const total=monthRows.reduce((a,e)=>a+Number(e.amount||0),0); const material=monthRows.filter(e=>e.category==="Versandmaterial").reduce((a,e)=>a+Number(e.amount||0),0);
-  document.getElementById("expenseMonthTotal").textContent=money(total); document.getElementById("expenseMaterialMonth").textContent=money(material); document.getElementById("expenseOtherMonth").textContent=money(total-material);
-  table.innerHTML=rows.length?rows.map(e=>`<tr><td>${fmtDate(e.date)}</td><td>${escapeHtml(e.category||"Sonstiges")}</td><td>${escapeHtml(e.description||"")}</td><td>${money(e.amount)}</td><td>${escapeHtml(e.note||"")}</td><td><div class="row-actions"><button class="icon-button" data-edit-expense="${e.id}">Bearbeiten</button><button class="icon-button" data-delete-expense="${e.id}">Löschen</button></div></td></tr>`).join(""):'<tr><td colspan="6" class="empty">Keine Ausgaben gefunden</td></tr>';
+  const total=monthRows.reduce((a,e)=>a+Number(e.amount||0),0); const material=monthRows.filter(e=>expenseType(e)==="inventory").reduce((a,e)=>a+Number(e.amount||0),0);const direct=monthRows.filter(e=>expenseType(e)==="direct").reduce((a,e)=>a+Number(e.amount||0),0);const overhead=monthRows.filter(e=>expenseType(e)==="overhead").reduce((a,e)=>a+Number(e.amount||0),0);
+  document.getElementById("expenseMonthTotal").textContent=money(total); document.getElementById("expenseMaterialMonth").textContent=money(material); document.getElementById("expenseOtherMonth").textContent=money(overhead);document.getElementById("expenseDirectMonth").textContent=money(direct);
+  const typeLabel={inventory:"Materialeinkauf",direct:"Direkte Verkaufskosten",overhead:"Allgemeine Betriebsausgabe"};
+  table.innerHTML=rows.length?rows.map(e=>{const type=expenseType(e),cancelled=e.status==="Storniert";return `<tr class="expense-row-${cancelled?"cancelled":type}"><td>${fmtDate(e.date)}</td><td>${escapeHtml(e.category||"Sonstiges")}</td><td>${escapeHtml(typeLabel[type])}</td><td>${escapeHtml(e.description||"")}</td><td class="${cancelled?"muted":"money-negative"}">${money(e.amount)}</td><td>${e.saleId?`Verkauf ${escapeHtml(state.sales.find(s=>s.id===e.saleId)?.orderNo||e.saleId)}<br>`:""}${escapeHtml(e.note||"")}</td><td>${statusBadge(cancelled?"Storniert":"Gebucht")}</td><td><div class="row-actions">${cancelled?"":`<button class="icon-button" data-edit-expense="${e.id}">Bearbeiten</button>`}<button class="icon-button" data-toggle-expense="${e.id}">${cancelled?"Storno aufheben":"Stornieren"}</button></div></td></tr>`}).join(""):'<tr><td colspan="8" class="empty">Keine Ausgaben gefunden</td></tr>';
 }
 function addMaterial(initial={}){openModal(initial.id?"Material bearbeiten":"Material anlegen",[
-  {name:"name",label:"Materialname",required:true},{name:"unit",label:"Einheit",value:"Stück"},{name:"stock",label:"Aktueller Bestand",type:"number"},{name:"unitCost",label:"Stückkosten (€)",type:"number",step:"0.001"},{name:"minStock",label:"Mindestbestand",type:"number"},{name:"note",label:"Notiz",full:true}
-],initial,data=>{const obj={...data,stock:Number(data.stock||0),unitCost:Number(data.unitCost||0),minStock:Number(data.minStock||0)};if(initial.id){const material=state.materials.find(x=>x.id===initial.id);const difference=obj.stock-Number(material?.stock||0);Object.assign(material,obj);if(difference)addMovement({type:"Bestandskorrektur",quantity:difference,materialId:initial.id,reference:"Manuelle Materialkorrektur",note:data.note||data.name});}else{const material={...obj,id:uid()};state.materials.push(material);if(material.stock)addMovement({type:"Anfangsbestand",quantity:material.stock,materialId:material.id,reference:"Material angelegt",note:material.name});}});}
+  {name:"name",label:"Materialname",required:true},{name:"unit",label:"Einheit",value:"Stück"},{name:"stock",label:"Aktueller Bestand",type:"number"},{name:"unitCost",label:"Stückkosten (€)",type:"number",step:"0.001"},{name:"minStock",label:"Mindestbestand",type:"number"},{name:"leadTimeDays",label:"Übliche Lieferzeit (Tage)",type:"number",value:7},{name:"supplier",label:"Bevorzugter Lieferant"},{name:"note",label:"Notiz",full:true}
+],initial,data=>{const obj={...data,stock:Number(data.stock||0),unitCost:Number(data.unitCost||0),minStock:Number(data.minStock||0),leadTimeDays:Math.max(0,Number(data.leadTimeDays||0))};if(initial.id){const material=state.materials.find(x=>x.id===initial.id);const difference=obj.stock-Number(material?.stock||0);Object.assign(material,obj);if(difference)addMovement({type:"Bestandskorrektur",quantity:difference,materialId:initial.id,reference:"Manuelle Materialkorrektur",note:data.note||data.name});}else{const material={...obj,id:uid()};state.materials.push(material);if(material.stock)addMovement({type:"Anfangsbestand",quantity:material.stock,materialId:material.id,reference:"Material angelegt",note:material.name});}});}
 function buyMaterial(materialId=""){
   if(!state.materials.length){alert("Bitte zuerst ein Material anlegen.");return;}
   const initial={materialId:materialId||state.materials[0].id,date:todayISO()};
   openModal("Material einkaufen",[{name:"materialId",label:"Material",type:"select",options:state.materials.map(m=>({value:m.id,label:`${m.name} (${Number(m.stock||0)} ${m.unit||"Stück"} vorhanden)`}))},{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"quantity",label:"Menge",type:"number",required:true},{name:"totalCost",label:"Gesamtpreis (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{
     const m=state.materials.find(x=>x.id===data.materialId); if(!m)return false; const qty=Number(data.quantity||0),cost=Number(data.totalCost||0); if(qty<=0||cost<0){alert("Menge und Preis prüfen.");return false;}
     const oldStock=Number(m.stock||0),oldValue=oldStock*Number(m.unitCost||0); m.stock=oldStock+qty; m.unitCost=m.stock?(oldValue+cost)/m.stock:0;
-    const expense={id:uid(),date:data.date||todayISO(),category:"Versandmaterial",description:`${qty} ${m.unit||"Stück"} ${m.name}`,amount:cost,note:data.note||"",materialId:m.id};
+    const expense={id:uid(),date:data.date||todayISO(),category:"Versandmaterial",costType:"inventory",sourceType:"automatic",status:"Gebucht",description:`${qty} ${m.unit||"Stück"} ${m.name}`,amount:cost,note:data.note||"",materialId:m.id};
     state.expenses.push(expense);
     addMovement({type:"Materialeinkauf",quantity:qty,materialId:m.id,expenseId:expense.id,reference:`Einkauf ${fmtDate(data.date||todayISO())}`,note:`${m.name} · ${money(cost)}${data.note?` · ${data.note}`:""}`});
   });
 }
-function addExpense(initial={}){openModal(initial.id?"Ausgabe bearbeiten":"Ausgabe erfassen",[{name:"date",label:"Datum",type:"date",value:todayISO()},{name:"category",label:"Kategorie",type:"select",options:["Versandmaterial","Porto","Software","Bürobedarf","Sonstiges"]},{name:"description",label:"Beschreibung",required:true},{name:"amount",label:"Betrag (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz",full:true}],initial,data=>{const obj={...data,amount:Number(data.amount||0)};if(initial.id)Object.assign(state.expenses.find(x=>x.id===initial.id),obj);else state.expenses.push({...obj,id:uid()});});}
+function addExpense(initial={}){
+  const derivedType=initial.category==="Versandmaterial"?"inventory":initial.costType==="direct"||initial.saleId?"direct":"overhead";
+  openModal(initial.id?"Ausgabe bearbeiten":"Ausgabe erfassen",[
+    {name:"date",label:"Datum",type:"date",value:todayISO()},
+    {name:"category",label:"Kategorie",type:"select",options:["Versandmaterial","Porto","Verkaufsgebühr","Lagerausstattung","Software","Bürobedarf","Werbung","Bank / Zahlungsdienst","Steuerberatung","Reisekosten","Sonstiges"]},
+    {name:"costType",label:"Kostenart",type:"select",options:[{value:"overhead",label:"Allgemeine Betriebsausgabe – kein Einfluss auf Karten-EK/VK"},{value:"direct",label:"Direkt einem Verkauf zugeordnet"},{value:"inventory",label:"Materialeinkauf / Lagerwert"}]},
+    {name:"saleId",label:"Zugehöriger Verkauf",type:"select",options:[{value:"",label:"Keine Verkaufszuordnung"},...state.sales.map(sale=>({value:sale.id,label:`${sale.orderNo||"Ohne Nummer"} · ${sale.customer||"Unbekannter Kunde"}`}))]},
+    {name:"description",label:"Beschreibung",required:true},{name:"amount",label:"Betrag (€)",type:"number",step:"0.01",required:true},{name:"note",label:"Notiz / Belegnummer",full:true}
+  ],{...initial,costType:derivedType},data=>{
+    if(data.costType==="direct"&&!data.saleId){alert("Direkte Kosten bitte einem Verkauf zuordnen. Ein Regal, Software oder allgemeines Material gehören zu den allgemeinen Betriebsausgaben.");return false;}
+    if(data.category==="Versandmaterial")data.costType="inventory";
+    if(data.costType!=="direct")data.saleId="";
+    const obj={...data,amount:Math.max(0,Number(data.amount||0)),sourceType:initial.sourceType||"manual",status:initial.status||"Gebucht"};
+    if(initial.id)Object.assign(state.expenses.find(x=>x.id===initial.id),obj);else state.expenses.push({...obj,id:uid()});
+    return true;
+  });
+}
 function addTemplate(initial={}){
   const compact=(initial.items||[]).map(i=>`${i.materialId}:${i.quantity}`).join(",");
   openModal(initial.id?"Versandvorlage bearbeiten":"Versandvorlage anlegen",[{name:"name",label:"Vorlagenname",required:true},{name:"shippingType",label:"Versandart"},{name:"postage",label:"Porto (€)",type:"number",step:"0.01"},{name:"itemsText",label:"Materialien – Format Material-ID:Menge, ...",value:compact,full:true}],{...initial,itemsText:compact},data=>{const items=String(data.itemsText||"").split(",").map(x=>x.trim()).filter(Boolean).map(x=>{const [materialId,q]=x.split(":");return{materialId,quantity:Number(q||0)}}).filter(x=>state.materials.some(m=>m.id===x.materialId)&&x.quantity>0);const obj={name:data.name,shippingType:data.shippingType||"",postage:Number(data.postage||0),items};if(initial.id)Object.assign(state.materialTemplates.find(x=>x.id===initial.id),obj);else state.materialTemplates.push({...obj,id:uid()});});
@@ -1519,12 +1697,12 @@ function saveSalePacking(sale,markShipped=false){
   const stockChanges=applyMaterialStockPlan(stockPlan); sale.materialUsage=usage; sale.shippingType=shippingType; sale.postage=Math.max(0,Number(document.getElementById("salePostage")?.value||0));
   stockChanges.forEach(change=>addMovement({type:change.quantity<0?"Materialverbrauch":"Materialkorrektur",quantity:change.quantity,materialId:change.material.id,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:change.quantity<0?`${change.material.name} für Verpackung verwendet`:`${change.material.name} aus Verpackung entfernt`}));
   if(markShipped){
-    sale.status="Versendet"; sale.workflowStage="Versendet"; sale.shippedDate=todayISO(); syncSaleInventoryStatus(sale);
+    const previousStatus=sale.status;sale.status="Versendet"; sale.workflowStage="Versendet"; sale.shippedDate=todayISO();recordWorkflowChange(sale,"Vorgangsstatus",previousStatus,"Versendet",sale.trackingNumber||""); syncSaleInventoryStatus(sale);
     addMovement({type:"Versand",quantity:-Number(sale.quantity||sale.itemIds?.length||0),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:`${sale.shippingType}; Porto ${money(sale.postage)}`});
     addMovement({type:"Einnahme",quantity:Number(sale.revenue||0),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Nach Versand als Einnahme gebucht"});
   }else{
     const firstPacking=sale.status!=="Verpackt";
-    sale.status="Verpackt";sale.workflowStage="Verpackt";sale.packedDate=sale.packedDate||todayISO();
+    const previousStatus=sale.status;sale.status="Verpackt";sale.workflowStage="Verpackt";sale.packedDate=sale.packedDate||todayISO();recordWorkflowChange(sale,"Vorgangsstatus",previousStatus,"Verpackt");
     if(firstPacking)addMovement({type:"Status",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Verpackung gespeichert · bereit zum Versand"});
   }
   saveState(); renderAll();
@@ -1661,13 +1839,18 @@ function renderWatchlist() {
   renderPurchaseAnalysis();
   const q = document.getElementById("watchSearch").value;
   const f = document.getElementById("watchStatusFilter").value;
-  const rows = state.watchlist.filter(w=>!w.archived).map(w=>({...w,...calculateWatch(w)})).filter(w=>cardRecordMatchesSearch(w,q) && (!f || w.status===f));
+  const priorityFilter=document.getElementById("watchPriorityFilter")?.value||"",stockFilter=document.getElementById("watchStockFilter")?.value||"",dataFilter=document.getElementById("watchDataFilter")?.value||"",pricingFilter=document.getElementById("watchPricingFilter")?.value||"";
+  const dataState=w=>{if(!w.priceDate||(!Number(w.currentBuy||0)&&!Number(w.trend||0)&&!Number(w.avg30||0)))return "missing";return daysBetween(w.priceDate)>Number(state.settings.priceAgeDays||7)?"stale":"fresh";};
+  const rank={"TOP DEAL":0,"KAUFEN":1,"BEOBACHTEN":2,"FALLEND":3,"NICHT KAUFEN":4,"STOP":5,"KEINE PREISDATEN":6};
+  const all=state.watchlist.filter(w=>!w.archived).map(w=>({...w,...calculateWatch(w)}));
+  const rows = all.filter(w=>cardRecordMatchesSearch(w,q) && (!f || w.status===f)&&(!priorityFilter||w.priority===priorityFilter)&&(!stockFilter||(stockFilter==="below"?Number(w.stock||0)<Number(w.target||0):Number(w.stock||0)>=Number(w.target||0)))&&(!dataFilter||dataState(w)===dataFilter)&&(!pricingFilter||(w.pricingMode||"automatic")===pricingFilter)).sort((a,b)=>(rank[a.status]??99)-(rank[b.status]??99)||Number(b.roi||0)-Number(a.roi||0));
+  const summary=document.getElementById("watchSummary");if(summary)summary.innerHTML=`<div><small>Beobachtete Druckvarianten</small><strong>${rows.length}</strong></div><div><small>Kaufchancen</small><strong class="money-positive">${rows.filter(row=>["TOP DEAL","KAUFEN"].includes(row.status)).length}</strong></div><div><small>Preisdaten veraltet / fehlen</small><strong class="${rows.some(row=>dataState(row)!=="fresh")?"money-negative":"money-positive"}">${rows.filter(row=>dataState(row)!=="fresh").length}</strong></div><div><small>Unter Sollbestand</small><strong>${rows.filter(row=>Number(row.stock||0)<Number(row.target||0)).length}</strong></div>`;
   document.getElementById("watchTable").innerHTML = rows.length ? rows.map(w=>{ const names=cardDisplayNames(w); return `
     <tr><td>${escapeHtml(w.priority)}</td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(w))}" title="${escapeHtml(`Cardmarket öffnen · Produkt-ID ${w.productId||"nicht vorhanden"} · ${w.set||"Set unbekannt"} · ${w.version||w.rarity||"Version unbekannt"}`)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(w.productId||"-")}</small></td>
     <td>${escapeHtml(w.set||"")}<br><small>${escapeHtml(w.version||"")}</small></td><td>${w.stock}</td><td>${w.target}</td>
     <td>${money(w.maxBuy)}</td><td>${money(w.targetSell)}</td><td>${w.trend!==""?money(w.trend):"-"}</td><td>${w.avg30!==""?money(w.avg30):"-"}</td>
-    <td>${w.currentBuy!==""?money(w.profit):"-"}</td><td>${w.currentBuy!==""?pct(w.roi):"-"}</td><td>${statusBadge(w.status)}</td>
-    <td><div class="row-actions"><button class="icon-button" data-edit-watch="${w.id}">Bearbeiten</button><button class="icon-button" data-delete-watch="${w.id}">Löschen</button></div></td></tr>`;}).join("") : `<tr><td colspan="13" class="empty">Keine Karten gefunden</td></tr>`;
+    <td>${w.currentBuy!==""?money(w.profit):"-"}</td><td>${w.currentBuy!==""?pct(w.roi):"-"}</td><td class="${dataState(w)==="fresh"?"money-positive":"money-negative"}">${w.priceDate?fmtDate(w.priceDate):"fehlt"}<br><small>${dataState(w)==="fresh"?"aktuell":dataState(w)==="stale"?"veraltet":"keine Preise"}</small></td><td>${statusBadge(w.status)}</td>
+    <td><div class="row-actions"><button class="icon-button" data-edit-watch="${w.id}">Bearbeiten</button><button class="icon-button" data-delete-watch="${w.id}">Löschen</button></div></td></tr>`;}).join("") : `<tr><td colspan="14" class="empty">Keine Karten gefunden</td></tr>`;
 }
 
 
@@ -1687,6 +1870,18 @@ function purchaseReceiptHistory(purchase){
   return `<h3>Wareneingangsverlauf</h3><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Geschäft</th><th>Privat</th><th>Beschädigt</th><th>Storniert</th><th>Noch offen</th><th>Notiz</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${new Date(row.date).toLocaleString("de-DE")}</td><td>${Number(row.totals?.addBusiness||0)>0?`+${Number(row.totals.addBusiness)}`:"–"}</td><td>${Number(row.totals?.addPrivate||0)>0?`+${Number(row.totals.addPrivate)}`:"–"}</td><td>${Number(row.totals?.addDamaged||0)>0?`+${Number(row.totals.addDamaged)}`:"–"}</td><td>${Number(row.totals?.cancelled||0)}</td><td>${Number(row.totals?.open||0)}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
+function orderWorkflowHistory(order,isPurchase){
+  const rows=[...(order.workflowHistory||[])];
+  const addDate=(timestamp,field,to,note="")=>{if(timestamp)rows.push({id:`derived-${field}-${timestamp}`,timestamp,field,from:"",to,note,derived:true});};
+  addDate(order.paidDate,"Zahlung","Bezahlt");
+  if(isPurchase){addDate(order.receivedDate,"Lieferung","Wareneingang",order.trackingNumber?`Sendungsnummer ${order.trackingNumber}`:"");}
+  else{addDate(order.packedDate,"Versand","Verpackt");addDate(order.shippedDate,"Versand","Versendet",order.trackingNumber?`Sendungsnummer ${order.trackingNumber}`:"");addDate(order.completedDate,"Vorgang","Abgeschlossen");addDate(order.settledDate,"Abrechnung","Abgerechnet");}
+  const unique=new Map(rows.map(row=>[`${row.timestamp}|${row.field}|${row.to}`,row]));
+  const sorted=[...unique.values()].sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  if(!sorted.length)return "";
+  return `<h3>Statusverlauf</h3><div class="table-wrap"><table><thead><tr><th>Zeitpunkt</th><th>Bereich</th><th>Änderung</th><th>Info</th></tr></thead><tbody>${sorted.map(row=>`<tr><td>${new Date(row.timestamp).toLocaleString("de-DE")}</td><td>${escapeHtml(row.field||"Status")}</td><td>${row.from?`${escapeHtml(row.from)} → `:""}${escapeHtml(row.to||"")}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
 function openOrderDetails(kind,id) {
   const purchase=kind==="purchase" ? state.purchases.find(x=>x.id===id) : null;
   const sale=kind==="sale" ? state.sales.find(x=>x.id===id) : null;
@@ -1703,22 +1898,27 @@ function openOrderDetails(kind,id) {
   if(dialog.open)dialog.close();
   document.getElementById("orderDetailTitle").textContent=`${isPurchase?"Einkauf":"Verkauf"} #${order.orderNo||"-"}`;
   const ownership=isPurchase?purchaseOwnershipTotals(purchase):null;
+  const paymentStatus=order.status==="Storniert"?"Storniert":order.paymentStatus||(isPurchase?"Bezahlt":order.status==="Offen"?"Offen":"Bezahlt");
   document.getElementById("orderDetailContent").innerHTML=`
     <div class="order-summary-grid">
       <div><small>Bestellnummer</small><strong>${escapeHtml(order.orderNo||"-")}</strong></div>
       <div><small>Datum</small><strong>${fmtDate(order.date)||"-"}</strong></div>
       <div><small>${isPurchase?"Händler":"Kunde"}</small><strong>${escapeHtml(partner||"-")}</strong></div>
-      <div><small>Status</small><strong>${statusBadge(order.status)}</strong></div>
+      <div><small>${isPurchase?"Lieferstatus":"Vorgangsstatus"}</small><strong>${statusBadge(order.status)}</strong></div>
+      <div><small>Zahlung</small><strong>${statusBadge(paymentStatus)}</strong></div>
+      ${!isPurchase?`<div><small>Abrechnung</small><strong>${statusBadge(order.settlementStatus||(order.status==="Abgerechnet"?"Abgerechnet":"Offen"))}</strong></div>`:""}
+      ${order.trackingNumber?`<div><small>Sendungsnummer</small><strong>${escapeHtml(order.trackingNumber)}</strong></div>`:""}
       <div><small>Karten</small><strong>${Number(order.items||order.quantity||items.reduce((a,i)=>a+Number(i.quantity||1),0))}</strong></div>
       <div><small>Kartenwert</small><strong>${money(subtotal)}</strong></div>
       <div><small>Versand vom Käufer / Versand</small><strong>${money(shipping)}</strong></div>
       <div><small>${isPurchase?"Trustee/Zusatz":"Cardmarket-Gebühr"}</small><strong>${money(extra)}</strong></div>
       ${isPurchase?`<div><small>Gutschrift</small><strong>${money(order.refund||0)}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(total)}</strong></div><div><small>Geschäftlicher Einstand</small><strong>${money(Number(ownership.business||0)+Number(ownership.damaged||0))}</strong></div><div><small>Privater Einstand</small><strong>${money(ownership.private||0)}</strong></div><div><small>Noch nicht aufgeteilt</small><strong>${money(ownership.open||0)}</strong></div>`:`<div><small>Einstand</small><strong>${money(order.cost)}</strong></div><div><small>Erstattung</small><strong>${money(order.refund||0)}</strong></div><div><small>Porto</small><strong>${money(calc.postage)}</strong></div><div><small>Material</small><strong>${money(calc.packaging)}</strong></div><div><small>Gewinn</small><strong class="${calc.profit>=0?'money-positive':'money-negative'}">${money(calc.profit)}</strong></div>`}
     </div>
-    <div class="order-detail-actions">${isPurchase?`<button type="button" class="primary" id="openPurchaseReceiptBtn">Wareneingang aufteilen</button><button type="button" class="secondary" id="addPurchaseLineBtn">Karte hinzufügen</button>`:`<button type="button" class="secondary" id="openSaleAllocationBtn">Einkaufsexemplare zuordnen</button><button type="button" class="secondary" id="addSaleLineBtn">Karte hinzufügen</button>`}</div>
+    <div class="order-detail-actions">${isPurchase?`<button type="button" class="primary" id="openPurchaseReceiptBtn">Wareneingang aufteilen</button><button type="button" class="secondary" id="addPurchaseLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanPurchaseLineBtn">Mit iPhone scannen</button>`:`<button type="button" class="secondary" id="openSaleAllocationBtn">Einkaufsexemplare zuordnen</button><button type="button" class="secondary" id="addSaleLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanSaleLineBtn">Mit iPhone scannen</button>`}</div>
     ${orderItemTable(items,kind)}
     ${isPurchase?purchaseReceiptHistory(purchase):""}
     ${!isPurchase?saleMaterialEditor(order):""}
+    ${orderWorkflowHistory(order,isPurchase)}
     ${order.note?`<div class="order-note"><strong>Notiz</strong><p>${escapeHtml(order.note)}</p></div>`:""}`;
   dialog.dataset.saleId=sale?.id||"";dialog.dataset.purchaseId=purchase?.id||"";
   dialog.showModal();
@@ -1808,34 +2008,47 @@ function removeImportHistory(id){
 }
 
 function renderReports() {
-  const realizedSales=state.sales.filter(s=>["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(s.status));
-  const revenue = realizedSales.reduce((a,s)=>a+Math.max(0,Number(s.revenue||0)-Number(s.refund||0)),0);
-  const profits = realizedSales.map(s=>calculateSaleProfit(s).profit);
-  const profit = profits.reduce((a,b)=>a+b,0);
-  const cost = realizedSales.reduce((a,s)=>a+Number(calculateSaleProfit(s).cost||0),0);
-  const soldInv = state.inventory.filter(i=>i.status==="Verkauft" && i.saleDate);
-  document.getElementById("rRevenue").textContent = money(revenue);
-  document.getElementById("rProfit").textContent = money(profit);
-  document.getElementById("rRoi").textContent = pct(cost?profit/cost*100:0);
+  const from=document.getElementById("reportDateFrom")?.value||"",to=document.getElementById("reportDateTo")?.value||"";
+  const inPeriod=value=>{const date=String(value||"").slice(0,10);return (!from||date>=from)&&(!to||date<=to);};
+  const financial=window.TcgBusinessAutomation?.buildFinancialSummary?.(state,{from,to})||{entries:[],cashIn:0,cashOut:0,cashflow:0,realizedRevenue:0,directCost:0,realizedProfit:0,overhead:0,operatingResult:0};
+  const realizedSales=state.sales.filter(s=>["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(s.status)&&inPeriod(s.completedDate||s.settledDate||s.date));
+  const soldInv = state.inventory.filter(i=>i.status==="Verkauft" && i.saleDate&&inPeriod(i.saleDate));
+  document.getElementById("rCashIn").textContent=money(financial.cashIn);
+  document.getElementById("rCashOut").textContent=money(financial.cashOut);
+  document.getElementById("rCashflow").textContent=money(financial.cashflow);document.getElementById("rCashflow").className=financial.cashflow>=0?"money-positive":"money-negative";
+  document.getElementById("rRevenue").textContent = money(financial.realizedRevenue);
+  document.getElementById("rProfit").textContent = money(financial.realizedProfit);document.getElementById("rProfit").className=financial.realizedProfit>=0?"money-positive":"money-negative";
+  document.getElementById("rOperatingResult").textContent=money(financial.operatingResult);document.getElementById("rOperatingResult").className=financial.operatingResult>=0?"money-positive":"money-negative";
+  document.getElementById("rRoi").textContent = pct(financial.directCost?financial.realizedProfit/financial.directCost*100:0);
   document.getElementById("rDays").textContent = `${soldInv.length?Math.round(soldInv.reduce((a,i)=>a+daysBetween(i.purchaseDate,i.saleDate),0)/soldInv.length):0} Tage`;
 
   const months={};
-  realizedSales.forEach(s=>{const k=(s.date||"").slice(0,7)||"Ohne Datum"; months[k]=(months[k]||0)+calculateSaleProfit(s).profit;});
-  document.getElementById("monthlyReport").innerHTML = Object.keys(months).length ? `<div class="list">${Object.entries(months).sort().map(([k,v])=>`<div class="list-row"><span>${escapeHtml(k)}</span><strong class="${v>=0?"money-positive":"money-negative"}">${money(v)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
+  financial.entries.forEach(entry=>{const key=(entry.date||"").slice(0,7)||"Ohne Datum";months[key]||={cashflow:0,realized:0,overhead:0};months[key].cashflow+=Number(entry.cashIn||0)-Number(entry.cashOut||0);months[key].realized+=Number(entry.realizedProfit||0);months[key].overhead+=Number(entry.overhead||0);});
+  document.getElementById("monthlyReport").innerHTML = Object.keys(months).length ? `<div class="table-wrap"><table><thead><tr><th>Monat</th><th>Cashflow</th><th>Realisierter Gewinn</th><th>Betriebsergebnis</th></tr></thead><tbody>${Object.entries(months).sort().map(([key,value])=>`<tr><td>${escapeHtml(key)}</td><td class="${value.cashflow>=0?"money-positive":"money-negative"}">${money(value.cashflow)}</td><td class="${value.realized>=0?"money-positive":"money-negative"}">${money(value.realized)}</td><td class="${value.realized-value.overhead>=0?"money-positive":"money-negative"}">${money(value.realized-value.overhead)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">Noch keine Daten</div>`;
 
-  const performance=window.TcgBusinessAutomation?.buildPerformanceReport(state)||{cards:[]};
+  const performance=window.TcgBusinessAutomation?.buildPerformanceReport(state,{from,to})||{cards:[]};
   document.getElementById("topCardsReport").innerHTML = performance.cards.length ? `<div class="list">${performance.cards.slice(0,8).map(row=>`<div class="list-row"><span>${escapeHtml(row.name)}</span><strong>${money(row.profit)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
 
   const slow=[...state.inventory].filter(i=>!["Verkauft","Storniert"].includes(i.status)).sort((a,b)=>daysBetween(b.purchaseDate)-daysBetween(a.purchaseDate)).slice(0,8);
   document.getElementById("slowCardsReport").innerHTML = slow.length ? `<div class="list">${slow.map(i=>`<div class="list-row"><span>${escapeHtml(i.name)}</span><strong>${daysBetween(i.purchaseDate)} Tage</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
 
   const sellers={};
-  state.purchases.forEach(p=>{const k=p.seller||"Unbekannt"; sellers[k]??={orders:0,total:0}; sellers[k].orders++; sellers[k].total+=Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0);});
+  state.purchases.filter(p=>inPeriod(p.paidDate||p.date)).forEach(p=>{const k=p.seller||"Unbekannt"; sellers[k]??={orders:0,total:0}; sellers[k].orders++; sellers[k].total+=purchaseBusinessCost(p);});
   document.getElementById("sellerReport").innerHTML = Object.keys(sellers).length ? `<div class="list">${Object.entries(sellers).sort((a,b)=>b[1].orders-a[1].orders).map(([k,v])=>`<div class="list-row"><div><span>${escapeHtml(k)}</span><br><small>${v.orders} Bestellungen</small></div><strong>${money(v.total)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
   renderAdvancedPerformanceReport(performance);
   renderBusinessHealth();
   renderSettlementReport();
   renderTradeDatabaseInsights();
+}
+
+function exportFinancialReportCsv(){
+  const from=document.getElementById("reportDateFrom")?.value||"",to=document.getElementById("reportDateTo")?.value||"";
+  const financial=window.TcgBusinessAutomation?.buildFinancialSummary?.(state,{from,to});if(!financial)return;
+  const quote=value=>`"${String(value??"").replaceAll('"','""')}"`;
+  const number=value=>Number(value||0).toFixed(2).replace(".",",");
+  const header=["Datum","Kategorie","Beschreibung","Geldeingang","Geldausgang","Realisierter Umsatz","Direkte Kosten","Realisierter Gewinn","Allgemeine Betriebsausgabe","Quelle-ID"];
+  const lines=[header,...financial.entries.map(row=>[row.date,row.category,row.label,number(row.cashIn),number(row.cashOut),number(row.realizedRevenue),number(row.directCost),number(row.realizedProfit),number(row.overhead),row.sourceId])];
+  downloadTextFile(`TCG_Finanzbericht_${from||"Anfang"}_${to||todayISO()}.csv`,`\uFEFF${lines.map(row=>row.map(quote).join(";")).join("\r\n")}`);
 }
 
 function renderAdvancedPerformanceReport(report=window.TcgBusinessAutomation?.buildPerformanceReport(state)) {
@@ -1914,7 +2127,7 @@ function paintTradeDatabaseInsights(data) {
       <td><span class="trade-confidence ${escapeHtml(row.confidenceLevel)}">${confidenceLabel} · ${Math.round(Number(row.confidenceScore||0))}%</span><small title="${escapeHtml((row.explanation||[]).join(" · "))}">${escapeHtml((row.explanation||[])[0]||"Weitere Daten erforderlich")}</small></td>
     </tr>`;
   }).join(""):`<tr><td colspan="7" class="empty">Noch keine kartengenauen Ein- oder Verkäufe vorhanden. Produkt-IDs in Importen und Bestandskarten bilden automatisch die Datenbasis.</td></tr>`;
-  const labels={purchase:"Einkauf",sale:"Verkauf",inventory:"Bestand",private_inventory:"Privatsammlung",settlement:"Abrechnung"};
+  const labels={purchase:"Einkauf",sale:"Verkauf",inventory:"Bestand",private_inventory:"Privatsammlung",settlement:"Abrechnung",settings:"Einstellungen"};
   const actions={baseline:"Ausgangsstand",create:"erstellt",update:"geändert",delete:"gelöscht"};
   const eventRows=Array.isArray(data?.events)?data.events:[];
   events.innerHTML=eventRows.length?`<div class="trade-event-list">${eventRows.map(row=>`<div class="trade-event-row"><div><strong>${escapeHtml(labels[row.entityType]||row.entityType)} ${escapeHtml(row.entityId)}</strong> <span class="muted">${escapeHtml(actions[row.eventType]||row.eventType)}</span>${row.changedFields?.length?`<small>Felder: ${escapeHtml(row.changedFields.slice(0,6).join(", "))}${row.changedFields.length>6?" …":""}</small>`:""}</div><small>${new Date(row.occurredAt).toLocaleString("de-DE")}</small></div>`).join("")}</div>`:`<div class="empty">Noch keine Änderungen protokolliert.</div>`;
@@ -1952,6 +2165,30 @@ function renderSettings() {
   document.getElementById("settingLanguages").value = state.settings.languages;
   document.getElementById("settingTargetStock").value = state.settings.targetStock;
   document.getElementById("settingSafetyPercent").value = state.settings.safetyPercent ?? 5;
+  document.getElementById("settingThemeMode").value = state.settings.themeMode || "system";
+  document.getElementById("settingDensity").value = state.settings.density || "comfortable";
+  document.getElementById("settingStartView").value = state.settings.startView || "dashboard";
+  document.getElementById("settingQuickSellDiscount").value = state.settings.quickSellDiscount ?? 8;
+  document.getElementById("settingStockAgeWarning").value = state.settings.stockAgeWarningDays ?? 90;
+  document.getElementById("settingStockAgeCritical").value = state.settings.stockAgeCriticalDays ?? 180;
+  document.getElementById("settingScannerEnabled").checked = state.settings.scannerEnabled !== false;
+  document.getElementById("settingScannerConfidence").value = state.settings.scannerMinConfidence ?? 80;
+  document.getElementById("settingScannerRemember").checked = state.settings.scannerRememberMappings !== false;
+  document.getElementById("settingScannerKeepImages").checked = Boolean(state.settings.scannerKeepImages);
+  document.getElementById("settingImportReview").checked = state.settings.importReviewRequired !== false;
+  document.getElementById("settingArchiveImports").checked = Boolean(state.settings.archiveOriginalImports);
+  const preview=document.getElementById("settingsCalculationPreview");
+  if(preview){
+    const sell=5, fee=sell*Number(state.settings.feePercent||0)/100, packaging=Number(state.settings.packaging||0), safety=sell*Number(state.settings.safetyPercent||0)/100;
+    preview.innerHTML=`<strong>Beispiel bei ${money(sell)}</strong><span>Gebühr ${money(fee)} · Verpackungsschätzung ${money(packaging)} · Sicherheitsabschlag ${money(safety)} · verbleibend ${money(Math.max(0,sell-fee-packaging-safety))}</span>`;
+  }
+  const status=document.getElementById("settingsDatabaseStatus");
+  if(status&&window.desktopApp?.getTradeDatabaseStatus&&!renderSettings.statusPending){
+    renderSettings.statusPending=true;
+    window.desktopApp.getTradeDatabaseStatus().then(info=>{
+      status.innerHTML=`<div><small>SQLite</small><strong>${info.ready?"Bereit":"Prüfen"}</strong></div><div><small>Automatische Sicherungen</small><strong>${Number(info.backupCount||0)}</strong></div><div><small>Letzte Sicherung</small><strong>${info.latestBackupAt?new Date(info.latestBackupAt).toLocaleString("de-DE"):"Noch keine"}</strong></div><div><small>Protokollierte Änderungen</small><strong>${Number(info.eventCount||0).toLocaleString("de-DE")}</strong></div>`;
+    }).catch(error=>{status.innerHTML=`<div class="error">Status konnte nicht gelesen werden: ${escapeHtml(error.message)}</div>`;}).finally(()=>{renderSettings.statusPending=false;});
+  }
 }
 
 function openModal(title, fields, initial={}, onSave) {
@@ -1984,6 +2221,78 @@ document.getElementById("modalForm").addEventListener("submit", e=>{
 });
 document.getElementById("modalClose").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
 document.getElementById("modalCancel").onclick=()=>{inventoryCardSearchSequence++;inventoryPriceSequence++;document.getElementById("modal").close();};
+
+async function scannerImageFingerprint(dataUrl){
+  if(!dataUrl)return "";
+  const image=new Image();
+  await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=dataUrl;});
+  const canvas=document.createElement("canvas");canvas.width=9;canvas.height=8;
+  const context=canvas.getContext("2d",{willReadFrequently:true});context.drawImage(image,0,0,9,8);
+  const pixels=context.getImageData(0,0,9,8).data;let bits="";
+  const light=index=>pixels[index]*0.299+pixels[index+1]*0.587+pixels[index+2]*0.114;
+  for(let y=0;y<8;y++)for(let x=0;x<8;x++){const left=(y*9+x)*4,right=left+4;bits+=light(left)>light(right)?"1":"0";}
+  return bits.match(/.{1,4}/g).map(group=>parseInt(group,2).toString(16)).join("");
+}
+
+function scannerHashDistance(left,right){
+  if(!left||!right||left.length!==right.length)return Infinity;
+  let distance=0;for(let index=0;index<left.length;index++){let value=parseInt(left[index],16)^parseInt(right[index],16);while(value){distance+=value&1;value>>=1;}}
+  return distance;
+}
+
+function scannerMappingMatch(fingerprint){
+  const ranked=(state.scannerMappings||[]).map(row=>({...row,distance:scannerHashDistance(fingerprint,row.fingerprint)})).sort((a,b)=>a.distance-b.distance);
+  const match=ranked[0];if(!match||match.distance>5)return null;
+  const confidence=Math.max(0,100-match.distance*4);
+  return confidence>=Number(state.settings.scannerMinConfidence||80)?{...match,confidence}:null;
+}
+
+function rememberScannerChoice(scan, product){
+  if(!scan?.fingerprint||!product?.productId)return;
+  const record={fingerprint:scan.fingerprint,productId:String(product.productId),name:product.name||product.germanName||"",updatedAt:new Date().toISOString()};
+  if(state.settings.scannerRememberMappings!==false){
+    const existing=(state.scannerMappings||[]).find(row=>row.fingerprint===scan.fingerprint);
+    if(existing)Object.assign(existing,record,{confirmations:Number(existing.confirmations||0)+1});
+    else state.scannerMappings.push({...record,confirmations:1});
+  }
+  state.scannerHistory.push({id:scan.id||uid(),timestamp:scan.receivedAt||new Date().toISOString(),mode:scan.mode||"business",fingerprint:scan.fingerprint,hint:scan.hint||"",productId:String(product.productId),confirmed:true});
+  state.scannerHistory=state.scannerHistory.slice(-200);
+}
+
+async function openIphoneScanner(mode="business",targetId=""){
+  if(state.settings.scannerEnabled===false){alert("Der iPhone-Scanner ist in den Einstellungen deaktiviert.");return;}
+  if(!window.desktopApp?.startScanner){alert("Der iPhone-Scanner steht nur in der installierten Desktop-App zur Verfügung.");return;}
+  scannerSessionMode=["business","private","purchase","sale"].includes(mode)?mode:"business";
+  const dialog=document.getElementById("scannerDialog"),content=document.getElementById("scannerContent");
+  document.getElementById("scannerSubtitle").textContent={private:"Foto für die Privatsammlung aufnehmen.",purchase:"Karte zu diesem Einkauf ergänzen.",sale:"Karte zu diesem Verkauf ergänzen.",business:"Foto für den Geschäftsbestand aufnehmen."}[scannerSessionMode];
+  content.innerHTML='<div class="scanner-loading">Sichere Verbindung wird vorbereitet …</div>';
+  try{if(!dialog.open)dialog.showModal();}catch{dialog.setAttribute("open","");}
+  try{
+    const info=await window.desktopApp.startScanner({mode:scannerSessionMode,targetId});
+    content.innerHTML=`<div class="scanner-pairing"><img class="scanner-qr" src="${info.qrDataUrl}" alt="QR-Code für den iPhone-Scanner"><div class="scanner-instructions"><h3>So verbinden Sie Ihr iPhone</h3><p>iPhone und PC müssen im selben WLAN sein. Öffnen Sie die Kamera-App und richten Sie sie auf den QR-Code.</p><span class="scanner-url">${escapeHtml(info.url)}</span><p>Auf dem iPhone fotografieren Sie die Karte. Im Manager bestätigen oder korrigieren Sie danach immer die genaue Druckvariante.</p></div></div><div class="scanner-waiting">Warte auf ein Kartenfoto vom iPhone …</div>`;
+  }catch(error){content.innerHTML=`<div class="scanner-error"><strong>Scanner konnte nicht gestartet werden.</strong><br>${escapeHtml(error.message||error)}</div>`;}
+}
+
+async function closeIphoneScanner(){
+  document.getElementById("scannerDialog")?.close();
+  try{await window.desktopApp?.stopScanner?.();}catch(error){console.error("Scanner konnte nicht beendet werden:",error);}
+}
+
+async function acceptScannerSubmission(submission){
+  if(!submission?.imageDataUrl)return;
+  let fingerprint="";
+  try{fingerprint=await scannerImageFingerprint(submission.imageDataUrl);}catch(error){console.error("Scanner-Fingerabdruck fehlgeschlagen:",error);}
+  const scan={...submission,fingerprint};
+  const mapping=scannerMappingMatch(fingerprint);
+  const catalog=mapping?resolveProduct(mapping.productId,{name:mapping.name}):{};
+  document.getElementById("scannerDialog")?.close();
+  setTimeout(()=>window.desktopApp?.stopScanner?.().catch(()=>{}),800);
+  if(submission.mode==="purchase"&&submission.targetId){addPurchaseLine(submission.targetId,scan);return;}
+  if(submission.mode==="sale"&&submission.targetId){addSaleLine(submission.targetId,scan);return;}
+  addInventory(mapping?catalog:{},submission.mode==="private"?"private":"business",scan);
+  const search=document.getElementById("inventoryCardSearch");
+  if(!mapping&&submission.hint&&search){search.value=submission.hint;renderInventoryCardSearch(submission.hint);}
+}
 
 let inventoryModalVariants=new Map();
 let inventoryCardSearchSequence=0;
@@ -2063,7 +2372,7 @@ async function renderInventoryCardSearch(query){
   }catch(error){if(sequence===inventoryCardSearchSequence)target.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;}
 }
 
-function addInventory(initial={}, collection="business") {
+function addInventory(initial={}, collection="business", scan=null) {
   const isPrivate=collection==="private";
   inventoryCardSearchSequence++;
   inventoryPriceSequence++;
@@ -2071,7 +2380,8 @@ function addInventory(initial={}, collection="business") {
   const wrap=document.getElementById("modalFields");
   const language=initial.language||"DE",condition=initial.condition||"NM",status=initial.status||(isPrivate?"Privatsammlung":"Im Bestand");
   wrap.innerHTML=`
-    <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${scan.fingerprint&&scannerMappingMatch(scan.fingerprint)?"Bekannte Karte gefunden – bitte Druckvariante kontrollieren":"Foto empfangen – bitte Karte und Druckvariante auswählen"}</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Der Scan speichert niemals automatisch. Erst Ihre Bestätigung übernimmt die Karte.</span></div></div>`:""}
+    <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
     <label>Set<input id="inventorySetDisplay" value="${escapeHtml(initial.setName||initial.set||"")}" readonly></label>
@@ -2081,6 +2391,7 @@ function addInventory(initial={}, collection="business") {
     <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option ${condition===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Einstand (€)<input name="cost" type="number" min="0" step="0.01" value="${Number(initial.cost||0)||""}"></label>
     ${isPrivate?'':`<label>Gewünschter Inseratspreis (€)<input name="listingPrice" type="number" min="0" step="0.01" value="${Number(initial.listingPrice||0)||""}"></label>`}
+    ${isPrivate?`<label>Verkaufsbereitschaft<select name="saleIntent">${["Nicht verkaufen","Vielleicht","Verkaufsbereit"].map(value=>`<option ${String(initial.saleIntent||"Nicht verkaufen")===value?"selected":""}>${value}</option>`).join("")}</select></label><label>Wunschpreis bei Verkauf (€)<input name="desiredSalePrice" type="number" min="0" step="0.01" value="${Number(initial.desiredSalePrice||0)||""}"></label>`:""}
     <input name="suggestedSell" type="hidden" value="${Number(initial.suggestedSell||0)||""}">
     <div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span></div>
     <label>Kaufdatum<input name="purchaseDate" type="date" value="${escapeHtml(initial.purchaseDate||todayISO())}"></label>
@@ -2092,28 +2403,31 @@ function addInventory(initial={}, collection="business") {
     const legacyUnchanged=initial.id&&wrap.dataset.inventorySelection==="legacy"&&initial.name;
     if((!data.productId||!data.name)&&!legacyUnchanged){alert("Bitte zuerst eine Karte und anschließend die richtige Druckvariante auswählen.");document.getElementById("inventoryCardSearch")?.focus();return false;}
     if(legacyUnchanged)data.name=initial.name;
-    const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
+    const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
+    if(scan?.fingerprint){obj.scanFingerprint=scan.fingerprint;obj.scanSource="iPhone";if(state.settings.scannerKeepImages)obj.scanImageDataUrl=scan.imageDataUrl;}
     const target=isPrivate?state.privateCollection:state.inventory;
     if(initial.id){const current=target.find(row=>row.id===initial.id);const before=current?structuredClone(current):null;const beforeBucket=!isPrivate&&current?purchaseBucketForAsset(current,"business"):null;Object.assign(current,obj);if(beforeBucket)adjustPurchaseOwnershipForAsset(current,beforeBucket,purchaseBucketForAsset(current,"business"));if(before){const fields=Object.keys(obj).filter(key=>JSON.stringify(before[key])!==JSON.stringify(current[key]));if(fields.length)addMovement({type:isPrivate?"Privatkorrektur":"Kartenkorrektur",quantity:0,productId:cleanProductId(current.productId),reference:isPrivate?"Privatsammlung":"Bestand",note:`Geändert: ${fields.join(", ")}`});}}
-    else {const created={...obj,id:uid(),movementRecorded:true};target.push(created);addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created),reference:isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte",addedIds:[created.id],inventorySnapshot:structuredClone(created)});}
+    else {const created={...obj,id:uid(),movementRecorded:true};target.push(created);addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created),reference:scan?"iPhone-Scanner":isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte",addedIds:[created.id],inventorySnapshot:structuredClone(created)});}
+    if(scan)rememberScannerChoice(scan,obj);
     return true;
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const listing=document.querySelector('#modalFields [name="listingPrice"]');if(listing&&suggestion){listing.value=suggestion.toFixed(2);listing.focus();}}};
+  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
   inventoryModalVariants=new Map();
   document.getElementById("modal").showModal();
   if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
   else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
-function addPurchaseLine(purchaseId){
+function addPurchaseLine(purchaseId,scan=null){
   const purchase=state.purchases.find(row=>row.id===purchaseId);if(!purchase)return;
   inventoryCardSearchSequence++;inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent=`Karte zu Einkauf #${purchase.orderNo||"-"} hinzufügen`;
   const wrap=document.getElementById("modalFields");
   wrap.innerHTML=`
-    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="z. B. Aschenblüte oder RA01-008"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>Foto empfangen – Einkaufsposition bestätigen</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Die genaue Druckvariante bleibt manuell korrigierbar.</span></div></div>`:""}
+    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="z. B. Aschenblüte oder RA01-008" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
@@ -2132,22 +2446,27 @@ function addPurchaseLine(purchaseId){
     purchase.items=purchase.pendingItems.reduce((sum,item)=>sum+Number(item.quantity||1),0);
     purchase.cardValue=purchase.pendingItems.reduce((sum,item)=>sum+Number(item.quantity||1)*Number(item.unitPrice||0),0);
     purchase.inventoryCreated=false;
+    if(scan)rememberScannerChoice(scan,line);
     addMovement({type:"Einkaufsposition ergänzt",quantity,productId:cleanProductId(line.productId),purchaseId:purchase.id,reference:`Einkauf ${purchase.orderNo||"-"}`,note:line.name});
     return true;
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
-  inventoryModalVariants=new Map();document.getElementById("modal").showModal();setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
+  inventoryModalVariants=new Map();document.getElementById("modal").showModal();
+  const mapping=scan?.fingerprint?scannerMappingMatch(scan.fingerprint):null;
+  if(mapping)searchInventoryCardVariants(mapping.productId).then(products=>{const selected=products.find(row=>String(row.productId)===String(mapping.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
+  else if(scan?.hint)renderInventoryCardSearch(scan.hint);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
-function addSaleLine(saleId){
+function addSaleLine(saleId,scan=null){
   const sale=state.sales.find(row=>row.id===saleId);if(!sale)return;
   inventoryCardSearchSequence++;inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent=`Karte zu Verkauf #${sale.orderNo||"-"} hinzufügen`;
   const wrap=document.getElementById("modalFields");
   wrap.innerHTML=`
-    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>Foto empfangen – Verkaufsposition bestätigen</strong><span>${scan.hint?`Erkennungshilfe: ${escapeHtml(scan.hint)}. `:""}Die genaue Druckvariante bleibt manuell korrigierbar.</span></div></div>`:""}
+    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
@@ -2161,13 +2480,17 @@ function addSaleLine(saleId){
     sale.items ||= [];sale.items.push(line);
     sale.quantity=sale.items.reduce((sum,item)=>sum+Number(item.quantity||1),0);sale.cardValue=sale.items.reduce((sum,item)=>sum+Number(item.quantity||1)*Number(item.unitPrice||0),0);sale.cardNames=sale.items.map(item=>`${item.quantity}× ${item.name}`).join(", ");
     if(Number(sale.revenue||0)<=0)sale.revenue=sale.cardValue+Number(sale.shippingPaid||0);
+    if(scan)rememberScannerChoice(scan,line);
     addMovement({type:"Verkaufsposition ergänzt",quantity:line.quantity,productId:cleanProductId(line.productId),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:line.name});
     setTimeout(()=>openSaleAllocation(sale.id),0);return true;
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
-  inventoryModalVariants=new Map();document.getElementById("modal").showModal();setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
+  inventoryModalVariants=new Map();document.getElementById("modal").showModal();
+  const mapping=scan?.fingerprint?scannerMappingMatch(scan.fingerprint):null;
+  if(mapping)searchInventoryCardVariants(mapping.productId).then(products=>{const selected=products.find(row=>String(row.productId)===String(mapping.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
+  else if(scan?.hint)renderInventoryCardSearch(scan.hint);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function recalculatePurchaseTotals(purchase){
@@ -2222,6 +2545,8 @@ function purchaseOwnershipTotals(purchase){
 }
 
 function purchaseBusinessCost(purchase){
+  const shared=window.TcgBusinessAutomation?.purchaseBusinessCost?.(purchase);
+  if(shared!==undefined)return Number(shared||0);
   if(!Array.isArray(purchase?.pendingItems)||!purchase.pendingItems.length){
     return purchase?.status==="Storniert"?0:Math.max(0,Number(purchase?.cardValue||0)+Number(purchase?.shipping||0)+Number(purchase?.extra||0)-Number(purchase?.refund||0));
   }
@@ -2264,7 +2589,8 @@ function applyPurchaseReceiptPlan(purchase,plan,note=""){
     item.materializedBusiness=row.business;item.materializedPrivate=row.private;item.materializedDamaged=row.damaged;
   });
   purchase.costAllocationMethod=plan.method;
-  purchase.status=plan.status;
+  const previousStatus=purchase.status;purchase.status=plan.status;
+  recordWorkflowChange(purchase,"Lieferstatus",previousStatus,purchase.status,note);
   purchase.inventoryCreated=plan.totals.open===0;
   purchase.receivedDate=(plan.totals.business+plan.totals.private+plan.totals.damaged)>0?(purchase.receivedDate||todayISO()):purchase.receivedDate;
   purchase.receiptHistory ||= [];
@@ -2325,7 +2651,17 @@ function materializePurchaseInventory(purchase){
   return applyPurchaseReceiptPlan(purchase,plan,"Automatisch als Geschäftsbestand übernommen");
 }
 
+function recordWorkflowChange(record, field, from, to, note=""){
+  if(String(from||"")===String(to||""))return;
+  record.workflowHistory ||= [];
+  record.workflowHistory.unshift({id:uid(),timestamp:new Date().toISOString(),field,from:String(from||""),to:String(to||""),note:String(note||"")});
+  record.workflowHistory=record.workflowHistory.slice(0,100);
+}
+
 function addPurchase(initial={}) {
+  const initialTotal=Number(initial.cardValue||0)+Number(initial.shipping||0)+Number(initial.extra||0);
+  const derivedPayment=initial.status==="Storniert"?"Storniert":initial.paymentStatus||(Number(initial.refund||0)>=initialTotal&&Number(initial.refund||0)>0?"Erstattet":Number(initial.refund||0)>0?"Teilweise erstattet":"Bezahlt");
+  const modalInitial={...initial,paymentStatus:derivedPayment,paidDate:initial.paidDate||(derivedPayment==="Bezahlt"?initial.date:"")};
   openModal(initial.id?"Einkauf bearbeiten":"Einkauf erfassen",[
     {name:"orderNo",label:"Bestellnummer",required:true},
     {name:"date",label:"Kaufdatum",type:"date",value:todayISO()},
@@ -2336,17 +2672,26 @@ function addPurchase(initial={}) {
     {name:"shipping",label:"Versand (€)",type:"number",step:"0.01"},
     {name:"extra",label:"Zusatzkosten (€)",type:"number",step:"0.01"},
     {name:"refund",label:"Erstattung / Gutschrift (€)",type:"number",step:"0.01"},
-    {name:"status",label:"Status",type:"select",options:["Bestellt","Unterwegs","Teilweise eingetroffen","Eingetroffen","Storniert"]},
+    {name:"paymentStatus",label:"Zahlungsstatus",type:"select",options:["Offen","Bezahlt","Teilweise erstattet","Erstattet","Storniert"]},
+    {name:"paidDate",label:"Bezahlt am",type:"date"},
+    {name:"status",label:"Lieferstatus",type:"select",options:["Bestellt","Unterwegs","Teilweise eingetroffen","Eingetroffen","Storniert"]},
+    {name:"expectedDate",label:"Voraussichtliche Ankunft",type:"date"},
+    {name:"trackingNumber",label:"Sendungsnummer"},
     {name:"note",label:"Notiz",full:true}
-  ], initial, data=>{
+  ], modalInitial, data=>{
     const requestedStatus=data.status;
     const obj={...data,items:Number(data.items||0),cardValue:Number(data.cardValue||0),shipping:Number(data.shipping||0),extra:Number(data.extra||0),refund:Number(data.refund||0)};
+    if(obj.paymentStatus==="Bezahlt"&&!obj.paidDate)obj.paidDate=obj.date||todayISO();
     let purchase;
     if(initial.id) {
       purchase=state.purchases.find(x=>x.id===initial.id);
+      const previous={status:purchase.status,paymentStatus:purchase.paymentStatus||derivedPayment};
       Object.assign(purchase,obj);
+      recordWorkflowChange(purchase,"Lieferstatus",previous.status,purchase.status);
+      recordWorkflowChange(purchase,"Zahlungsstatus",previous.paymentStatus,purchase.paymentStatus);
     } else {
-      purchase={...obj,id:uid(),pendingItems:[],inventoryCreated:false};
+      purchase={...obj,id:uid(),pendingItems:[],inventoryCreated:false,workflowHistory:[]};
+      recordWorkflowChange(purchase,"Einkauf","","Erfasst");
       state.purchases.push(purchase);
     }
     if(purchase.pendingItems?.length)recalculatePurchaseTotals(purchase);
@@ -2453,6 +2798,9 @@ function saveSaleAllocation(){
 }
 
 function addSale(initial={}) {
+  const derivedPayment=initial.status==="Storniert"?"Storniert":initial.status==="Erstattet"?"Erstattet":initial.paymentStatus||(initial.status&&initial.status!=="Offen"?"Bezahlt":"Offen");
+  const derivedSettlement=initial.settlementStatus||(initial.status==="Abgerechnet"?"Abgerechnet":"Offen");
+  const modalInitial={...initial,paymentStatus:derivedPayment,settlementStatus:derivedSettlement,paidDate:initial.paidDate||(derivedPayment==="Bezahlt"?initial.date:"")};
   openModal(initial.id?"Verkauf bearbeiten":"Verkauf erfassen",[
     {name:"orderNo",label:"Bestellnummer",required:true},
     {name:"date",label:"Verkaufsdatum",type:"date",value:todayISO()},
@@ -2466,13 +2814,20 @@ function addSale(initial={}) {
     {name:"shippingPaid",label:"Versand vom Käufer (€)",type:"number",step:"0.01"},
     {name:"postage",label:"Tatsächliches Porto (€)",type:"number",step:"0.01"},
     {name:"refund",label:"Erstattung an Käufer (€)",type:"number",step:"0.01"},
-    {name:"status",label:"Status",type:"select",options:["Offen","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe eingetroffen","Erstattet","Abgeschlossen","Abgerechnet","Storniert"]},
+    {name:"paymentStatus",label:"Zahlungsstatus",type:"select",options:["Offen","Bezahlt","Erstattet","Storniert"]},
+    {name:"paidDate",label:"Bezahlt am",type:"date"},
+    {name:"settlementStatus",label:"Abrechnungsstatus",type:"select",options:["Offen","Abgerechnet"]},
+    {name:"settledDate",label:"Abgerechnet am",type:"date"},
+    {name:"trackingNumber",label:"Sendungsnummer"},
+    {name:"status",label:"Vorgangsstatus",type:"select",options:["Offen","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe eingetroffen","Erstattet","Abgeschlossen","Abgerechnet","Storniert"]},
     {name:"note",label:"Notiz",full:true}
-  ], initial, data=>{
+  ], modalInitial, data=>{
     const obj={...data,quantity:Number(data.quantity||0),revenue:Number(data.revenue||0),cost:Number(data.cost||0),shippingPaid:Number(data.shippingPaid||0),postage:Number(data.postage||0),refund:Number(data.refund||0)};
+    if(obj.paymentStatus==="Bezahlt"&&!obj.paidDate)obj.paidDate=obj.date||todayISO();
+    if(obj.settlementStatus==="Abgerechnet"&&!obj.settledDate)obj.settledDate=todayISO();
     let sale;
-    if(initial.id) { sale=state.sales.find(x=>x.id===initial.id); Object.assign(sale,obj); }
-    else { sale={...obj,id:uid(),items:[],itemIds:[]}; state.sales.push(sale); }
+    if(initial.id) { sale=state.sales.find(x=>x.id===initial.id);const previous={status:sale.status,paymentStatus:sale.paymentStatus||derivedPayment,settlementStatus:sale.settlementStatus||derivedSettlement};Object.assign(sale,obj);recordWorkflowChange(sale,"Vorgangsstatus",previous.status,sale.status);recordWorkflowChange(sale,"Zahlungsstatus",previous.paymentStatus,sale.paymentStatus);recordWorkflowChange(sale,"Abrechnungsstatus",previous.settlementStatus,sale.settlementStatus); }
+    else { sale={...obj,id:uid(),items:[],itemIds:[],workflowHistory:[]};recordWorkflowChange(sale,"Verkauf","","Erfasst");state.sales.push(sale); }
     syncSaleInventoryStatus(sale);
     if(sale.items?.length&&sale.itemIds?.length<(sale.items||[]).reduce((sum,item)=>sum+Number(item.quantity||1),0)&&!["Storniert","Erstattet"].includes(sale.status))setTimeout(()=>openSaleAllocation(sale.id),0);
     if(data.customer && !state.customers.some(c=>String(c.name).toLowerCase()===String(data.customer).toLowerCase())) state.customers.push(normalizePartnerRecord({name:data.customer,cardmarketName:data.customer,country:data.country},"customer"));
@@ -2509,6 +2864,7 @@ function addPartner(kind, initial={}) {
   const fields=[
     {name:"name",label:"Interner Name",required:true},
     {name:"cardmarketName",label:"Cardmarket-Benutzername",required:true},
+    {name:"externalId",label:"Cardmarket-Konto-ID (optional, für spätere API)"},
     {name:"realName",label:"Name / Firma"},
     {name:"country",label:"Land"},
     {name:"language",label:"Sprache"},
@@ -2536,6 +2892,12 @@ function addPartner(kind, initial={}) {
   };
   openModal(initial.id?`${isSeller?"Händler":"Kunde"} bearbeiten`:`${isSeller?"Händler":"Kunde"} hinzufügen`,fields,modalInitial,data=>{
     const arr=isSeller?state.sellers:state.customers;
+    const normalized=value=>normalizeSearchTerm(value).replaceAll(" ","");
+    const duplicate=arr.find(row=>row.id!==initial.id&&(
+      (data.externalId&&row.externalId&&String(row.externalId)===String(data.externalId))||
+      (normalized(row.cardmarketName||row.name)&&normalized(row.cardmarketName||row.name)===normalized(data.cardmarketName||data.name))
+    ));
+    if(duplicate){alert(`Dieser ${isSeller?"Händler":"Kunde"} ist bereits als „${duplicate.cardmarketName||duplicate.name}“ gespeichert.`);return false;}
     const obj=normalizePartnerRecord({...data,
       favorite:data.favorite==="Ja",
       trackingRequired:data.trackingRequired==="Ja",
@@ -3583,10 +3945,21 @@ document.querySelectorAll("[data-view-jump]").forEach(b=>b.addEventListener("cli
 ["inventorySearch","privateSearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
 // Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
 // während des Öffnens würde das native Auswahlmenü sofort wieder schließen.
-["inventoryStatusFilter","purchaseStatusFilter","salesStatusFilter","watchStatusFilter","expenseCategoryFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
+["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","expenseCategoryFilter","expenseTypeFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
+
+document.getElementById("inventoryFilterReset").onclick=()=>{["inventorySearch","inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter"].forEach(id=>document.getElementById(id).value="");document.getElementById("inventorySort").value="name";renderAll();};
+document.getElementById("privateFilterReset").onclick=()=>{["privateSearch","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
+document.getElementById("purchaseFilterReset").onclick=()=>{["purchaseSearch","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
+document.getElementById("salesFilterReset").onclick=()=>{["salesSearch","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
+document.getElementById("watchFilterReset").onclick=()=>{["watchSearch","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 
 document.getElementById("addInventoryBtn").onclick=()=>addInventory();
 document.getElementById("addPrivateBtn").onclick=()=>addInventory({},"private");
+document.getElementById("scanInventoryBtn").onclick=()=>openIphoneScanner("business");
+document.getElementById("scanPrivateBtn").onclick=()=>openIphoneScanner("private");
+document.getElementById("scannerClose").onclick=closeIphoneScanner;
+document.getElementById("scannerStop").onclick=closeIphoneScanner;
+document.getElementById("scannerDialog").addEventListener("cancel",event=>{event.preventDefault();closeIphoneScanner();});
 document.getElementById("addPurchaseBtn").onclick=()=>addPurchase();
 document.getElementById("addSaleBtn").onclick=()=>addSale();
 document.getElementById("addMaterialBtn").onclick=()=>addMaterial();
@@ -3599,7 +3972,7 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
-  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
+  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-toggle-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
   if(d.editPrivate) addInventory(state.privateCollection.find(x=>x.id===d.editPrivate),"private");
@@ -3661,7 +4034,7 @@ document.body.addEventListener("click",e=>{
   if(d.buyMaterial) buyMaterial(d.buyMaterial);
   if(d.deleteMaterial && confirm("Material wirklich löschen? Bestehende Verkaufsdaten bleiben erhalten.")) {state.materials=state.materials.filter(x=>x.id!==d.deleteMaterial);saveState();renderAll();}
   if(d.editExpense) addExpense(state.expenses.find(x=>x.id===d.editExpense));
-  if(d.deleteExpense && confirm("Ausgabe wirklich löschen?")) {state.expenses=state.expenses.filter(x=>x.id!==d.deleteExpense);saveState();renderAll();}
+  if(d.toggleExpense){const expense=state.expenses.find(x=>x.id===d.toggleExpense);if(expense&&confirm(expense.status==="Storniert"?"Storno wirklich aufheben und die Ausgabe wieder buchen?":"Ausgabe stornieren? Sie bleibt zur Nachvollziehbarkeit gespeichert.")){expense.status=expense.status==="Storniert"?"Gebucht":"Storniert";expense.cancelledAt=expense.status==="Storniert"?new Date().toISOString():"";addMovement({type:expense.status==="Storniert"?"Ausgabe storniert":"Ausgabe wieder gebucht",quantity:0,expenseId:expense.id,reference:expense.description||expense.category,note:money(expense.amount)});saveState();renderAll();}}
   if(d.editTemplate) addTemplate(state.materialTemplates.find(x=>x.id===d.editTemplate));
   if(d.deleteTemplate && confirm("Versandvorlage wirklich löschen?")) {state.materialTemplates=state.materialTemplates.filter(x=>x.id!==d.deleteTemplate);saveState();renderAll();}
   if("removeUsage" in d) {actionTarget?.closest('[data-usage-row]')?.remove();updateSaleMaterialPreview();}
@@ -3670,7 +4043,7 @@ document.body.addEventListener("click",e=>{
 });
 
 document.getElementById("saveSettingsBtn").onclick=()=>{
-  state.settings={
+  const next={...state.settings,
     feePercent:Number(document.getElementById("settingFee").value||0),
     packaging:Number(document.getElementById("settingPackaging").value||0),
     minProfit:Number(document.getElementById("settingMinProfit").value||0),
@@ -3679,10 +4052,36 @@ document.getElementById("saveSettingsBtn").onclick=()=>{
     condition:document.getElementById("settingCondition").value,
     languages:document.getElementById("settingLanguages").value,
     targetStock:Number(document.getElementById("settingTargetStock").value||0),
-    safetyPercent:Number(document.getElementById("settingSafetyPercent").value||0)
-  };saveState();renderAll();alert("Einstellungen gespeichert.");
+    safetyPercent:Number(document.getElementById("settingSafetyPercent").value||0),
+    quickSellDiscount:Number(document.getElementById("settingQuickSellDiscount").value||0),
+    stockAgeWarningDays:Number(document.getElementById("settingStockAgeWarning").value||90),
+    stockAgeCriticalDays:Number(document.getElementById("settingStockAgeCritical").value||180),
+    themeMode:document.getElementById("settingThemeMode").value,
+    density:document.getElementById("settingDensity").value,
+    startView:document.getElementById("settingStartView").value,
+    scannerEnabled:document.getElementById("settingScannerEnabled").checked,
+    scannerMinConfidence:Number(document.getElementById("settingScannerConfidence").value||80),
+    scannerRememberMappings:document.getElementById("settingScannerRemember").checked,
+    scannerKeepImages:document.getElementById("settingScannerKeepImages").checked,
+    importReviewRequired:document.getElementById("settingImportReview").checked,
+    archiveOriginalImports:document.getElementById("settingArchiveImports").checked
+  };
+  state.settings=window.TcgAppConfig?.normalizeSettings?window.TcgAppConfig.normalizeSettings(next):next;
+  applyAppearanceSettings();saveState();renderAll();alert("Einstellungen gespeichert.");
 };
-document.getElementById("resetDemoBtn").onclick=()=>{if(confirm("Alle lokalen Daten unwiderruflich löschen?")){state=structuredClone(defaultState);saveState();renderAll();}};
+document.getElementById("resetConfirmation").oninput=event=>{document.getElementById("resetDemoBtn").disabled=event.target.value.trim().toLocaleUpperCase("de-DE")!=="LÖSCHEN";};
+document.getElementById("resetDemoBtn").onclick=()=>{
+  if(document.getElementById("resetConfirmation").value.trim().toLocaleUpperCase("de-DE")!=="LÖSCHEN")return;
+  if(!confirm("Wirklich alle Geschäfts-, Bestands- und Bewegungsdaten löschen? Ein Backup wird vorher heruntergeladen."))return;
+  exportBackup();
+  const preservedCatalog=state.productCatalog;
+  const preservedSettings=state.settings;
+  state=structuredClone(defaultState);state.settings=preservedSettings;state.productCatalog=preservedCatalog;state.watchlist=[];
+  document.getElementById("resetConfirmation").value="";document.getElementById("resetDemoBtn").disabled=true;
+  saveState();renderAll();alert("Geschäftsdaten wurden zurückgesetzt. Das zuvor exportierte Backup kann bei Bedarf wieder geladen werden.");
+};
+document.getElementById("themeToggleBtn").onclick=toggleTheme;
+document.getElementById("openDataFolderBtn").onclick=async()=>{const result=await window.desktopApp?.openDataFolder?.();if(result&&!result.ok)alert(`Datenordner konnte nicht geöffnet werden: ${result.error}`);};
 
 ["backupBtn","backupBtn2"].forEach(id=>{const el=document.getElementById(id);if(el)el.onclick=exportBackup;});
 ["backupInput","backupInput2"].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener("change",async e=>{try{await importBackup(e.target.files[0]);alert("Backup importiert.");}catch(err){alert(err.message);}});});
@@ -3746,25 +4145,27 @@ document.getElementById("orderDetailContent").addEventListener("click",e=>{
   const purchase=state.purchases.find(row=>row.id===dlg.dataset.purchaseId);
   if(e.target.id==="openPurchaseReceiptBtn"&&purchase){dlg.close();openPurchaseReceipt(purchase.id);return;}
   if(e.target.id==="addPurchaseLineBtn"&&purchase){dlg.close();addPurchaseLine(purchase.id);return;}
+  if(e.target.id==="scanPurchaseLineBtn"&&purchase){dlg.close();openIphoneScanner("purchase",purchase.id);return;}
   const editLine=e.target.closest("[data-edit-purchase-line]");if(editLine&&purchase){dlg.close();editPurchaseLine(purchase.id,Number(editLine.dataset.editPurchaseLine));return;}
   const deleteLine=e.target.closest("[data-delete-purchase-line]");if(deleteLine&&purchase){deletePurchaseLine(purchase.id,Number(deleteLine.dataset.deletePurchaseLine));return;}
   const sale=state.sales.find(s=>s.id===dlg.dataset.saleId); if(!sale)return;
   if(e.target.id==="openSaleAllocationBtn"){dlg.close();openSaleAllocation(sale.id);return;}
   if(e.target.id==="addSaleLineBtn"){dlg.close();addSaleLine(sale.id);return;}
+  if(e.target.id==="scanSaleLineBtn"){dlg.close();openIphoneScanner("sale",sale.id);return;}
   if(e.target.id==="addSaleMaterialBtn") {const options=state.materials.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} (${Number(m.stock||0)} verfügbar)</option>`).join("");document.getElementById("saleMaterialUsage").insertAdjacentHTML("beforeend",materialUsageRow({},Date.now(),options));}
   if(e.target.id==="applySaleTemplateBtn") {const id=document.getElementById("saleTemplateSelect").value;if(!id)return;applyTemplateToEditor(id);}
   if(e.target.id==="saveSaleAsTemplateBtn") {const name=document.getElementById("saleTemplateName")?.value?.trim();if(!name){alert("Bitte zuerst einen Namen für die Vorlage eingeben.");document.getElementById("saleTemplateName")?.focus();return;}const items=readSaleMaterialRows();state.materialTemplates.push({id:uid(),name,shippingType:document.getElementById("saleShippingType").value,postage:Number(document.getElementById("salePostage").value||0),items:items.map(i=>({materialId:i.materialId,quantity:i.quantity}))});saveState();renderAll();openOrderDetails("sale",sale.id);alert("Vorlage gespeichert.");}
   if(e.target.id==="saleWorkflowNext") {
     const stage=sale.workflowStage||"Offen";
-    if(stage==="Offen") { sale.status="Bezahlt"; reserveSaleInventory(sale); sale.workflowStage="Kommissioniert"; addMovement({type:"Status",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Bezahlt → Kommissionieren"}); }
-    else if(stage==="Kommissioniert") { const boxes=[...document.querySelectorAll("[data-pick-item]")]; sale.pickedItems=boxes.filter(x=>x.checked).map(x=>Number(x.dataset.pickItem)); if(boxes.some(x=>!x.checked)){alert("Bitte alle Karten abhaken.");return;} sale.status="Kommissioniert"; sale.workflowStage="Verpackt"; addMovement({type:"Kommissionierung",quantity:Number(sale.quantity||boxes.length),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Alle Positionen geprüft"}); }
+    if(stage==="Offen") { const previous=sale.status;sale.status="Bezahlt"; reserveSaleInventory(sale); sale.workflowStage="Kommissioniert";recordWorkflowChange(sale,"Vorgangsstatus",previous,"Bezahlt"); addMovement({type:"Status",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Bezahlt → Kommissionieren"}); }
+    else if(stage==="Kommissioniert") { const boxes=[...document.querySelectorAll("[data-pick-item]")]; sale.pickedItems=boxes.filter(x=>x.checked).map(x=>Number(x.dataset.pickItem)); if(boxes.some(x=>!x.checked)){alert("Bitte alle Karten abhaken.");return;} const previous=sale.status;sale.status="Kommissioniert"; sale.workflowStage="Verpackt";recordWorkflowChange(sale,"Vorgangsstatus",previous,"Kommissioniert"); addMovement({type:"Kommissionierung",quantity:Number(sale.quantity||boxes.length),saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Alle Positionen geprüft"}); }
     saveState();renderAll();openOrderDetails("sale",sale.id);
   }
   if(e.target.id==="saveSaleMaterialsBtn") saveSalePacking(sale,false);
   if(e.target.id==="saveAndShipSaleBtn") saveSalePacking(sale,true);
   if(e.target.id==="createDeliveryNoteBtn") printSaleDocument(sale,"delivery");
   if(e.target.id==="createShippingLabelBtn") printSaleDocument(sale,"label");
-  if(e.target.id==="saleCompleteBtn") {sale.status="Abgeschlossen";sale.workflowStage="Abgeschlossen";sale.completedDate=todayISO();addMovement({type:"Abschluss",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Ankunft vom Kunden bestätigt"});saveState();renderAll();document.getElementById("orderDetailDialog").close();}
+  if(e.target.id==="saleCompleteBtn") {const previous=sale.status;sale.status="Abgeschlossen";sale.workflowStage="Abgeschlossen";sale.completedDate=todayISO();recordWorkflowChange(sale,"Vorgangsstatus",previous,"Abgeschlossen","Ankunft vom Kunden bestätigt");addMovement({type:"Abschluss",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:"Ankunft vom Kunden bestätigt"});saveState();renderAll();document.getElementById("orderDetailDialog").close();}
 });
 document.getElementById("orderDetailContent").addEventListener("input",e=>{if(e.target.matches("[data-material-id],[data-material-qty],#salePostage"))updateSaleMaterialPreview();});
 document.getElementById("orderDetailContent").addEventListener("change",e=>{if(e.target.matches("[data-material-id]"))updateSaleMaterialPreview();});
@@ -3810,6 +4211,16 @@ if(priceToggle) priceToggle.onchange=e=>{state.sync.autoPrices=e.target.checked;
 
 document.getElementById("repairWorkflowsBtn").onclick=()=>repairWorkflowConsistency(true);
 document.getElementById("refreshBusinessHealthBtn").onclick=()=>{businessHealthDatabaseStatus=null;renderBusinessHealth(true);};
+document.getElementById("reportDateFrom").onchange=renderReports;
+document.getElementById("reportDateTo").onchange=renderReports;
+document.getElementById("reportPeriodReset").onclick=()=>{document.getElementById("reportDateFrom").value="";document.getElementById("reportDateTo").value="";renderReports();};
+document.getElementById("exportReportCsv").onclick=exportFinancialReportCsv;
+const globalSearch=document.getElementById("globalSearch"),globalSearchResults=document.getElementById("globalSearchResults");
+globalSearch.oninput=event=>renderGlobalSearch(event.target.value);
+globalSearch.onkeydown=event=>{if(event.key==="Escape"){globalSearch.value="";renderGlobalSearch("");globalSearch.blur();}else if(event.key==="Enter"&&globalSearchActions[0]){event.preventDefault();globalSearchActions[0]();globalSearch.value="";renderGlobalSearch("");}};
+globalSearchResults.onclick=event=>{const button=event.target.closest("[data-global-result]");if(!button)return;globalSearchActions[Number(button.dataset.globalResult)]?.();globalSearch.value="";renderGlobalSearch("");};
+document.addEventListener("click",event=>{if(!event.target.closest(".global-search-wrap"))globalSearchResults.hidden=true;});
+document.addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();globalSearch.focus();globalSearch.select();}});
 document.addEventListener("click",event=>{
   const reportButton=event.target.closest("[data-performance-report]");
   if(reportButton){activePerformanceReport=reportButton.dataset.performanceReport;renderAdvancedPerformanceReport();return;}
@@ -3820,7 +4231,14 @@ document.addEventListener("click",event=>{
 const purchaseImportDateField = document.getElementById("purchaseImportDate");
 if (purchaseImportDateField && !purchaseImportDateField.value) purchaseImportDateField.value = todayISO();
 
-showView("dashboard");
+window.desktopApp?.onScannerSubmission?.(submission=>acceptScannerSubmission(submission).catch(error=>{
+  console.error("Scanner-Foto konnte nicht übernommen werden:",error);
+  alert("Das Scanner-Foto konnte nicht übernommen werden. Bitte die Karte manuell hinzufügen.");
+}));
+
+applyAppearanceSettings();
+systemThemeQuery?.addEventListener?.("change",()=>{if((state.settings.themeMode||"system")==="system")applyAppearanceSettings();});
+showView(state.settings.startView||"dashboard");
 initAutomation();
 refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
   console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);

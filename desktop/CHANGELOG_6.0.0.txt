@@ -1,0 +1,61 @@
+TCG Business Manager 6.0.0 – Geschäfts- und Analyseupdate
+==========================================================
+
+Daten und Sicherheit
+--------------------
+- SQLite ist in der Desktop-App die einzige dauerhafte Hauptdatenquelle.
+- Der alte Browser-Speicher kann SQLite nicht mehr mit einem veralteten Stand überschreiben.
+- Automatische Sicherungen beachten die einstellbare Aufbewahrungsdauer.
+- Änderungen an Einstellungen, Käufen, Verkäufen, Bestand und Abrechnungen werden nachvollziehbar protokolliert.
+- Cardmarket-Produkt-IDs, Druckvarianten, Einkaufslosen und vorhandene Nutzerdaten bleiben erhalten.
+
+Finanzen
+--------
+- Geldeingänge, Geldausgänge, Cashflow, realisierter Verkaufsgewinn und Betriebsergebnis sind getrennt.
+- Versandmaterial wird beim Einkauf als Geldabfluss und beim Verkauf als Verbrauch berücksichtigt, ohne doppelte Cashflow-Buchung.
+- Direkte Verkaufskosten können einer Bestellung zugeordnet werden.
+- Allgemeine Betriebsausgaben wie Regal, Software oder Bürobedarf verändern keine Karten-EK-/VK-Empfehlung.
+- Erstattungen werden als Auszahlung dargestellt.
+- Finanzberichte können nach Zeitraum gefiltert und als CSV exportiert werden.
+
+Bestand und Privatsammlung
+--------------------------
+- Filter nach Set, Seltenheit, Sprache, Zustand, Status, Lagerdauer und Datenqualität.
+- Sortierung nach Name, Set, Alter, Bestand und Inseratspreis.
+- Übersicht über Gesamtbestand, verfügbar, reserviert und unvollständige Druckdaten.
+- Private Karten erhalten Verkaufsbereitschaft und optionalen Wunschpreis, bleiben aber aus der Geschäftsauswertung ausgeschlossen.
+
+iPhone-Scanner
+--------------
+- Lokale Verbindung über einen zeitlich begrenzten QR-Code im selben WLAN.
+- Fotos werden nicht an einen externen Scanner-Dienst geschickt.
+- Scanner ist für Bestand, Privatsammlung sowie Einkaufs- und Verkaufspositionen verfügbar.
+- Jede vorgeschlagene Karte und Druckvariante muss manuell bestätigt oder korrigiert werden.
+- Bestätigte Bildzuordnungen können lokal gelernt werden; Bilder werden standardmäßig nicht dauerhaft gespeichert.
+
+Einkäufe und Verkäufe
+---------------------
+- Getrennte Zahlungs-, Liefer-, Vorgangs- und Abrechnungsstatus.
+- Sendungsnummern und relevante Datumsangaben können gespeichert werden.
+- Statusänderungen erscheinen im Verlauf der Bestellung.
+- Wareneingänge bleiben zwischen Geschäftsbestand, Privatsammlung, beschädigt und storniert aufteilbar.
+- Verkäufe behalten die konkrete Zuordnung zum Einkaufsexemplar und tatsächlichen Einstand.
+
+Versandmaterial und Ausgaben
+----------------------------
+- Materialverlauf zeigt Zu- und Abgänge mit Bestellbezug.
+- Verbrauch der letzten 30 Tage, Reichweite, Lieferzeit und Nachbestellvorschlag.
+- Ausgaben unterscheiden Materialeinkauf, direkte Verkaufskosten und allgemeine Betriebsausgaben.
+- Stornierte Ausgaben bleiben als nachvollziehbarer Beleg gespeichert und können wieder aktiviert werden.
+
+Markt, Suche und Oberfläche
+---------------------------
+- Grauer Dark Mode mit heller Schrift und kompakter Tabellenansicht.
+- Globale Suche über Bestand, Privatsammlung, Einkäufe, Verkäufe, Kontakte und Versandmaterial (Strg+K).
+- Marktbeobachtung zeigt Kaufchancen, Sollbestand sowie fehlende oder veraltete Preisdaten.
+- Automatische Max-EK- und Ziel-VK-Berechnungen verwenden dieselben zentralen Einstellungen.
+- Cardmarket-API bleibt sicher deaktiviert, ist aber als zukünftige zusätzliche Datenquelle vorbereitet.
+
+Qualitätssicherung
+------------------
+- 32 automatisierte Prüfungen für Suche, Datenbankmigration, SQLite-Protokollierung, Finanzlogik, Bestand, Wareneingang, Verkäufe, Marktpreise, Scanner-Verbindung und API-Vorbereitung.

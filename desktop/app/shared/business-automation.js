@@ -65,12 +65,29 @@
     const fee = sale.fee !== undefined && sale.fee !== ''
       ? asNumber(sale.fee)
       : cardValue * asNumber(settings.feePercent) / 100;
-    const packaging = asNumber(sale.material) || asNumber(sale.packaging) ||
-      Math.max(0, asNumber(sale.quantity)) * asNumber(settings.packaging);
+    const materialUsageCost = Array.isArray(sale.materialUsage) && sale.materialUsage.length
+      ? sale.materialUsage.reduce((sum, row) => sum + Math.max(0, asNumber(row.quantity)) * Math.max(0, asNumber(row.unitCost)), 0)
+      : null;
+    const hasManualPackaging = (sale.material !== undefined && sale.material !== '') ||
+      (sale.packaging !== undefined && sale.packaging !== '');
+    const packaging = materialUsageCost !== null
+      ? materialUsageCost
+      : hasManualPackaging
+        ? asNumber(sale.material !== undefined && sale.material !== '' ? sale.material : sale.packaging)
+        : Math.max(0, asNumber(sale.quantity)) * asNumber(settings.packaging);
     const postage = asNumber(sale.postage);
     const cost = String(sale.status || '') === 'Rückgabe eingetroffen' ? 0 : asNumber(sale.cost);
     const netRevenue = gross - refund;
-    return { gross, refund, netRevenue, cardValue, fee, packaging, postage, cost, profit: netRevenue - fee - packaging - postage - cost };
+    const sourceQuality = {
+      fee: sale.fee !== undefined && sale.fee !== '' ? 'exact' : 'estimated',
+      packaging: materialUsageCost !== null ? 'exact' : hasManualPackaging ? 'manual' : 'estimated',
+      postage: sale.postage !== undefined && sale.postage !== '' ? 'exact' : 'missing',
+      cost: cost > 0 || String(sale.status || '') === 'Rückgabe eingetroffen' ? 'exact' : 'missing'
+    };
+    const quality = Object.values(sourceQuality).includes('missing')
+      ? 'incomplete'
+      : Object.values(sourceQuality).includes('estimated') ? 'estimated' : 'exact';
+    return { gross, refund, netRevenue, cardValue, fee, packaging, postage, cost, profit: netRevenue - fee - packaging - postage - cost, sourceQuality, quality };
   }
 
   const optionalNumber = value => {
@@ -486,7 +503,129 @@
 
   const realizedSale = sale => ['Abgeschlossen', 'Abgerechnet', 'Erstattet', 'Rückgabe eingetroffen'].includes(String(sale?.status || ''));
 
-  function buildPerformanceReport(state = {}, now = new Date()) {
+  const cashSale = sale => ['Bezahlt', 'Kommissioniert', 'Verpackt', 'Versendet', 'Abgeschlossen', 'Abgerechnet', 'Erstattet', 'Rückgabe eingetroffen'].includes(String(sale?.status || ''));
+
+  function purchaseBusinessCost(purchase = {}) {
+    if (String(purchase.status || '') === 'Storniert') return 0;
+    if (!Array.isArray(purchase.pendingItems) || !purchase.pendingItems.length) {
+      return roundMoney(Math.max(0, asNumber(purchase.cardValue) + asNumber(purchase.shipping) + asNumber(purchase.extra) - asNumber(purchase.refund)));
+    }
+    const ownership = purchaseOwnershipTotals(purchase, purchase.costAllocationMethod || 'value');
+    return roundMoney(asNumber(ownership.business) + asNumber(ownership.damaged));
+  }
+
+  const entryDate = (...values) => {
+    for (const value of values) {
+      const text = String(value || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+      const parsed = Date.parse(text);
+      if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+    }
+    return '';
+  };
+
+  function buildFinancialLedger(state = {}) {
+    const settings = state.settings || {};
+    const entries = [];
+    const push = row => entries.push({
+      cashIn: 0, cashOut: 0, realizedRevenue: 0, directCost: 0,
+      realizedProfit: 0, overhead: 0, ...row
+    });
+
+    (state.sales || []).forEach(sale => {
+      if (!cashSale(sale) || String(sale.status || '') === 'Storniert') return;
+      const result = calculateSaleProfit(sale, settings);
+      const cashDate = entryDate(sale.paidDate, sale.date, sale.completedDate);
+      push({
+        id: `sale:${sale.id || sale.orderNo}:receipt`, sourceType: 'sale', sourceId: sale.id || '',
+        category: 'sale_receipt', date: cashDate, label: `Verkauf ${sale.orderNo || ''}`.trim(),
+        cashIn: result.gross, quality: result.quality
+      });
+      if (result.refund) push({
+        id: `sale:${sale.id || sale.orderNo}:refund`, sourceType: 'sale', sourceId: sale.id || '',
+        category: 'customer_refund', date: entryDate(sale.refundDate, cashDate), label: `Erstattung ${sale.orderNo || ''}`.trim(),
+        cashOut: result.refund, quality: result.quality
+      });
+      if (result.fee) push({
+        id: `sale:${sale.id || sale.orderNo}:fee`, sourceType: 'sale', sourceId: sale.id || '',
+        category: 'sale_fee', date: entryDate(sale.settledDate, cashDate), label: `Gebühr ${sale.orderNo || ''}`.trim(),
+        cashOut: result.fee, quality: result.sourceQuality.fee
+      });
+      if (result.postage) push({
+        id: `sale:${sale.id || sale.orderNo}:postage`, sourceType: 'sale', sourceId: sale.id || '',
+        category: 'sale_postage', date: entryDate(sale.shippedDate, cashDate), label: `Porto ${sale.orderNo || ''}`.trim(),
+        cashOut: result.postage, quality: result.sourceQuality.postage
+      });
+      if (realizedSale(sale)) push({
+        id: `sale:${sale.id || sale.orderNo}:result`, sourceType: 'sale', sourceId: sale.id || '',
+        category: 'realized_sale', date: entryDate(sale.completedDate, sale.settledDate, sale.date),
+        label: `Realisierter Verkauf ${sale.orderNo || ''}`.trim(), realizedRevenue: result.netRevenue,
+        directCost: result.fee + result.postage + result.packaging + result.cost,
+        realizedProfit: result.profit, quality: result.quality
+      });
+    });
+
+    (state.purchases || []).forEach(purchase => {
+      const amount = purchaseBusinessCost(purchase);
+      if (!amount) return;
+      push({
+        id: `purchase:${purchase.id || purchase.orderNo}`, sourceType: 'purchase', sourceId: purchase.id || '',
+        category: 'card_purchase', date: entryDate(purchase.paidDate, purchase.date),
+        label: `Einkauf ${purchase.orderNo || ''}`.trim(), cashOut: amount,
+        quality: Array.isArray(purchase.pendingItems) && purchase.pendingItems.length ? 'allocated' : 'estimated'
+      });
+    });
+
+    (state.expenses || []).forEach(expense => {
+      if (String(expense.status || '') === 'Storniert') return;
+      const amount = Math.max(0, asNumber(expense.amount));
+      if (!amount) return;
+      const materialPurchase = String(expense.category || '').toLocaleLowerCase('de-DE') === 'versandmaterial';
+      const direct = Boolean(expense.saleId) || String(expense.costType || '') === 'direct';
+      const linkedSale = direct && expense.saleId ? (state.sales || []).find(sale => String(sale.id || '') === String(expense.saleId)) : null;
+      const realizedDirectCost = linkedSale && realizedSale(linkedSale) ? amount : 0;
+      push({
+        id: `expense:${expense.id || expense.description}`, sourceType: 'expense', sourceId: expense.id || '',
+        category: materialPurchase ? 'material_purchase' : direct ? 'direct_expense' : 'overhead',
+        date: entryDate(expense.paidDate, expense.date), label: expense.description || expense.category || 'Ausgabe',
+        cashOut: amount, overhead: materialPurchase || direct ? 0 : amount,
+        directCost: realizedDirectCost, realizedProfit: -realizedDirectCost,
+        quality: expense.sourceType === 'automatic' ? 'exact' : 'manual'
+      });
+    });
+    return entries;
+  }
+
+  function buildFinancialSummary(state = {}, { from = '', to = '' } = {}) {
+    const allEntries = buildFinancialLedger(state);
+    const entries = allEntries.filter(row => (!from || row.date >= from) && (!to || row.date <= to));
+    const sum = field => roundMoney(entries.reduce((total, row) => total + asNumber(row[field]), 0));
+    const cashIn = sum('cashIn');
+    const cashOut = sum('cashOut');
+    const realizedRevenue = sum('realizedRevenue');
+    const directCost = sum('directCost');
+    const realizedProfit = sum('realizedProfit');
+    const overhead = sum('overhead');
+    const byCategory = {};
+    entries.forEach(row => {
+      const current = byCategory[row.category] || { cashIn: 0, cashOut: 0, realizedProfit: 0, overhead: 0 };
+      for (const field of Object.keys(current)) current[field] = roundMoney(current[field] + asNumber(row[field]));
+      byCategory[row.category] = current;
+    });
+    return {
+      entries, cashIn, cashOut, cashflow: roundMoney(cashIn - cashOut),
+      realizedRevenue, directCost, realizedProfit, overhead,
+      operatingResult: roundMoney(realizedProfit - overhead), byCategory
+    };
+  }
+
+  function buildPerformanceReport(state = {}, optionsOrNow = {}) {
+    const options = optionsOrNow instanceof Date ? { now: optionsOrNow } : (optionsOrNow || {});
+    const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+    const inPeriod = value => {
+      const date = entryDate(value);
+      return (!options.from || date >= options.from) && (!options.to || date <= options.to);
+    };
     const settings = state.settings || {};
     const cardMap = new Map();
     const setMap = new Map();
@@ -499,7 +638,7 @@
       map.set(safeKey, current);
     };
 
-    (state.sales || []).filter(realizedSale).forEach(sale => {
+    (state.sales || []).filter(sale => realizedSale(sale) && inPeriod(sale.completedDate || sale.settledDate || sale.date)).forEach(sale => {
       const result = calculateSaleProfit(sale, settings);
       add(customerMap, sale.customer, { orders: 1, cards: sale.quantity, revenue: result.netRevenue, cost: result.cost, profit: result.profit });
       const items = Array.isArray(sale.items) && sale.items.length ? sale.items : [{
@@ -517,7 +656,7 @@
       });
     });
 
-    (state.purchases || []).filter(purchase => purchase.status !== 'Storniert').forEach(purchase => {
+    (state.purchases || []).filter(purchase => purchase.status !== 'Storniert' && inPeriod(purchase.paidDate || purchase.date)).forEach(purchase => {
       const hasLines = Array.isArray(purchase.pendingItems) && purchase.pendingItems.length;
       const ownership = hasLines ? purchaseOwnershipTotals(purchase) : null;
       const total = hasLines
@@ -693,6 +832,9 @@
     normalizeField,
     detectCsvImportType,
     calculateSaleProfit,
+    purchaseBusinessCost,
+    buildFinancialLedger,
+    buildFinancialSummary,
     calculateAutomaticPriceTargets,
     purchaseLineKey,
     normalizePurchaseReceiptLine,

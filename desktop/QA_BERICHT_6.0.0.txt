@@ -1,0 +1,56 @@
+TCG Business Manager 6.0.0 – Abschlussprüfung
+================================================
+Prüfdatum: 22.07.2026
+
+Ergebnis
+--------
+BESTANDEN
+
+Automatisierte Prüfung
+----------------------
+- JavaScript-Prüfung aller Haupt-, Datenbank-, Scanner-, Such-, Analyse- und Rendererdateien: bestanden
+- 32 von 32 Tests bestanden
+- Keine übersprungenen oder fehlgeschlagenen Tests
+
+Geprüfte Kernbereiche
+---------------------
+- Verlustfreie SQLite-Migration und Sicherung vor Migration
+- Append-only-Änderungsprotokoll und normalisierte Handelsdaten
+- Deutsche/englische Namenssuche und alle Cardmarket-Druckvarianten
+- Normalisierung von Groß-/Kleinschreibung, Umlauten, Bindestrichen, Apostrophen und Leerzeichen
+- Reserviert/verfügbar/Gesamtbestand ohne Bestandsverdopplung
+- Manuelle Korrektur und Stornierung von Bestandsbewegungen
+- Wareneingangsaufteilung in Geschäft, privat, beschädigt und storniert
+- Exakte Zuordnung verkaufter Karten zum Einkaufslos
+- Cashflow, direkter Verkaufsgewinn, allgemeine Kosten und Betriebsergebnis
+- Erstattungen und Rückgaben
+- Cardmarket-Abrechnungsabgleich und API-kompatible externe IDs
+- Geschützte lokale iPhone-Scanner-Sitzung
+
+Echter Desktop-Starttest
+------------------------
+- Gebaute Windows-App aus dist/win-unpacked gestartet
+- Vollständig getrennter QA-Datenordner verwendet; echte Nutzerdaten wurden nicht geöffnet
+- Dokumentstatus: complete
+- Fenstertitel: TCG Business Manager 6.0.0
+- SQLite-Status: gespeichert
+- 13 Navigationsbereiche erkannt
+- Bestand und Auswertungen geöffnet und neu gerendert
+- Filterbereiche, Cashflow-Kennzahl, Scanner-Schaltflächen und sichere Desktop-Verbindung erkannt
+- Ergebnis: bestanden
+
+Windows-Installer
+-----------------
+Datei: dist\TCG Business Manager-Setup-6.0.0.exe
+Größe: 94.343.543 Bytes
+SHA-256: E52627AA559DFF7B4C3B3B6DE93037D8ABDF4D0AF0E80F054A621D18A9C7C068
+Build: bestanden
+
+Wichtige Nutzungshinweise
+-------------------------
+- iPhone und PC müssen für den lokalen Scanner im selben WLAN sein.
+- Windows kann beim ersten Scannerstart nach einer Firewall-Freigabe für private Netzwerke fragen.
+- Der Scanner übernimmt nie ungeprüft eine Druckvariante. Set, Setnummer, Seltenheit und Cardmarket-ID müssen bestätigt oder korrigiert werden.
+- Ohne bestätigte frühere Bildzuordnung oder eingegebene Erkennungshilfe dient das Foto als Vorlage für die manuelle Suche; es wird keine externe Bilderkennungs-Cloud verwendet.
+- Die Cardmarket-API bleibt bis zu einem echten API-Zugang deaktiviert. CSV-/JSON-Daten und spätere API-Daten verwenden dieselbe dauerhafte SQLite-Grundlage.
+- Windows SmartScreen kann bei einem privat erstellten, nicht öffentlich zertifizierten Installer einen Hinweis anzeigen.

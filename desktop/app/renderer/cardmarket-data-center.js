@@ -1,4 +1,4 @@
-/* TCG Business Manager 5.2.0 – Analysecenter
+/* TCG Business Manager 6.0.0 – Analysecenter
  * Große Cardmarket-Datenmengen werden bewusst in IndexedDB gespeichert.
  * Dadurch bleibt der normale Warenwirtschafts-Stand in localStorage klein und stabil.
  */

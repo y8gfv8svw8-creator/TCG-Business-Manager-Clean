@@ -177,6 +177,34 @@ test('zieht Erstattungen vom realisierten Verkaufsgewinn ab und sperrt laufende 
   assert.equal(returned.profit, -2);
 });
 
+test('trennt Cashflow, realisierten Verkaufsgewinn und allgemeine Betriebsausgaben', () => {
+  const state = {
+    settings:{feePercent:5,packaging:0.1},
+    purchases:[{
+      id:'buy-1',orderNo:'BUY-1',date:'2026-07-02',status:'Eingetroffen',cardValue:10,shipping:2,extra:0,refund:0,
+      pendingItems:[{quantity:2,unitPrice:5,receivedBusiness:1,receivedPrivate:1}]
+    }],
+    sales:[{
+      id:'sale-1',orderNo:'SALE-1',date:'2026-07-10',completedDate:'2026-07-12',status:'Abgeschlossen',
+      revenue:12,cardValue:10,shippingPaid:2,fee:0.5,postage:1,refund:0,cost:6,quantity:1,
+      materialUsage:[{quantity:1,unitCost:0.2}]
+    }],
+    expenses:[
+      {id:'material-1',date:'2026-07-03',category:'Versandmaterial',amount:20,description:'100 Umschläge'},
+      {id:'shelf-1',date:'2026-07-04',category:'Bürobedarf',amount:50,description:'Lagerregal'},
+      {id:'direct-1',date:'2026-07-12',category:'Sonstiges',costType:'direct',saleId:'sale-1',amount:1,description:'Direkte Verkaufskosten'}
+    ]
+  };
+  const summary = automation.buildFinancialSummary(state,{from:'2026-07-01',to:'2026-07-31'});
+  assert.equal(summary.byCategory.card_purchase.cashOut,6,'nur der geschäftliche Anteil des gemischten Einkaufs zählt');
+  assert.equal(summary.cashIn,12);
+  assert.equal(summary.cashOut,78.5);
+  assert.equal(summary.cashflow,-66.5);
+  assert.equal(summary.realizedProfit,3.3);
+  assert.equal(summary.overhead,50,'Materialeinkauf ist Geldabfluss, aber kein zusätzlicher Kartenaufwand');
+  assert.equal(summary.operatingResult,-46.7);
+});
+
 test('bereinigt addierte alte Cardmarket-Vollsnapshots, ohne geschützte oder manuelle Exemplare zu löschen', () => {
   const rows = [
     { id:'old', productId:'42', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },

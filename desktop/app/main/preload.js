@@ -4,6 +4,15 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   isElectron: true,
   getInfo: () => ipcRenderer.invoke('app:get-info'),
   openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
+  startScanner: payload => ipcRenderer.invoke('scanner:start', payload),
+  stopScanner: () => ipcRenderer.invoke('scanner:stop'),
+  getScannerStatus: () => ipcRenderer.invoke('scanner:status'),
+  onScannerSubmission: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, submission) => callback(submission);
+    ipcRenderer.on('scanner:submission', listener);
+    return () => ipcRenderer.removeListener('scanner:submission', listener);
+  },
   loadState: () => ipcRenderer.invoke('data:load-state'),
   saveState: state => ipcRenderer.invoke('data:save-state', state),
   getDatabaseStatus: () => ipcRenderer.invoke('data:get-status'),

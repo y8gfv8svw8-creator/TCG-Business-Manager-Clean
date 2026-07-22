@@ -169,6 +169,65 @@ function resolveProduct(productId, fallback={}) {
   };
 }
 
+function businessPrintMetadata(product={}) {
+  const fullCode=String(product.collectorNumber||product.setCode||"").trim();
+  const setPrefix=String(product.set||(!fullCode.includes("-")?fullCode:fullCode.split("-")[0])||"").trim();
+  const rarityParts=[product.variant,product.rarity].map(value=>String(value||"").trim()).filter((value,index,array)=>value&&array.indexOf(value)===index);
+  return {
+    name:String(product.germanName||product.name||product.officialBaseName||product.officialName||"").trim(),
+    germanName:String(product.germanName||"").trim(),englishName:String(product.englishName||product.officialBaseName||product.officialName||product.name||"").trim(),
+    metacardId:cleanProductId(product.metacardId),set:setPrefix,setName:String(product.setName||"").trim(),
+    collectorNumber:fullCode.includes("-")?fullCode:"",rarity:rarityParts.join(" · "),
+    productUrl:String(product.productUrl||"").trim()
+  };
+}
+
+function missingBusinessPrintField(field,value) {
+  const text=String(value||"").trim();
+  if(!text||text==="-")return true;
+  if(field==="name"&&/^Unbekannte Karte|^CM Produkt/i.test(text))return true;
+  if(field==="set"&&/^Expansion\s+\d+$/i.test(text))return true;
+  if(field==="collectorNumber"&&!text.includes("-"))return true;
+  return /unbekannt|fehlt/i.test(text);
+}
+
+function applyBusinessProductMetadata(products=[]) {
+  const byId=new Map((Array.isArray(products)?products:[]).map(product=>[cleanProductId(product.productId||product.idProduct),product]).filter(([id])=>id));
+  if(!byId.size)return 0;
+  let changed=0;
+  const apply=(record,product,watchlist=false)=>{
+    if(!record||!product)return;
+    const metadata=businessPrintMetadata(product);
+    const mapping=watchlist?{name:"name",germanName:"germanName",englishName:"englishName",set:"set",rarity:"version",productUrl:"productUrl"}:{name:"name",germanName:"germanName",englishName:"englishName",metacardId:"metacardId",set:"set",setName:"setName",collectorNumber:"collectorNumber",rarity:"rarity",productUrl:"productUrl"};
+    Object.entries(mapping).forEach(([source,target])=>{
+      const value=metadata[source];
+      if(!value||!missingBusinessPrintField(source,record[target]))return;
+      record[target]=value;changed++;
+    });
+  };
+  const records=[];
+  (state.inventory||[]).forEach(record=>records.push(record));
+  (state.purchases||[]).forEach(order=>(order.pendingItems||[]).forEach(record=>records.push(record)));
+  (state.sales||[]).forEach(order=>(order.items||[]).forEach(record=>records.push(record)));
+  records.forEach(record=>apply(record,byId.get(cleanProductId(record.productId))));
+  (state.watchlist||[]).forEach(record=>apply(record,byId.get(cleanProductId(record.productId)),true));
+
+  const usedIds=new Set([...records,...(state.watchlist||[])].map(record=>cleanProductId(record.productId)).filter(Boolean));
+  usedIds.forEach(productId=>{
+    const product=byId.get(productId);if(!product)return;
+    const current=state.productCatalog[productId]||{productId};
+    const metadata=businessPrintMetadata(product);
+    Object.entries(metadata).forEach(([field,value])=>{
+      if(!value||!missingBusinessPrintField(field,current[field]))return;
+      current[field]=value;changed++;
+    });
+    state.productCatalog[productId]=current;
+  });
+  return changed;
+}
+
+window.tcgApplyBusinessProductMetadata=applyBusinessProductMetadata;
+
 function inventoryVariantKey(item={}) {
   const language = mapLanguage(item.language || "").trim().toUpperCase();
   const condition = mapCondition(item.condition || "").trim().toUpperCase();
@@ -913,20 +972,17 @@ function saleInventoryItems(sale){
 }
 function reserveSaleInventory(sale){
   if(!sale || sale.reservationCreated) return;
-  const linked=saleInventoryItems(sale);
-  linked.forEach(item=>{
-    if(item.status!=="Verkauft") item.status="Reserviert";
-    item.saleId=sale.id; item.saleOrderNo=sale.orderNo;
-  });
   sale.reservationCreated=true;
   sale.paidDate=sale.paidDate||todayISO();
-  addMovement({type:"Reservierung", direction:"reserve", quantity:linked.length||Number(sale.quantity||0), saleId:sale.id, reference:`Bestellung ${sale.orderNo||"-"}`, note:"Ware für bezahlte Bestellung reserviert"});
+  syncSaleInventoryStatus(sale);
 }
 function inventoryGroupStats(group){
   const items=group.ids.map(id=>state.inventory.find(i=>i.id===id)).filter(Boolean);
-  const total=items.filter(i=>i.status!=="Verkauft").length;
-  const reserved=items.filter(i=>i.status==="Reserviert").length;
-  return {total,reserved,available:Math.max(0,total-reserved),items};
+  const shared=window.TcgBusinessAutomation?.calculateInventoryBuckets?.(items);
+  if(shared)return {...shared,items};
+  const currentItems=items.filter(i=>!["Verkauft","Storniert"].includes(i.status));
+  const reservedItems=currentItems.filter(i=>i.status==="Reserviert");
+  return {total:currentItems.length,reserved:reservedItems.length,available:Math.max(0,currentItems.length-reservedItems.length),unavailable:0,sold:items.length-currentItems.length,currentItems,reservedItems,availableItems:currentItems.filter(i=>i.status!=="Reserviert"),items};
 }
 function openInventoryDetails(groupKey){
   const group=getInventoryGroups().find(g=>g.key===groupKey);
@@ -937,8 +993,9 @@ function openInventoryDetails(groupKey){
     if(m.productId && cleanProductId(m.productId)===cleanProductId(i.productId)) return true;
     return false;
   });
-  const inferred=stats.items.map(item=>({timestamp:item.purchaseDate||todayISO(),type:"Wareneingang / Bestand",quantity:1,reference:item.purchaseId?`Einkauf ${item.purchaseId}`:(item.lotId||"Bestand"),note:item.location||""}));
-  const rows=[...related,...inferred].sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const inferred=stats.items.filter(item=>!item.movementRecorded).map(item=>({timestamp:item.purchaseDate||todayISO(),type:"Wareneingang / Bestand",quantity:1,reference:item.purchaseId?`Einkauf ${item.purchaseId}`:(item.lotId||"Bestand"),note:item.location||""}));
+  const inferredSales=stats.items.filter(item=>item.status==="Verkauft"&&!item.saleMovementRecorded).map(item=>({timestamp:item.saleDate||item.purchaseDate||todayISO(),type:"Bestandsabgang / Verkauf",quantity:-1,reference:`Bestellung ${item.saleOrderNo||"-"}`,note:"Verkauftes Exemplar"}));
+  const rows=[...related,...inferred,...inferredSales].sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
   const reservations=new Map();
   stats.items.filter(item=>item.status==="Reserviert").forEach(item=>{
     const sale=state.sales.find(s=>s.id===item.saleId);
@@ -950,8 +1007,8 @@ function openInventoryDetails(groupKey){
   const dialog=document.getElementById("orderDetailDialog");
   document.getElementById("orderDetailTitle").textContent="Bestand & Bewegungen";
   document.getElementById("orderDetailContent").innerHTML=`
-    <div class="inventory-detail-head"><div><h3>${escapeHtml(i.name)}</h3><small>${escapeHtml(i.set||"-")} · ${escapeHtml(i.rarity||"-")} · CM ${escapeHtml(i.productId||"-")}</small></div><a class="button secondary" href="${escapeHtml(cardmarketUrl(i))}" target="_blank" rel="noopener noreferrer">Cardmarket öffnen ↗</a></div>
-    <div class="inventory-stock-grid"><div><small>Gesamtbestand</small><strong>${stats.total}</strong></div><div><small>Reserviert</small><strong>${stats.reserved}</strong></div><div><small>Verfügbar</small><strong>${stats.available}</strong></div></div>
+    <div class="inventory-detail-head"><div><h3>${escapeHtml(i.name)}</h3><small>${escapeHtml(i.setName||i.set||"Set fehlt")} · ${escapeHtml(i.collectorNumber||i.set||"Setnummer fehlt")} · ${escapeHtml(i.rarity||"Version/Seltenheit fehlt")} · CM ${escapeHtml(i.productId||"-")}</small></div><div class="row-actions"><button type="button" class="secondary" data-correct-inventory="${escapeHtml(group.key)}">Bestand korrigieren</button><a class="button secondary" href="${escapeHtml(cardmarketUrl(i))}" target="_blank" rel="noopener noreferrer">Cardmarket öffnen ↗</a></div></div>
+    <div class="inventory-stock-grid"><div><small>Gesamtbestand</small><strong>${stats.total}</strong></div><div><small>Reserviert</small><strong>${stats.reserved}</strong></div><div><small>Verfügbar</small><strong>${stats.available}</strong></div>${stats.unavailable?`<div><small>Nicht verfügbar</small><strong>${stats.unavailable}</strong></div>`:""}</div>
     <h3>Reserviert für</h3>
     <div class="table-wrap"><table><thead><tr><th>Bestellung</th><th>Menge</th><th>Status</th></tr></thead><tbody>${reservationRows.length?reservationRows.map(r=>`<tr><td>${r.saleId?`<button class="link-button" data-show-sale="${escapeHtml(r.saleId)}">#${escapeHtml(r.orderNo)}</button>`:`#${escapeHtml(r.orderNo)}`}</td><td><strong>${r.quantity}</strong></td><td>${statusBadge(r.status)}</td></tr>`).join(""):`<tr><td colspan="3" class="empty">Aktuell keine Reservierungen.</td></tr>`}</tbody></table></div>
     <h3>Bewegungsverlauf</h3>
@@ -968,6 +1025,16 @@ function inventoryDisplayStatus(item) {
   return item.status || "Im Bestand";
 }
 
+function inventoryGroupDisplayStatus(group) {
+  const stats=inventoryGroupStats(group);
+  if(stats.reserved===stats.total&&stats.total>0)return "Reserviert";
+  if(stats.reserved>0)return "Teilweise reserviert";
+  const listed=stats.currentItems.filter(item=>item.listed&&Number(item.listingPrice||0)>0).length;
+  if(listed===stats.total&&stats.total>0)return "Inseriert";
+  if(listed>0)return "Teilweise inseriert";
+  return inventoryDisplayStatus(stats.currentItems[0]||group.first);
+}
+
 function inventoryGroupKey(item) {
   const article = String(item.articleId || "").trim();
   if (article) return `article:${article}`;
@@ -977,10 +1044,7 @@ function inventoryGroupKey(item) {
     item.set || "",
     item.rarity || "",
     item.language || "",
-    item.condition || "",
-    item.listed ? "1" : "0",
-    Number(item.listingPrice || 0).toFixed(4),
-    item.status || ""
+    item.condition || ""
   ].join("|");
 }
 
@@ -999,12 +1063,13 @@ function getInventoryGroups() {
     }
     const group = map.get(key);
     group.ids.push(item.id);
-    group.quantity += 1;
+    if(!["Verkauft","Storniert"].includes(item.status))group.quantity += 1;
+    if(["Verkauft","Storniert"].includes(group.first.status)&&!["Verkauft","Storniert"].includes(item.status))group.first=item;
     if (new Date(item.purchaseDate || todayISO()) < new Date(group.oldestDate || todayISO())) {
       group.oldestDate = item.purchaseDate || todayISO();
     }
   });
-  return [...map.values()];
+  return [...map.values()].filter(group=>group.quantity>0);
 }
 
 function renderInventory() {
@@ -1012,14 +1077,15 @@ function renderInventory() {
   const f = document.getElementById("inventoryStatusFilter").value;
   const rows = getInventoryGroups().filter(group => {
     const i = group.first;
-    const displayStatus = inventoryDisplayStatus(i);
-    return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q) && (!f || displayStatus === f || i.status === f);
+    const stats=inventoryGroupStats(group);
+    const displayStatus = inventoryGroupDisplayStatus(group);
+    return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q) && (!f || displayStatus === f || stats.currentItems.some(item=>item.status===f));
   });
 
   document.getElementById("inventoryTable").innerHTML = rows.length ? rows.map(group => {
     const i = group.first;
     const names = cardDisplayNames(i);
-    const displayStatus = inventoryDisplayStatus(i);
+    const displayStatus = inventoryGroupDisplayStatus(group);
     const price = i.listed && Number(i.listingPrice || 0) > 0
       ? money(i.listingPrice)
       : '<span class="muted">Nicht inseriert</span>';
@@ -1027,7 +1093,7 @@ function renderInventory() {
     const exactLink = /^https?:\/\//i.test(String(i.productUrl || state.productCatalog?.[cleanProductId(i.productId)]?.productUrl || ""));
     return `<tr>
       <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
-      <td>${escapeHtml(i.set || "-")}</td>
+      <td>${escapeHtml(i.setName||i.set||"-")}${i.setName&&i.set?`<br><small>${escapeHtml(i.set)}</small>`:""}${i.collectorNumber?`<br><small>${escapeHtml(i.collectorNumber)}</small>`:""}</td>
       <td>${escapeHtml(i.rarity || "-")}</td>
       <td><button class="stock-detail-button" data-inventory-details="${escapeHtml(group.key)}"><strong>${group.quantity}</strong><span>Details</span></button></td>
       <td>${price}</td>
@@ -1045,26 +1111,82 @@ function editInventoryGroup(groupKey) {
   const initial = {
     listingStatus: first.listed ? "Inseriert" : "Nicht inseriert",
     listingPrice: Number(first.listingPrice || 0),
-    status: first.status || "Im Bestand",
+    status: "Unverändert",
     location: first.location || "",
     note: first.note || ""
   };
   openModal(`${group.quantity} Karte${group.quantity===1?"":"n"} bearbeiten`,[
     {name:"listingStatus",label:"Cardmarket-Inserat",type:"select",options:["Nicht inseriert","Inseriert"]},
     {name:"listingPrice",label:"Inseratspreis pro Stück (€)",type:"number",step:"0.01"},
-    {name:"status",label:"Bestandsstatus",type:"select",options:["Im Bestand","Reserviert","Verkauft","Beschädigt"]},
+    {name:"status",label:"Bestandsstatus",type:"select",options:["Unverändert","Im Bestand","Beschädigt"]},
     {name:"location",label:"Lagerort"},
     {name:"note",label:"Notiz",full:true}
   ], initial, data => {
-    const ids = new Set(group.ids);
+    const ids = new Set(inventoryGroupStats(group).currentItems.map(item=>item.id));
     state.inventory.forEach(item => {
       if (!ids.has(item.id)) return;
       item.listed = data.listingStatus === "Inseriert";
       item.listingPrice = item.listed ? Number(data.listingPrice || 0) : 0;
-      item.status = data.status || "Im Bestand";
+      if(data.status!=="Unverändert"&&item.status!=="Reserviert")item.status = data.status || "Im Bestand";
       item.location = data.location || "";
       item.note = data.note || "";
     });
+  });
+}
+
+function correctInventoryGroup(groupKey) {
+  const group=getInventoryGroups().find(row=>row.key===groupKey);
+  if(!group)return;
+  const stats=inventoryGroupStats(group);
+  const first=stats.currentItems[0]||group.first;
+  document.getElementById("orderDetailDialog")?.close();
+  openModal("Bestand und Druckdaten korrigieren",[
+    {name:"desiredTotal",label:`Gewünschter Gesamtbestand (davon ${stats.reserved} reserviert)`,type:"number",required:true},
+    {name:"set",label:"Set / Setkürzel"},
+    {name:"setName",label:"Setname"},
+    {name:"collectorNumber",label:"Setnummer"},
+    {name:"rarity",label:"Version / Seltenheit"},
+    {name:"reason",label:"Grund der Korrektur",required:true,full:true}
+  ],{
+    desiredTotal:stats.total,set:first.set||"",setName:first.setName||"",
+    collectorNumber:first.collectorNumber||"",rarity:first.rarity||"",reason:""
+  },data=>{
+    const currentGroup=getInventoryGroups().find(row=>row.key===groupKey)||group;
+    const currentStats=inventoryGroupStats(currentGroup);
+    const candidates=[...currentStats.items].sort((a,b)=>{
+      const aImport=/^STOCK-/i.test(String(a.importKey||a.lotId||""))?0:1;
+      const bImport=/^STOCK-/i.test(String(b.importKey||b.lotId||""))?0:1;
+      return aImport-bImport || new Date(b.purchaseDate||0)-new Date(a.purchaseDate||0);
+    });
+    const plan=window.TcgBusinessAutomation?.planInventoryTotalCorrection?.(candidates,data.desiredTotal);
+    if(!plan?.valid){alert(plan?.reason||"Diese Bestandskorrektur ist nicht möglich.");return false;}
+    const desiredMetadata={set:String(data.set||"").trim(),setName:String(data.setName||"").trim(),collectorNumber:String(data.collectorNumber||"").trim(),rarity:String(data.rarity||"").trim()};
+    const metadataChanged=Object.entries(desiredMetadata).some(([field,value])=>String(first[field]||"")!==value);
+    const removeIds=new Set(plan.removeIds||[]);
+    recordLegacyInventoryEntries(currentStats.items.filter(item=>removeIds.has(item.id)));
+    if(removeIds.size)state.inventory=state.inventory.filter(item=>!removeIds.has(item.id));
+    state.inventory.forEach(item=>{
+      if(!currentGroup.ids.includes(item.id))return;
+      Object.assign(item,desiredMetadata);
+    });
+    const addedIds=[];
+    const correctionLot=`CORRECTION-${Date.now()}`;
+    for(let index=0;index<Number(plan.addCount||0);index++){
+      const copy={...first,...desiredMetadata,id:uid(),status:"Im Bestand",purchaseDate:todayISO(),source:"Manuelle Bestandskorrektur",importKey:"",lotId:correctionLot,stockIdentity:first.stockIdentity||stockInventoryIdentity(first),movementRecorded:true};
+      delete copy.saleId;delete copy.saleOrderNo;delete copy.saleDate;delete copy.saleImportKey;delete copy.purchaseId;
+      state.inventory.push(copy);addedIds.push(copy.id);
+    }
+    const productId=cleanProductId(first.productId);
+    const exactMetadata=Object.fromEntries(Object.entries(desiredMetadata).filter(([,value])=>value));
+    if(productId){
+      state.inventory.filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,exactMetadata));
+      state.purchases.forEach(order=>(order.pendingItems||[]).filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,exactMetadata)));
+      state.sales.forEach(order=>(order.items||[]).filter(item=>cleanProductId(item.productId)===productId).forEach(item=>Object.assign(item,exactMetadata)));
+      state.watchlist.filter(item=>cleanProductId(item.productId)===productId).forEach(item=>{if(exactMetadata.set)item.set=exactMetadata.set;if(exactMetadata.rarity)item.version=exactMetadata.rarity;});
+    }
+    if(productId){const current=state.productCatalog[productId]||{};state.productCatalog[productId]={...current,...exactMetadata,productId,name:first.name||current.name||"",germanName:first.germanName||current.germanName||"",englishName:first.englishName||current.englishName||"",productUrl:first.productUrl||current.productUrl||""};}
+    const delta=Number(plan.addCount||0)-removeIds.size;
+    addMovement({type:delta?"Bestandskorrektur":metadataChanged?"Druckdatenkorrektur":"Bestandsprüfung",quantity:delta,productId,inventoryGroupKey:inventoryGroupKey({...first,...desiredMetadata}),reference:"Manuelle Korrektur",note:String(data.reason||"").trim(),addedIds,removedIds:[...removeIds]});
   });
 }
 
@@ -1870,12 +1992,27 @@ function addPurchase(initial={}) {
 function syncSaleInventoryStatus(sale) {
   if(!sale) return;
   const ids=new Set(Array.isArray(sale.itemIds)?sale.itemIds:[]);
+  const changes=[];
   state.inventory.forEach(item=>{
     if(!ids.has(item.id)) return;
-    if(sale.status==="Storniert") {item.status="Im Bestand"; delete item.saleId; delete item.saleOrderNo; delete item.saleDate;}
-    else if(["Versendet","Abgeschlossen"].includes(sale.status)) {item.status="Verkauft"; item.saleDate=sale.date||todayISO(); item.saleId=sale.id; item.saleOrderNo=sale.orderNo;}
-    else {item.status="Reserviert"; item.saleId=sale.id; item.saleOrderNo=sale.orderNo;}
+    const before=item.status||"Im Bestand";
+    const after=sale.status==="Storniert"?"Im Bestand":["Versendet","Abgeschlossen"].includes(sale.status)?"Verkauft":"Reserviert";
+    if(before!==after)changes.push({item,before,after});
+    if(after==="Im Bestand") {item.status=after; delete item.saleId; delete item.saleOrderNo; delete item.saleDate; delete item.saleMovementRecorded;}
+    else if(after==="Verkauft") {item.status=after; item.saleDate=sale.shippedDate||sale.date||todayISO(); item.saleId=sale.id; item.saleOrderNo=sale.orderNo;item.saleMovementRecorded=true;}
+    else {item.status=after; item.saleId=sale.id; item.saleOrderNo=sale.orderNo;delete item.saleMovementRecorded;}
   });
+  const grouped=new Map();
+  changes.forEach(change=>{
+    let type="Statusänderung",quantity=0,note=`${change.before} → ${change.after}`;
+    if(change.after==="Reserviert"){type=change.before==="Verkauft"?"Bestandsrückbuchung / Reservierung":"Reservierung";quantity=change.before==="Verkauft"?1:0;note="1 Exemplar von verfügbar nach reserviert verschoben";}
+    else if(change.after==="Verkauft"){type="Bestandsabgang / Verkauf";quantity=-1;note="Reserviertes Exemplar verkauft";}
+    else if(change.after==="Im Bestand"){type=change.before==="Verkauft"?"Bestandsrückbuchung":"Reservierung aufgehoben";quantity=change.before==="Verkauft"?1:0;note="Exemplar wieder verfügbar";}
+    const groupKey=inventoryGroupKey(change.item);const key=`${type}|${quantity}|${groupKey}`;
+    const row=grouped.get(key)||{type,quantity:0,productId:cleanProductId(change.item.productId),inventoryGroupKey:groupKey,note};
+    row.quantity+=quantity;row.copies=(row.copies||0)+1;grouped.set(key,row);
+  });
+  grouped.forEach(row=>addMovement({...row,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:row.copies>1?`${row.copies} Exemplare: ${row.note}`:row.note}));
 }
 
 function addSale(initial={}) {
@@ -2031,21 +2168,71 @@ function updateCatalogFromRows(rows) {
   return updated;
 }
 
+function stockInventoryIdentity(item={}) {
+  const articleId=cleanProductId(item.articleId||item.idArticle||"");
+  if(articleId)return `article:${articleId}`;
+  const price=Number(item.listingPrice??item.offerPrice??0);
+  return `variant:${inventoryVariantKey(item)}|${Number.isFinite(price)?price.toFixed(4):"0.0000"}`;
+}
+
+function stockSnapshotManaged(item={}) {
+  return Boolean(item.stockIdentity)||/^STOCK-/i.test(String(item.importKey||item.lotId||""));
+}
+
+function rememberFieldChanges(item,patch,target) {
+  const fields={};
+  Object.entries(patch).forEach(([field,value])=>{
+    if(item[field]===value)return;
+    fields[field]={had:Object.prototype.hasOwnProperty.call(item,field),value:item[field]};
+    item[field]=value;
+  });
+  if(Object.keys(fields).length)target.push({id:item.id,fields});
+}
+
+function recordLegacyInventoryEntries(items=[]) {
+  items.filter(item=>!item.movementRecorded).forEach(item=>addMovement({
+    type:"Historischer Bestandseintrag",quantity:1,productId:cleanProductId(item.productId),inventoryGroupKey:inventoryGroupKey(item),
+    timestamp:item.purchaseDate||todayISO(),reference:item.purchaseId?`Einkauf ${item.purchaseId}`:(item.lotId||"Früherer Bestand"),note:item.location||""
+  }));
+}
+
 function removeImport(importRecord, ask=true) {
   if(!importRecord) return;
   if(ask && !confirm(`Import „${importRecord.file}“ wirklich rückgängig machen?`)) return;
   const key=importRecord.key;
-  if(importRecord.type==="inventory") {
-    state.inventory=state.inventory.filter(i=>i.importKey!==key && i.lotId!==key);
+  let undoNotice="";
+  if(importRecord.type==="inventory"&&importRecord.snapshotSync) {
+    const newer=state.imports.some(row=>row.type==="inventory"&&row.snapshotSync&&row.id!==importRecord.id&&new Date(row.date)>new Date(importRecord.date));
+    if(newer){alert("Nur der neueste Cardmarket-Bestandsabgleich kann rückgängig gemacht werden. Bitte zuerst den neueren Abgleich zurücknehmen.");return;}
+    const createdIds=new Set(importRecord.createdIds||[]);
+    let removedCreated=0,protectedCreated=0;
+    state.inventory=state.inventory.filter(item=>{
+      if(!createdIds.has(item.id))return true;
+      if(["Reserviert","Verkauft"].includes(item.status)||item.saleId){protectedCreated++;return true;}
+      removedCreated++;return false;
+    });
+    (importRecord.removedItems||[]).forEach(item=>{if(!state.inventory.some(current=>current.id===item.id))state.inventory.push(item);});
+    (importRecord.updatedFieldsBefore||[]).forEach(change=>{
+      const item=state.inventory.find(current=>current.id===change.id);if(!item)return;
+      Object.entries(change.fields||{}).forEach(([field,before])=>{if(before.had)item[field]=before.value;else delete item[field];});
+    });
+    addMovement({type:"Bestandsabgleich rückgängig",quantity:(importRecord.removedItems||[]).length-removedCreated,reference:importRecord.file||key,note:"Letzten Cardmarket-Bestand wiederhergestellt"});
+    if(protectedCreated)undoNotice=`${protectedCreated} inzwischen reservierte oder verkaufte Exemplare wurden zum Schutz der Verkaufsdaten nicht entfernt.`;
+  } else if(importRecord.type==="inventory") {
+    let protectedCount=0;
+    state.inventory=state.inventory.filter(i=>{const matches=i.importKey===key||i.lotId===key;if(matches&&(["Reserviert","Verkauft"].includes(i.status)||i.saleId)){protectedCount++;return true;}return !matches;});
+    if(protectedCount)undoNotice=`${protectedCount} inzwischen reservierte oder verkaufte Exemplare wurden zum Schutz der Verkaufsdaten nicht entfernt.`;
   } else if(importRecord.type==="purchase") {
     const purchaseIds=state.purchases.filter(p=>p.importKey===key || p.orderNo===key).map(p=>p.id);
-    state.inventory=state.inventory.filter(i=>i.importKey!==key && i.lotId!==key && !purchaseIds.includes(i.purchaseId));
+    let protectedCount=0;
+    state.inventory=state.inventory.filter(i=>{const matches=i.importKey===key||i.lotId===key||purchaseIds.includes(i.purchaseId);if(matches&&(["Reserviert","Verkauft"].includes(i.status)||i.saleId)){protectedCount++;return true;}return !matches;});
+    if(protectedCount)undoNotice=`${protectedCount} inzwischen reservierte oder verkaufte Exemplare wurden zum Schutz der Verkaufsdaten nicht entfernt.`;
     state.purchases=state.purchases.filter(p=>p.importKey!==key && p.orderNo!==key);
   } else if(importRecord.type==="sale") {
     const saleIds=state.sales.filter(s=>s.importKey===key || s.orderNo===key).map(s=>s.id);
     state.inventory.forEach(i=>{
       if(i.saleImportKey===key || saleIds.includes(i.saleId)) {
-        i.status="Im Bestand"; delete i.saleDate; delete i.saleId; delete i.saleOrderNo; delete i.saleImportKey;
+        i.status="Im Bestand"; delete i.saleDate; delete i.saleId; delete i.saleOrderNo; delete i.saleImportKey; delete i.saleMovementRecorded;
       }
     });
     state.sales=state.sales.filter(s=>s.importKey!==key && s.orderNo!==key);
@@ -2060,23 +2247,22 @@ function removeImport(importRecord, ask=true) {
   }
   state.imports=state.imports.filter(i=>i.id!==importRecord.id);
   saveState(); renderAll();
+  if(undoNotice)alert(undoNotice);
 }
 
 async function importStock(file) {
   const rows=parseCsv(await readFile(file));
   if(!rows.length) throw new Error("Keine Datenzeilen gefunden.");
-  const key=`STOCK-${file.name}-${rows.length}`;
-  const previous=state.imports.find(i=>i.type==="inventory" && (i.key===key || i.file===file.name));
-  if(previous) {
-    if(!confirm("Dieser Bestandsimport existiert bereits. Alten Import ersetzen?")) throw new Error("Import abgebrochen.");
-    removeImport(previous,false);
-  }
+  const key=`STOCK-${file.name}-${Number(file.size||0)}-${Number(file.lastModified||0)}-${rows.length}`;
+  const previous=state.imports.find(i=>i.type==="inventory" && i.key===key);
+  if(previous)throw new Error("Dieser Cardmarket-Bestand wurde bereits verarbeitet. Bitte einen neueren Export auswählen.");
   updateCatalogFromRows(rows);
 
   // Mengen aus offenen Bestellungen werden beim Bestandsimport reserviert und
   // erst nach Status „Eingetroffen“ durch createInventoryFromPurchase angelegt.
   const pendingOpen = pendingOpenPurchaseQuantities(state.purchases);
   let cards=0, unknown=0, skippedOpenOrders=0;
+  const snapshotRows=new Map();
   rows.forEach((r,idx)=>{
     const p=stockRowMetadata(r);
     const quantity=Math.max(0,Math.round(num(getAny(r,["Amount","count","quantity","Menge"]),1)));
@@ -2092,23 +2278,73 @@ async function importStock(file) {
       skippedOpenOrders += skipQty;
     }
 
-    for(let n=0;n<createQty;n++){
-      state.inventory.push({
-        id:uid(), productId:p.productId, name:p.name, set:p.set, setName:p.setName, rarity:p.rarity,
-        language:p.language, condition:p.condition, collectorNumber:p.collectorNumber, productUrl:p.productUrl,
-        cost:0, purchaseDate:todayISO(), status:"Im Bestand", location:"", source:"Eigene Sammlung / Packpull",
-        listed:offerPrice>0, listingPrice:offerPrice, articleId:cleanProductId(getAny(r,["ArticleID","idArticle"])),
-        importKey:key, lotId:key, sourceRow:idx+2
-      });
-    }
+    const articleId=cleanProductId(getAny(r,["ArticleID","idArticle"]));
+    const identity=stockInventoryIdentity({...p,articleId,listingPrice:offerPrice});
+    const current=snapshotRows.get(identity)||{identity,quantity:0,p,offerPrice,articleId,sourceRow:idx+2};
+    current.quantity+=createQty;
+    current.p=p;current.offerPrice=offerPrice;current.articleId=articleId;
+    snapshotRows.set(identity,current);
     cards+=createQty;
   });
+
+  const createdIds=[],removedItems=[],updatedFieldsBefore=[];
+  const movementDeltas=[];
+  const existingByIdentity=new Map();
+  state.inventory.forEach(item=>{
+    const identity=item.stockIdentity||stockInventoryIdentity(item);
+    if(!existingByIdentity.has(identity))existingByIdentity.set(identity,[]);
+    existingByIdentity.get(identity).push(item);
+  });
+
+  snapshotRows.forEach(row=>{
+    const existing=[...(existingByIdentity.get(row.identity)||[])].sort((a,b)=>Number(stockSnapshotManaged(b))-Number(stockSnapshotManaged(a)) || new Date(b.purchaseDate||0)-new Date(a.purchaseDate||0));
+    const plan=window.TcgBusinessAutomation?.planAvailableInventorySnapshot?.(existing,row.quantity)||{addCount:Math.max(0,row.quantity-existing.filter(item=>item.status!=="Reserviert"&&item.status!=="Verkauft").length),removeIds:[]};
+    const removeIds=new Set(plan.removeIds||[]);
+    const removed=existing.filter(item=>removeIds.has(item.id));
+    recordLegacyInventoryEntries(removed);
+    removed.forEach(item=>removedItems.push(structuredClone(item)));
+    if(removeIds.size)state.inventory=state.inventory.filter(item=>!removeIds.has(item.id));
+
+    const metadata={
+      productId:row.p.productId,name:row.p.name,germanName:row.p.germanName||"",englishName:row.p.englishName||"",
+      set:row.p.set,setName:row.p.setName,rarity:row.p.rarity,language:row.p.language,condition:row.p.condition,
+      collectorNumber:row.p.collectorNumber,productUrl:row.p.productUrl,listed:row.offerPrice>0,listingPrice:row.offerPrice,
+      articleId:row.articleId,stockIdentity:row.identity,lastStockSnapshot:key
+    };
+    existing.filter(item=>!removeIds.has(item.id)&&!["Verkauft","Storniert"].includes(item.status)).forEach(item=>rememberFieldChanges(item,metadata,updatedFieldsBefore));
+    for(let n=0;n<Number(plan.addCount||0);n++){
+      const item={id:uid(),...metadata,cost:0,purchaseDate:todayISO(),status:"Im Bestand",location:"",source:"Cardmarket-Bestandsabgleich",importKey:key,lotId:key,sourceRow:row.sourceRow,movementRecorded:true};
+      state.inventory.push(item);createdIds.push(item.id);
+    }
+    const delta=Number(plan.addCount||0)-removeIds.size;
+    if(delta)movementDeltas.push({identity:row.identity,delta,productId:row.p.productId,groupKey:inventoryGroupKey({...row.p,articleId:row.articleId})});
+  });
+
+  const knownIdentities=new Set(snapshotRows.keys());
+  const missingGroups=new Map();
+  state.inventory.filter(item=>stockSnapshotManaged(item)&&!["Verkauft","Storniert","Reserviert","Beschädigt"].includes(item.status)).forEach(item=>{
+    const identity=item.stockIdentity||stockInventoryIdentity(item);
+    if(knownIdentities.has(identity))return;
+    if(!missingGroups.has(identity))missingGroups.set(identity,[]);
+    missingGroups.get(identity).push(item);
+  });
+  missingGroups.forEach((items,identity)=>{
+    recordLegacyInventoryEntries(items);
+    items.forEach(item=>removedItems.push(structuredClone(item)));
+    const ids=new Set(items.map(item=>item.id));
+    state.inventory=state.inventory.filter(item=>!ids.has(item.id));
+    movementDeltas.push({identity,delta:-items.length,productId:items[0]?.productId,groupKey:inventoryGroupKey(items[0]||{})});
+  });
+
+  movementDeltas.forEach(change=>addMovement({type:"Cardmarket-Bestandsabgleich",quantity:change.delta,productId:cleanProductId(change.productId),inventoryGroupKey:change.groupKey,reference:file.name,note:change.delta>0?"Neue verfügbare Exemplare aus Bestandssnapshot":"Nicht mehr verfügbare Exemplare aus Bestandssnapshot"}));
   state.imports.push({
     id:uid(),type:"inventory",key,file:file.name,date:new Date().toISOString(),
-    rows:rows.length,cards,unknown,skippedOpenOrders
+    rows:rows.length,cards,unknown,skippedOpenOrders,snapshotSync:true,createdIds,removedItems,updatedFieldsBefore,
+    added:createdIds.length,removed:removedItems.length
   });
+  await window.tcgBackfillBusinessPrintMetadata?.([...snapshotRows.values()].map(row=>row.p.productId));
   saveState();renderAll();
-  return {rows:rows.length,cards,unknown,skippedOpenOrders};
+  return {rows:rows.length,cards,unknown,skippedOpenOrders,added:createdIds.length,removed:removedItems.length};
 }
 
 async function importPurchases(file,details={}) {
@@ -2147,6 +2383,7 @@ async function importPurchases(file,details={}) {
     importKey:shipment,pendingItems,inventoryCreated:false
   });
   state.imports.push({id:uid(),type:"purchase",key:shipment,file:file.name,date:new Date().toISOString(),rows:rows.length,cards,unknown});
+  await window.tcgBackfillBusinessPrintMetadata?.(pendingItems.map(item=>item.productId));
   saveState(); renderAll();
   return {rows:rows.length,cards,total,shipment,unknown,shipping:importShipping,extra:importExtra,grandTotal:total+importShipping+importExtra};
 }
@@ -2220,6 +2457,7 @@ function restoreSaleInventory(sale) {
     delete item.saleId;
     delete item.saleOrderNo;
     delete item.saleDate;
+    delete item.saleMovementRecorded;
     restored++;
   });
   return restored;
@@ -2602,6 +2840,7 @@ async function analyzeImportFile(file,metadata={}) {
       analysis.rows=rows.length;analysis.type=detectImportType(file,rows,text);
       const quantityKeys=["Amount","amount","groupCount","quantity","Menge","count"];
       analysis.cards=rows.reduce((sum,row)=>sum+Math.max(1,Math.round(num(getAny(row,quantityKeys),1))),0);
+      if(analysis.type==="inventory")analysis.key=`STOCK-${file.name}-${Number(file.size||0)}-${Number(file.lastModified||0)}-${rows.length}`;
       if(["purchase","sale"].includes(analysis.type))analysis.key=(file.name.match(/(\d{6,})/)||[])[1]||"";
       if(analysis.type==="settlement"){analysis.cards=rows.length;analysis.key=`SETTLEMENT-${file.name}-${file.size||rows.length}-${file.lastModified||Date.now()}`;}
       if(["purchaseGeneric","saleGeneric"].includes(analysis.type)){
@@ -2656,7 +2895,7 @@ async function confirmImportPreview() {
       }:{};
       const result=await universalImportFile(item.file,{forcedType,purchaseDetails});
       if(item.metadata.path&&item.metadata.signature)state.sync.processedFiles[item.metadata.path]=item.metadata.signature;
-      results.push(`<div class="success"><strong>${escapeHtml(item.metadata.path||item.fileName)}</strong><br>${escapeHtml(IMPORT_TYPE_LABELS[result.type]||result.type||"Import")} · ${Number(result.rows||0)} Positionen · ${Number(result.cards||0)} Karten${result.warning?`<br><span class="warning-text">${escapeHtml(result.warning)}</span>`:""}</div>`);
+      results.push(`<div class="success"><strong>${escapeHtml(item.metadata.path||item.fileName)}</strong><br>${escapeHtml(IMPORT_TYPE_LABELS[result.type]||result.type||"Import")} · ${Number(result.rows||0)} Positionen · ${Number(result.cards||0)} Karten${result.added!==undefined?` · ${Number(result.added||0)} neu · ${Number(result.removed||0)} entfernt`:""}${result.warning?`<br><span class="warning-text">${escapeHtml(result.warning)}</span>`:""}</div>`);
     }catch(error){results.push(`<div class="error"><strong>${escapeHtml(item.fileName)}</strong><br>${escapeHtml(error.message)}</div>`);}
   }
   pendingFolderImports=pendingFolderImports.filter(folder=>!selected.some(item=>item.metadata.path===folder.path&&item.metadata.signature===folder.signature));
@@ -2874,11 +3113,12 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
-  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-inventory-group], [data-inventory-details], [data-edit-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
+  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-edit-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-delete-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
   if(d.editInventoryGroup) editInventoryGroup(d.editInventoryGroup);
   if(d.inventoryDetails) openInventoryDetails(d.inventoryDetails);
+  if(d.correctInventory) correctInventoryGroup(d.correctInventory);
   if(d.editPurchase) addPurchase(state.purchases.find(x=>x.id===d.editPurchase));
   if(d.editSale) addSale(state.sales.find(x=>x.id===d.editSale));
   if(d.editWatch) addWatch(state.watchlist.find(x=>x.id===d.editWatch));
@@ -2893,7 +3133,7 @@ document.body.addEventListener("click",e=>{
   if(d.deleteInventoryGroup) {
     const group=getInventoryGroups().find(g=>g.key===d.deleteInventoryGroup);
     if(group && confirm(`${group.quantity} Karte${group.quantity===1?"":"n"} dieser Position wirklich löschen?`)) {
-      const ids=new Set(group.ids);
+      const ids=new Set(inventoryGroupStats(group).currentItems.map(item=>item.id));
       state.inventory=state.inventory.filter(x=>!ids.has(x.id));saveState();renderAll();
     }
   }

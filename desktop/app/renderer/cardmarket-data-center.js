@@ -522,6 +522,7 @@
       state.cardmarket.lastError = `SQLite-Produktabgleich: ${error.message}`;
     }
     if (typeof refreshCardNameLookup === "function") await refreshCardNameLookup(true);
+    window.tcgApplyBusinessProductMetadata?.(prepared);
 
     state.cardmarket = {
       ...CM_META_DEFAULTS,
@@ -750,8 +751,17 @@
     cmLatestByIdCache = new Map(latest.map(row => [String(row.productId), row]));
     cmProductByIdCache = new Map(products.map(row => [String(row.productId), row]));
     cmMergedCache = products.map(product => ({...product, ...(cmLatestByIdCache.get(String(product.productId)) || {})}));
+    const businessChanges=window.tcgApplyBusinessProductMetadata?.(products)||0;
+    if(businessChanges){saveState();window.setTimeout(()=>renderAll(),0);}
     return cmMergedCache;
   }
+
+  window.tcgBackfillBusinessPrintMetadata=async function(productIds=[]) {
+    await cmLoadMergedCache();
+    const ids=new Set((Array.isArray(productIds)?productIds:[]).map(cleanProductId).filter(Boolean));
+    const products=ids.size?[...ids].map(id=>cmProductByIdCache?.get(String(id))).filter(Boolean):[...(cmProductByIdCache?.values()||[])];
+    return window.tcgApplyBusinessProductMetadata?.(products)||0;
+  };
 
   function cmBuildOwnStats() {
     const map = new Map();
@@ -1827,6 +1837,8 @@
       if (typeof refreshCardNameLookup === "function") await refreshCardNameLookup(true);
     }
 
+    window.tcgApplyBusinessProductMetadata?.(updated);
+
     // Der kleine Kompatibilitätskatalog versorgt Bestand, Einkäufe und Verkäufe.
     // Nur bereits vorhandene Einträge werden aktualisiert, damit localStorage klein bleibt.
     for (const product of updated) {
@@ -2637,6 +2649,7 @@
   renderAll();
   cmRefreshMetadataFromDb().then(async () => {
     try {
+      await cmLoadMergedCache();
       await cmRepairKnownGermanNames();
       await cmRunGermanNamesAutoUpdate({force:false});
     } catch (error) {

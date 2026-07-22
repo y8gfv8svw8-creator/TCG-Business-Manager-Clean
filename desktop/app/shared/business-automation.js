@@ -157,6 +157,68 @@
     return { valid: shortages.length === 0, changes, shortages };
   }
 
+  function calculateInventoryBuckets(items = []) {
+    const soldItems = items.filter(item => ['Verkauft', 'Storniert'].includes(String(item?.status || '')));
+    const currentItems = items.filter(item => !['Verkauft', 'Storniert'].includes(String(item?.status || '')));
+    const reservedItems = currentItems.filter(item => String(item?.status || '') === 'Reserviert');
+    const unavailableItems = currentItems.filter(item =>
+      String(item?.status || '') === 'Beschädigt'
+    );
+    const availableItems = currentItems.filter(item =>
+      !['Reserviert', 'Beschädigt'].includes(String(item?.status || ''))
+    );
+    return {
+      total: currentItems.length,
+      reserved: reservedItems.length,
+      available: availableItems.length,
+      unavailable: unavailableItems.length,
+      sold: soldItems.length,
+      currentItems,
+      reservedItems,
+      availableItems,
+      unavailableItems,
+      soldItems
+    };
+  }
+
+  function planInventoryTotalCorrection(items = [], desiredTotal = 0) {
+    const buckets = calculateInventoryBuckets(items);
+    const target = Math.max(0, Math.round(asNumber(desiredTotal)));
+    if (target < buckets.reserved) {
+      return {
+        valid: false,
+        reason: `Mindestens ${buckets.reserved} reservierte Exemplare müssen im Gesamtbestand bleiben.`,
+        target,
+        addCount: 0,
+        removeIds: [],
+        buckets
+      };
+    }
+    const delta = target - buckets.total;
+    const removable = buckets.currentItems.filter(item => String(item?.status || '') !== 'Reserviert');
+    return {
+      valid: delta >= 0 || removable.length >= Math.abs(delta),
+      reason: delta < 0 && removable.length < Math.abs(delta) ? 'Es sind nicht genügend freie Exemplare für diese Korrektur vorhanden.' : '',
+      target,
+      addCount: Math.max(0, delta),
+      removeIds: delta < 0 ? removable.slice(0, Math.abs(delta)).map(item => item.id) : [],
+      buckets
+    };
+  }
+
+  function planAvailableInventorySnapshot(items = [], desiredAvailable = 0) {
+    const buckets = calculateInventoryBuckets(items);
+    const target = Math.max(0, Math.round(asNumber(desiredAvailable)));
+    const delta = target - buckets.available;
+    return {
+      target,
+      delta,
+      addCount: Math.max(0, delta),
+      removeIds: delta < 0 ? buckets.availableItems.slice(0, Math.abs(delta)).map(item => item.id) : [],
+      buckets
+    };
+  }
+
   const realizedSale = sale => ['Bezahlt', 'Versendet', 'Abgeschlossen'].includes(String(sale?.status || ''));
 
   function buildPerformanceReport(state = {}, now = new Date()) {
@@ -344,6 +406,9 @@
     calculateSaleProfit,
     calculateAutomaticPriceTargets,
     planMaterialUsageChanges,
+    calculateInventoryBuckets,
+    planInventoryTotalCorrection,
+    planAvailableInventorySnapshot,
     buildPerformanceReport,
     buildDataQualityIssues,
     buildPriceAlerts,

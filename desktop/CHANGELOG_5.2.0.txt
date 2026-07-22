@@ -86,3 +86,14 @@ Patch 8 – Geführte Kartenerfassung und Versandablauf
 - Such- und Statusfilter reagieren erst nach einer bestätigten Auswahl, damit native Auswahlfelder nicht mehr während des Öffnens neu aufgebaut werden.
 - Max-EK und Ziel-VK der Marktbeobachtung werden mit jedem neuen Price Guide und nach geänderten Kalkulationseinstellungen automatisch neu berechnet. Manuelle Preisgrenzen bleiben optional möglich.
 - Der Empfehlungsfilter enthält alle ausgegebenen Zustände einschließlich „NICHT KAUFEN“, „FALLEND“ und „KEINE PREISDATEN“.
+
+Patch 9 – Bestandsabgleich, Reservierungen und Korrekturen
+- Reservierungen erhöhen den Gesamtbestand nicht mehr: Gesamtbestand, reservierte und verfügbare Exemplare werden als getrennte Bestandsbereiche berechnet.
+- Beim Versand oder Abschluss sinkt der Gesamtbestand um die verkauften Exemplare; die verkaufte Karte bleibt ausschließlich als Historie erhalten.
+- Verfügbare, reservierte und verkaufte Exemplare derselben Druckvariante werden gemeinsam gruppiert, ohne Reservierungen oder Verkäufe doppelt zu zählen.
+- Cardmarket-Bestandsexporte werden als vollständiger Bestandssnapshot abgeglichen. Neue Dateien ergänzen oder entfernen nur die Differenz, statt alle enthaltenen Karten erneut anzulegen.
+- Reservierte und verkaufte Exemplare sind beim Bestandsabgleich und beim Rückgängigmachen eines Imports gegen versehentliches Löschen geschützt.
+- „Bestand korrigieren“ erlaubt im Fenster „Bestand & Bewegungen“ eine manuelle Gesamtbestandskorrektur mit Pflichtgrund. Reservierte Exemplare bilden dabei eine nicht unterschreitbare Untergrenze.
+- Im selben Dialog können Set, Setname, Setnummer und Version/Seltenheit korrigiert werden. Änderungen werden für dieselbe Cardmarket-Produkt-ID in Bestand, Bestellungen, Verkäufen und Marktbeobachtung übernommen.
+- Bestandszugänge, Reservierungen, Verkäufe, Rückbuchungen und manuelle Korrekturen werden produktbezogen im Bewegungsverlauf protokolliert.
+- Bereits lokal gespeicherte Cardmarket-/Yu-Gi-Oh!-Druckdaten ergänzen fehlende Set-, Setnummer- und Seltenheitsfelder beim Start und nach neuen Bestands- oder Einkaufsimporten dauerhaft.

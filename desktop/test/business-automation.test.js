@@ -93,3 +93,44 @@ test('plant Materialverbrauch, Entfernen und Bestandsrückbuchung ohne negative 
   assert.equal(shortage.shortages[0].missing, 1);
   assert.equal(materials[1].stock, 1);
 });
+
+test('Reservierungen verschieben Bestand von verfügbar nach reserviert, ohne den Gesamtbestand zu erhöhen', () => {
+  const rows = [
+    { id: 'free', status: 'Im Bestand' },
+    { id: 'reserved', status: 'Reserviert' },
+    { id: 'sold', status: 'Verkauft' }
+  ];
+  const buckets = automation.calculateInventoryBuckets(rows);
+  assert.deepEqual(
+    { total: buckets.total, available: buckets.available, reserved: buckets.reserved, sold: buckets.sold },
+    { total: 2, available: 1, reserved: 1, sold: 1 }
+  );
+});
+
+test('manuelle Bestandskorrekturen entfernen niemals reservierte oder bereits verkaufte Exemplare', () => {
+  const rows = [
+    { id: 'free-1', status: 'Im Bestand' },
+    { id: 'free-2', status: 'Im Bestand' },
+    { id: 'reserved', status: 'Reserviert' },
+    { id: 'sold', status: 'Verkauft' }
+  ];
+  const plan = automation.planInventoryTotalCorrection(rows, 2);
+  assert.equal(plan.valid, true);
+  assert.equal(plan.addCount, 0);
+  assert.deepEqual(plan.removeIds, ['free-1']);
+  assert.equal(automation.planInventoryTotalCorrection(rows, 0).valid, false);
+});
+
+test('ein Cardmarket-Bestandssnapshot gleicht nur verfügbare Exemplare ab', () => {
+  const rows = [
+    { id: 'free-1', status: 'Im Bestand' },
+    { id: 'free-2', status: 'Im Bestand' },
+    { id: 'reserved', status: 'Reserviert' },
+    { id: 'sold', status: 'Verkauft' }
+  ];
+  const plan = automation.planAvailableInventorySnapshot(rows, 1);
+  assert.equal(plan.delta, -1);
+  assert.deepEqual(plan.removeIds, ['free-1']);
+  assert.equal(plan.buckets.reserved, 1);
+  assert.equal(plan.buckets.sold, 1);
+});

@@ -93,7 +93,7 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.equal(database.getTradeDatabaseStatus().orderCount, 1);
 });
 
-test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das v5-Schema', t => {
+test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das aktuelle Schema', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-trade-migration-'));
   const databasePath = path.join(root, 'legacy.sqlite');
   const backupRoot = path.join(root, 'backups');
@@ -121,11 +121,34 @@ test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das v5
   });
   database.open();
   const status = database.getTradeDatabaseStatus();
-  assert.equal(database.getStatus().schemaVersion, 5);
+  assert.equal(database.getStatus().schemaVersion, 6);
   assert.equal(status.orderCount, 2);
   assert.equal(status.marketObservationCount, 1);
   assert.equal(status.eventCount, 3);
   assert.equal(fs.readdirSync(path.join(backupRoot, 'Migrationen')).filter(name => name.endsWith('.sqlite')).length, 1);
+});
+
+test('speichert Cardmarket-Abrechnungen normalisiert und API-kompatibel in SQLite', t => {
+  const {database} = temporaryDatabase(t);
+  const state = sampleState();
+  state.reconciliations = [{
+    id:'settlement-1', importKey:'SETTLEMENT-test', file:'Abrechnung.csv', date:'2026-07-22T10:00:00.000Z',
+    rows:2, matched:1, unmatched:1, difference:0,
+    entries:[
+      {row:2,date:'2026-07-20',orderNo:'CM-SALE-1',matchedSaleId:'sale-1',amount:14.25,expectedPayout:14.25,difference:0},
+      {row:3,date:'2026-07-21',orderNo:'999999',matchedSaleId:'',amount:3,expectedPayout:0,difference:3}
+    ]
+  }];
+
+  database.saveState(state);
+  const status = database.getTradeDatabaseStatus();
+  assert.equal(status.settlementCount, 1);
+  assert.equal(status.unmatchedSettlementCount, 1);
+  const rows = database.db.prepare('SELECT external_order_id, match_status FROM settlement_entries ORDER BY row_number').all().map(row=>({...row}));
+  assert.deepEqual(rows, [
+    {external_order_id:'CM-SALE-1', match_status:'matched'},
+    {external_order_id:'999999', match_status:'unmatched'}
+  ]);
 });
 
 test('Cardmarket-API-Adapter ist standardmäßig sicher deaktiviert und erhält externe IDs', async () => {

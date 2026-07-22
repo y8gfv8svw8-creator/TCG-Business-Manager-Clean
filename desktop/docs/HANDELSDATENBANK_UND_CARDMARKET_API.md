@@ -3,7 +3,7 @@
 ## Was automatisch gespeichert wird
 
 Der vollständige Programmstand bleibt wie bisher in SQLite erhalten. Zusätzlich
-speichert Schema v5 bei jedem Speichern in derselben Transaktion:
+speichert Schema v6 bei jedem Speichern in derselben Transaktion:
 
 - Erstellen, Bearbeiten und Löschen von Einkäufen, Verkäufen und Bestandskarten
   als unveränderliche Ereignisse (`business_events`).
@@ -15,6 +15,9 @@ speichert Schema v5 bei jedem Speichern in derselben Transaktion:
 - Price-Guide-Stände und spätere weitere Quellen getrennt voneinander
   (`market_observations`). Mehrere Quellen können dieselbe Produkt-ID am selben
   Tag speichern, ohne sich gegenseitig zu überschreiben.
+- Importierte Cardmarket-Abrechnungen und ihre zugeordneten Einzelbuchungen
+  (`settlement_imports`, `settlement_entries`). Getrennte Gebühren- und
+  Gutschriftzeilen derselben Bestellung werden vor dem Vergleich summiert.
 
 Vor der automatischen Migration wird eine exakte SQLite-Sicherung unter
 `Dokumente\TCG Business Manager\Backups\Migrationen` erstellt. Die vorhandenen
@@ -61,3 +64,5 @@ Wenn ein API-Zugang verfügbar ist, fehlen nur noch:
 
 CSV-/HTML-Importe bleiben auch danach nutzbar. Die Quellen werden über externe IDs
 dedupliziert und können gemeinsam in die Empfehlungen einfließen.
+Abrechnungsdaten aus der API können dieselben Tabellen wie der heutige CSV-Import
+verwenden; die `source_id` hält die Herkunft weiterhin eindeutig fest.

@@ -2228,7 +2228,7 @@
 
   // Vollständige Import-Erkennung für Universalimport und überwachten Ordner.
   const legacyUniversalImportFile = universalImportFile;
-  universalImportFile = async function(file) {
+  universalImportFile = async function(file,options={}) {
     if (!file) throw new Error("Keine Datei ausgewählt.");
     if (/\.json$/i.test(file.name)) {
       const payload = JSON.parse(await file.text());
@@ -2236,7 +2236,7 @@
       if (cmIsProductCatalog(payload)) return importCardmarketProductCatalogPayload(payload,file.name);
       if (cmIsPriceGuide(payload)) return importCardmarketPriceGuidePayload(payload,file.name);
     }
-    return legacyUniversalImportFile(file);
+    return legacyUniversalImportFile(file,options);
   };
 
   const legacyAutomaticCandidate = isAutomaticImportCandidate;

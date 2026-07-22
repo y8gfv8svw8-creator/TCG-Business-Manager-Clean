@@ -1,0 +1,69 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const automation = require('../app/shared/business-automation');
+
+test('erkennt Bestände, Einkäufe und Cardmarket-Abrechnungen ohne Dateinamen-Tricks', () => {
+  assert.equal(automation.detectCsvImportType('bestand.csv', ['ArticleID', 'Price_EUR', 'Amount']), 'inventory');
+  assert.equal(automation.detectCsvImportType('einkauf.csv', ['groupCount', 'price', 'idProduct']), 'purchase');
+  assert.equal(automation.detectCsvImportType('export.csv', ['Datum', 'Bestellnummer', 'Betrag', 'Beschreibung']), 'settlement');
+});
+
+test('gleicht Cardmarket-Buchungen über die Bestellnummer mit erwarteten Nettoauszahlungen ab', () => {
+  const result = automation.reconcileSettlementRows([
+    { Datum: '2026-07-20', Bestellnummer: '123456789', Betrag: '10,45 €', Beschreibung: 'Auszahlung' },
+    { Datum: '2026-07-21', Bestellnummer: '999999999', Betrag: '3,00 €', Beschreibung: 'Unbekannt' }
+  ], {
+    settings: { feePercent: 5 },
+    sales: [{ id: 'sale-1', orderNo: '123456789', revenue: 11, cardValue: 11, status: 'Abgeschlossen' }]
+  });
+
+  assert.equal(result.matched, 1);
+  assert.equal(result.unmatched, 1);
+  assert.equal(result.entries[0].matchedSaleId, 'sale-1');
+  assert.ok(Math.abs(result.entries[0].difference) < 0.0001);
+});
+
+test('meldet Duplikate, fehlende Produkt-IDs und veraltete Marktpreise', () => {
+  const issues = automation.buildDataQualityIssues({
+    purchases: [{ orderNo: '42' }, { orderNo: '42' }],
+    sales: [],
+    inventory: [{ name: 'Karte ohne ID' }],
+    sync: { lastPriceUpdate: '2026-07-01T12:00:00.000Z' },
+    reconciliations: []
+  }, new Date('2026-07-22T12:00:00.000Z'));
+
+  assert.ok(issues.some(issue => issue.category === 'Duplikat'));
+  assert.ok(issues.some(issue => issue.category === 'Kartenzuordnung'));
+  assert.ok(issues.some(issue => issue.category === 'Marktdaten'));
+});
+
+test('verteilt Gewinn aus detaillierten Verkäufen auf Karten und Sets', () => {
+  const report = automation.buildPerformanceReport({
+    settings: { feePercent: 5, packaging: 0 },
+    purchases: [], inventory: [],
+    sales: [{
+      id: 'sale', status: 'Abgeschlossen', customer: 'Kunde', revenue: 30,
+      cardValue: 30, cost: 10, quantity: 3, postage: 2,
+      items: [
+        { name: 'Karte A', set: 'SET1', quantity: 1, unitPrice: 10 },
+        { name: 'Karte B', set: 'SET2', quantity: 2, unitPrice: 10 }
+      ]
+    }]
+  });
+
+  assert.equal(report.cards.length, 2);
+  assert.equal(report.sets.length, 2);
+  assert.ok(Math.abs(report.cards.reduce((sum, row) => sum + row.profit, 0) - 16.5) < 0.0001);
+});
+
+test('warnt vor Inseraten unter Einstand und fallenden Watchlist-Preisen', () => {
+  const alerts = automation.buildPriceAlerts({
+    settings: { priceAgeDays: 7 },
+    inventory: [{ name: 'Verlustkarte', listed: true, listingPrice: 4, cost: 5, status: 'Im Bestand', purchaseDate: '2026-07-20' }],
+    watchlist: [{ name: 'Fallende Karte', trend: 8, avg30: 10 }]
+  }, new Date('2026-07-22'));
+
+  assert.ok(alerts.some(alert => alert.type === 'Verlustpreis'));
+  assert.ok(alerts.some(alert => alert.type === 'Preisrückgang'));
+});

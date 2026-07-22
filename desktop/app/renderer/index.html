@@ -66,6 +66,14 @@
         </div>
 
         <div class="dashboard-grid">
+          <article class="panel panel-wide automation-overview-panel">
+            <div class="panel-head">
+              <div><h2>Automatik, Aufgaben &amp; Warnungen</h2><small>Prüft Bestandsabläufe, Preisrisiken und unvollständige Geschäftsdaten.</small></div>
+              <div class="panel-head-actions"><button id="repairWorkflowsBtn" class="secondary" type="button">Abläufe jetzt prüfen</button><button class="link-button" data-view-jump="reports">Alle Prüfungen</button></div>
+            </div>
+            <div id="automationOverview"></div>
+          </article>
+
           <article class="panel">
             <div class="panel-head">
               <h2>Offene Vorgänge</h2>
@@ -400,6 +408,7 @@
             <div class="folder-sync-actions">
               <button id="chooseSyncFolderBtn" class="primary" type="button">Ordner auswählen</button>
               <button id="scanSyncFolderBtn" class="secondary" type="button">Jetzt prüfen</button>
+              <button id="reviewFolderImportsBtn" class="secondary" type="button" hidden>Wartende Dateien prüfen</button>
               <label class="switch-label"><input id="autoFolderSyncToggle" type="checkbox" checked /> automatisch alle 30 Sekunden</label>
             </div>
           </div>
@@ -438,6 +447,7 @@
             <input id="universalImportInput" type="file" accept=".csv,.json,.html,.htm" multiple hidden />
           </label>
           <p class="muted">Die Warenwirtschaft erkennt den Dateityp automatisch. Mehrere Dateien können gemeinsam ausgewählt werden.</p>
+          <p class="import-safety-note"><strong>Sicherer Import:</strong> Dateien werden zuerst nur gelesen. Erst nach deiner Bestätigung werden Daten gespeichert.</p>
           <div id="universalImportPreview" class="preview import-result-stack"></div>
           <details class="template-box">
             <summary>Vorlagen für eigene Datenimporte</summary>
@@ -449,6 +459,7 @@
               <button type="button" class="secondary" data-template="watchlist">Watchlist</button>
               <button type="button" class="secondary" data-template="seller">Händler</button>
               <button type="button" class="secondary" data-template="customer">Kunden</button>
+              <button type="button" class="secondary" data-template="settlement">Cardmarket-Abgleich</button>
             </div>
           </details>
         </article>
@@ -464,6 +475,7 @@
             <div><strong>cardmarket-stock-*.csv</strong><span>Bestand & Inseratspreise</span></div>
             <div><strong>Verkauf*.html / *.htm</strong><span>Cardmarket-Verkauf</span></div>
             <div><strong>price_guide_3.json</strong><span>Marktpreise</span></div>
+            <div><strong>*Abrechnung*.csv</strong><span>Cardmarket-Auszahlungen mit Verkäufen abgleichen</span></div>
             <div><strong>*watchlist*.csv / *.json</strong><span>Watchlist ergänzen, aktualisieren und archivieren</span></div>
             <div><strong>andere *.json</strong><span>Backup wiederherstellen</span></div>
           </div>
@@ -507,6 +519,26 @@
             <div id="sellerReport"></div>
           </article>
         </div>
+        <article class="panel trade-database-panel">
+          <div class="panel-head"><div><h2>Geschäftsauswertung im Detail</h2><small>Kartengenauer Gewinn sowie Leistung nach Set, Verkäufer, Kunde und Lageralter.</small></div></div>
+          <div class="report-tabs" role="tablist">
+            <button class="secondary active" type="button" data-performance-report="cards">Karten</button>
+            <button class="secondary" type="button" data-performance-report="sets">Sets</button>
+            <button class="secondary" type="button" data-performance-report="sellers">Verkäufer</button>
+            <button class="secondary" type="button" data-performance-report="customers">Kunden</button>
+            <button class="secondary" type="button" data-performance-report="stockAge">Lageralter</button>
+          </div>
+          <div id="advancedPerformanceReport" class="table-wrap"></div>
+        </article>
+        <article class="panel trade-database-panel">
+          <div class="panel-head"><div><h2>Datenqualität, Preiswarnungen &amp; Sicherungen</h2><small>Konkrete Hinweise, bevor falsche Werte in Entscheidungen einfließen.</small></div><button id="refreshBusinessHealthBtn" class="secondary" type="button">Neu prüfen</button></div>
+          <div id="businessHealthSummary" class="trade-database-summary"></div>
+          <div id="businessHealthIssues"></div>
+        </article>
+        <article class="panel trade-database-panel">
+          <div class="panel-head"><div><h2>Cardmarket-Abrechnungsabgleich</h2><small>Vergleicht importierte Kontobewegungen mit erwarteten Auszahlungen deiner Verkäufe. Eine spätere API kann dieselbe Datenstruktur befüllen.</small></div><button class="secondary" type="button" data-view-jump="imports">Abrechnung importieren</button></div>
+          <div id="settlementReport"></div>
+        </article>
         <article class="panel trade-database-panel">
           <div class="panel-head">
             <div>
@@ -603,6 +635,18 @@
     <div class="modal-actions"><button type="button" id="monthlyFinanceCloseBottom" class="primary">Schließen</button></div>
   </dialog>
 
+  <dialog id="importPreviewDialog" class="order-detail-dialog import-preview-dialog">
+    <div class="modal-head">
+      <div><h2>Import vor dem Speichern prüfen</h2><p class="muted">Dateityp, Umfang und mögliche Duplikate kontrollieren.</p></div>
+      <button type="button" id="importPreviewClose" class="icon-button" aria-label="Schließen">×</button>
+    </div>
+    <div id="importPreviewContent"></div>
+    <div class="modal-actions">
+      <button type="button" id="importPreviewCancel" class="secondary">Abbrechen</button>
+      <button type="button" id="importPreviewConfirm" class="primary">Geprüfte Dateien importieren</button>
+    </div>
+  </dialog>
+
   <script>
     (() => {
       const DB_KEY = "tcgWawiState_v31";
@@ -640,6 +684,7 @@
       (async () => {
         await prepareDesktopState();
         await loadScript("../shared/card-search.js");
+        await loadScript("../shared/business-automation.js");
         await loadScript("app.js");
         await loadScript("cardmarket-data-center.js");
       })().catch(error => {

@@ -62,3 +62,15 @@ Patch 6 – Monatskennzahlen nachvollziehbar
 - Von jeder zugeordneten Zeile kann direkt die ursprüngliche Bestellung geöffnet werden.
 - Vom Käufer bezahlter Versand wird in den Einnahmendetails getrennt vom Kartenverkauf ausgewiesen, ohne den bereits enthaltenen Gesamtumsatz doppelt zu zählen.
 - Automatisch berechnete Verkaufsgebühren verwenden bei manuellen Verkäufen den Kartenwert ohne den vom Käufer bezahlten Versand.
+
+Patch 7 – Sicherer Import und Geschäftsautomatisierung
+- Jeder manuelle Dateiimport zeigt vor dem Speichern Dateityp, Umfang, Bestellnummer, Warnungen und Duplikate.
+- Auch die Ordnerüberwachung legt neue Dateien nur noch zur Prüfung vor; sie verändert keine Geschäftsdaten ohne Bestätigung.
+- Die Importtypen können bei CSV-Dateien vor dem Speichern korrigiert werden. Bereits importierte Bestellnummern werden gesperrt.
+- Rückgängig unterstützt Bestand, Einkauf, Verkauf, Watchlist, Händler, Kunden und Cardmarket-Abrechnungen.
+- Eingetroffene Einkäufe und Verkaufsstatus können mit einer Ablaufprüfung sicher mit dem physischen Bestand abgeglichen werden.
+- Dashboard und Auswertungen zeigen Duplikate, fehlende Produkt-IDs, Kalkulationslücken, veraltete Marktdaten, Verlustpreise und Preisbewegungen.
+- Gewinne werden bei detaillierten Verkäufen anteilig je Karte und Set ausgewertet; weitere Berichte zeigen Verkäufer, Kunden und Lageralter.
+- Cardmarket-Abrechnungs-CSV können mit erwarteten Verkaufsauszahlungen abgeglichen werden. Mehrere Buchungszeilen derselben Bestellung werden zusammengefasst.
+- Abrechnungen und Einzelbuchungen werden normalisiert in SQLite-Schema v6 gespeichert; dieselben Tabellen sind für eine spätere API-Quelle vorbereitet.
+- Der Berichtsbereich zeigt Anzahl und Zeitpunkt der automatischen Tagesbackups.

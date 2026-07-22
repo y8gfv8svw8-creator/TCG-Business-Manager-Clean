@@ -1,0 +1,29 @@
+TCG Business Manager 5.2.0 – QA-Bericht Patch 7
+
+Geprüfte Bereiche
+- Sichere Importvorschau vor jeder Dateiänderung
+- Automatisch erkannte Dateiarten und manuelle Typkorrektur
+- Duplikatschutz für Bestellungen, Bestände und Abrechnungsdateien
+- Cardmarket-Abrechnungsabgleich einschließlich mehrerer Buchungen je Bestellung
+- SQLite-Migration von Schema v3/v4/v5 auf Schema v6 mit Migrationssicherung
+- Normalisierte Speicherung von Abrechnungen und Buchungszeilen
+- Append-only Änderungsprotokoll für Käufe, Verkäufe, Bestand und Abrechnungen
+- Datenqualitäts- und Preiswarnungen
+- Gewinnberichte nach Karte, Set, Verkäufer und Kunde sowie Lageralter
+- Deutsche/englische Kartensuche und alle Druckvarianten
+- Vorbereitung der Cardmarket-API als deaktivierte, getrennte Datenquelle
+
+Automatische Prüfung
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Preload-, Shared- und Renderer-Dateien: bestanden
+- 15 automatisierte Tests: 15 bestanden, 0 fehlgeschlagen
+
+Sicherheitsverhalten
+- Die Ordnerüberwachung importiert keine neue Datei mehr ohne Bestätigung.
+- Komplette Backups werden in der Vorschau ausdrücklich als ersetzender Import gewarnt.
+- Bereits importierte Bestellnummern und identische Abrechnungsdateien werden gesperrt.
+- Vor einer SQLite-Schemaänderung wird weiterhin eine vollständige Migrationssicherung erstellt.
+- Zugangsdaten für eine spätere Cardmarket-API werden nicht in SQLite gespeichert.
+
+Hinweis zur lokalen Entwicklungsumgebung
+- Im Repository ist kein node_modules-Ordner vorhanden. Deshalb wurde in dieser Umgebung kein Electron-Fenster gestartet.
+- Datenbank, Migration, Berechnungen, Erkennung, Syntax und Suchlogik wurden vollständig automatisiert geprüft.

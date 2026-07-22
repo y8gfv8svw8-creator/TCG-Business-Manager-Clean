@@ -40,7 +40,8 @@ const defaultState = {
   materials: [],
   materialTemplates: [],
   movements: [],
-  sync: {autoFolder:true, autoPrices:true, lastPriceUpdate:"", processedFiles:{}},
+  reconciliations: [],
+  sync: {autoFolder:true, autoPrices:true, lastPriceUpdate:"", processedFiles:{}, pendingFiles:[]},
   partnerExclusions: {sellers: [], customers: []},
   productCatalog: structuredClone(BUILTIN_PRODUCT_CATALOG)
 };
@@ -51,6 +52,9 @@ let cardNameLookup = new Map();
 let cardNameByNormalizedName = new Map();
 let cardNameLookupSignature = "";
 let cardNameLookupPromise = null;
+let activePerformanceReport = "cards";
+let businessHealthDatabaseStatus = null;
+let businessHealthStatusPromise = null;
 
 const views = {
   dashboard: ["Dashboard", "Zentrale Übersicht über Bestand, Käufe, Verkäufe und Gewinn."],
@@ -298,11 +302,13 @@ function migrateState(data) {
   migrated.materials = Array.isArray(data.materials) ? data.materials : [];
   migrated.materialTemplates = Array.isArray(data.materialTemplates) ? data.materialTemplates : [];
   migrated.movements = Array.isArray(data.movements) ? data.movements : [];
+  migrated.reconciliations = Array.isArray(data.reconciliations) ? data.reconciliations : [];
   migrated.sellers = (Array.isArray(data.sellers) ? data.sellers : []).map(s=>normalizePartnerRecord(s,"seller"));
   migrated.customers = (Array.isArray(data.customers) ? data.customers : []).map(c=>normalizePartnerRecord(c,"customer"));
   migrated.imports = Array.isArray(data.imports) ? data.imports : [];
   migrated.sync = {...defaultState.sync, ...(data.sync||{})};
   migrated.sync.processedFiles = {...((data.sync||{}).processedFiles||{})};
+  migrated.sync.pendingFiles = [];
   migrated.partnerExclusions = {sellers:[...((data.partnerExclusions||{}).sellers||[])], customers:[...((data.partnerExclusions||{}).customers||[])]};
   migrated.productCatalog = mergeCatalog(BUILTIN_PRODUCT_CATALOG, data.productCatalog||{});
 
@@ -826,6 +832,43 @@ function renderDashboard() {
 
   const recent = [...state.sales].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
   document.getElementById("recentSales").innerHTML = recent.length ? `<div class="list">${recent.map(s=>{const p=calculateSaleProfit(s).profit; return `<div class="list-row"><div><strong>${escapeHtml(s.orderNo)}</strong><br><small>${fmtDate(s.date)} · ${escapeHtml(s.customer||"")}</small></div><span class="${p>=0?"money-positive":"money-negative"}">${money(p)}</span></div>`}).join("")}</div>` : `<div class="empty">Noch keine Verkäufe</div>`;
+  renderAutomationOverview();
+}
+
+function renderAutomationOverview() {
+  const target=document.getElementById("automationOverview");
+  if(!target||!window.TcgBusinessAutomation)return;
+  const workflow=TcgBusinessAutomation.buildWorkflowStatus(state);
+  const issues=TcgBusinessAutomation.buildDataQualityIssues(state);
+  const alerts=TcgBusinessAutomation.buildPriceAlerts(state);
+  const important=[...issues,...alerts].filter(row=>row.severity!=="info").slice(0,5);
+  const workflowCards=[
+    ["Einkäufe unterwegs",workflow.purchasesInTransit,"purchases"],
+    ["Wareneingänge offen",workflow.purchasesReady,"purchases"],
+    ["Verkäufe offen",workflow.salesOpen,"sales"],
+    ["Zu verpacken",workflow.salesToPack,"sales"],
+    ["Versendet",workflow.salesShipped,"sales"]
+  ];
+  target.innerHTML=`
+    <div class="automation-status-grid">${workflowCards.map(([label,value,view])=>`<button type="button" data-view-jump="${view}"><span>${escapeHtml(label)}</span><strong>${Number(value)}</strong></button>`).join("")}</div>
+    <div class="automation-alert-list">${important.length?important.map(row=>`<button type="button" class="business-issue ${escapeHtml(row.severity)}" data-view-jump="${escapeHtml(row.target||"reports")}"><span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.details||row.type||"")}</small></span><span>Öffnen →</span></button>`).join(""):`<div class="success"><strong>Alles in Ordnung</strong><br>Keine dringenden Daten- oder Preiswarnungen gefunden.</div>`}</div>`;
+}
+
+function repairWorkflowConsistency(showResult=true) {
+  let received=0, synchronized=0;
+  state.purchases.forEach(purchase=>{if(purchase.status==="Eingetroffen"&&!purchase.inventoryCreated)received+=materializePurchaseInventory(purchase);});
+  state.sales.forEach(sale=>{
+    const before=saleInventoryItems(sale).map(item=>`${item.id}:${item.status}`).join("|");
+    syncSaleInventoryStatus(sale);
+    const after=saleInventoryItems(sale).map(item=>`${item.id}:${item.status}`).join("|");
+    if(before!==after)synchronized++;
+  });
+  if(received||synchronized){
+    addMovement({type:"Automatikprüfung",quantity:received,reference:"Bestands- und Versandabläufe",note:`${received} neue Bestandskarte(n), ${synchronized} Verkaufszuordnung(en) korrigiert`});
+    saveState();renderAll();
+  }
+  if(showResult)alert(received||synchronized?`${received} Bestandskarte(n) aus eingetroffenen Einkäufen angelegt und ${synchronized} Verkaufszuordnung(en) berichtigt.`:"Alle Einkaufs-, Bestands- und Verkaufsabläufe sind bereits stimmig.");
+  return {received,synchronized};
 }
 
 
@@ -1396,12 +1439,13 @@ function showCustomerDetails(id) {
 function renderImports() {
   const el = document.getElementById("importHistoryTable");
   if (!el) return;
-  const labels = {inventory:"Bestand", purchase:"Einkauf", sale:"Verkauf", prices:"Preise", watchlist:"Watchlist", seller:"Händler", customer:"Kunden", backup:"Backup"};
+  const labels = {inventory:"Bestand", purchase:"Einkauf", sale:"Verkauf", prices:"Preise", watchlist:"Watchlist", seller:"Händler", customer:"Kunden", backup:"Backup",settlement:"Cardmarket-Abrechnung",productCatalog:"Produktkatalog",cardmarketBackup:"Cardmarket-Datensicherung"};
+  const undoTypes=new Set(["inventory","purchase","sale","watchlist","seller","customer","settlement"]);
   const rows = [...state.imports].sort((a,b)=>new Date(b.date)-new Date(a.date));
   el.innerHTML = rows.length ? rows.map(i=>`<tr>
     <td>${fmtDate(i.date)}</td><td>${escapeHtml(labels[i.type]||i.type)}</td><td>${escapeHtml(i.file||"")}</td>
     <td>${Number(i.rows||0)}</td><td>${Number(i.cards||0)}</td><td>${escapeHtml(i.key||"")}</td>
-    <td class="actions"><button class="icon-button danger-text" data-delete-import="${i.id}">Rückgängig</button><button class="icon-button" data-remove-import-history="${i.id}">Aus Historie entfernen</button></td>
+    <td class="actions">${undoTypes.has(i.type)?`<button class="icon-button danger-text" data-delete-import="${i.id}">Rückgängig</button>`:""}<button class="icon-button" data-remove-import-history="${i.id}">Aus Historie entfernen</button></td>
   </tr>`).join("") : `<tr><td colspan="7" class="empty">Noch keine Importe</td></tr>`;
 }
 
@@ -1428,9 +1472,8 @@ function renderReports() {
   state.sales.forEach(s=>{const k=(s.date||"").slice(0,7)||"Ohne Datum"; months[k]=(months[k]||0)+calculateSaleProfit(s).profit;});
   document.getElementById("monthlyReport").innerHTML = Object.keys(months).length ? `<div class="list">${Object.entries(months).sort().map(([k,v])=>`<div class="list-row"><span>${escapeHtml(k)}</span><strong class="${v>=0?"money-positive":"money-negative"}">${money(v)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
 
-  const cardProfit={};
-  state.sales.forEach(s=>{(s.cardNames||"Unbekannt").split(",").forEach(n=>cardProfit[n.trim()]=(cardProfit[n.trim()]||0)+calculateSaleProfit(s).profit/Math.max(1,(s.cardNames||"").split(",").length));});
-  document.getElementById("topCardsReport").innerHTML = Object.keys(cardProfit).length ? `<div class="list">${Object.entries(cardProfit).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([k,v])=>`<div class="list-row"><span>${escapeHtml(k)}</span><strong>${money(v)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
+  const performance=window.TcgBusinessAutomation?.buildPerformanceReport(state)||{cards:[]};
+  document.getElementById("topCardsReport").innerHTML = performance.cards.length ? `<div class="list">${performance.cards.slice(0,8).map(row=>`<div class="list-row"><span>${escapeHtml(row.name)}</span><strong>${money(row.profit)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
 
   const slow=[...state.inventory].filter(i=>!["Verkauft","Storniert"].includes(i.status)).sort((a,b)=>daysBetween(b.purchaseDate)-daysBetween(a.purchaseDate)).slice(0,8);
   document.getElementById("slowCardsReport").innerHTML = slow.length ? `<div class="list">${slow.map(i=>`<div class="list-row"><span>${escapeHtml(i.name)}</span><strong>${daysBetween(i.purchaseDate)} Tage</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
@@ -1438,7 +1481,54 @@ function renderReports() {
   const sellers={};
   state.purchases.forEach(p=>{const k=p.seller||"Unbekannt"; sellers[k]??={orders:0,total:0}; sellers[k].orders++; sellers[k].total+=Number(p.cardValue||0)+Number(p.shipping||0)+Number(p.extra||0);});
   document.getElementById("sellerReport").innerHTML = Object.keys(sellers).length ? `<div class="list">${Object.entries(sellers).sort((a,b)=>b[1].orders-a[1].orders).map(([k,v])=>`<div class="list-row"><div><span>${escapeHtml(k)}</span><br><small>${v.orders} Bestellungen</small></div><strong>${money(v.total)}</strong></div>`).join("")}</div>` : `<div class="empty">Noch keine Daten</div>`;
+  renderAdvancedPerformanceReport(performance);
+  renderBusinessHealth();
+  renderSettlementReport();
   renderTradeDatabaseInsights();
+}
+
+function renderAdvancedPerformanceReport(report=window.TcgBusinessAutomation?.buildPerformanceReport(state)) {
+  const target=document.getElementById("advancedPerformanceReport");if(!target||!report)return;
+  const rows=report[activePerformanceReport]||[];
+  document.querySelectorAll("[data-performance-report]").forEach(button=>button.classList.toggle("active",button.dataset.performanceReport===activePerformanceReport));
+  if(activePerformanceReport==="stockAge"){
+    target.innerHTML=`<table class="advanced-report-table"><thead><tr><th>Karte / Druck</th><th>Bestand</th><th>Kapital</th><th>Ø Alter</th><th>Älteste Karte</th></tr></thead><tbody>${rows.length?rows.slice(0,100).map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml([row.set,row.rarity].filter(Boolean).join(" · "))}</small></td><td>${row.quantity}</td><td>${money(row.value)}</td><td>${row.averageDays} Tage</td><td><strong>${row.oldestDays} Tage</strong></td></tr>`).join(""):`<tr><td colspan="5" class="empty">Kein aktiver Bestand vorhanden.</td></tr>`}</tbody></table>`;
+    return;
+  }
+  if(activePerformanceReport==="sellers"){
+    target.innerHTML=`<table class="advanced-report-table"><thead><tr><th>Verkäufer</th><th>Bestellungen</th><th>Karten</th><th>Einkaufsvolumen</th><th>Ø Bestellung</th></tr></thead><tbody>${rows.length?rows.slice(0,100).map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong></td><td>${row.orders}</td><td>${row.cards}</td><td>${money(row.cost)}</td><td>${money(row.averageOrder)}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Einkäufe vorhanden.</td></tr>`}</tbody></table>`;
+    return;
+  }
+  const title=activePerformanceReport==="sets"?"Set":activePerformanceReport==="customers"?"Kunde":"Karte";
+  target.innerHTML=`<table class="advanced-report-table"><thead><tr><th>${title}</th><th>Aufträge</th><th>Karten</th><th>Umsatz</th><th>Wareneinsatz</th><th>Gewinn</th><th>ROI</th></tr></thead><tbody>${rows.length?rows.slice(0,100).map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong></td><td>${row.orders}</td><td>${row.cards}</td><td>${money(row.revenue)}</td><td>${money(row.cost)}</td><td class="${row.profit>=0?"money-positive":"money-negative"}"><strong>${money(row.profit)}</strong></td><td>${pct(row.roi)}</td></tr>`).join(""):`<tr><td colspan="7" class="empty">Noch keine abgeschlossenen Geschäftsdaten vorhanden.</td></tr>`}</tbody></table>`;
+}
+
+function businessHealthRows() {
+  if(!window.TcgBusinessAutomation)return [];
+  return [...TcgBusinessAutomation.buildDataQualityIssues(state),...TcgBusinessAutomation.buildPriceAlerts(state)];
+}
+
+function renderBusinessHealth(force=false) {
+  const summary=document.getElementById("businessHealthSummary");
+  const target=document.getElementById("businessHealthIssues");
+  if(!summary||!target||!window.TcgBusinessAutomation)return;
+  const issues=businessHealthRows();
+  const errors=issues.filter(row=>row.severity==="error").length;
+  const warnings=issues.filter(row=>row.severity==="warning").length;
+  const status=businessHealthDatabaseStatus||{};
+  summary.innerHTML=`<div><span>Kritische Hinweise</span><strong>${errors}</strong></div><div><span>Zu prüfen</span><strong>${warnings}</strong></div><div><span>Automatische Sicherungen</span><strong>${Number(status.backupCount||0)}</strong><small>${status.latestBackupAt?`zuletzt ${new Date(status.latestBackupAt).toLocaleString("de-DE")}`:"nach dem nächsten Speichern"}</small></div><div><span>SQLite</span><strong>${status.ready?"bereit":"wird geprüft"}</strong><small>${Number(status.eventCount||0).toLocaleString("de-DE")} protokollierte Änderungen</small></div>`;
+  target.innerHTML=issues.length?`<div class="business-health-list">${issues.slice(0,100).map(row=>`<button type="button" class="business-issue ${escapeHtml(row.severity)}" data-view-jump="${escapeHtml(row.target||"reports")}"><span><strong>${escapeHtml(row.category||row.type||"Hinweis")}: ${escapeHtml(row.title)}</strong><small>${escapeHtml(row.details||"")}</small></span><span>Öffnen →</span></button>`).join("")}</div>`:`<div class="success"><strong>Datenprüfung bestanden</strong><br>Keine auffälligen Duplikate, Kalkulationslücken oder Preisrisiken gefunden.</div>`;
+  if(window.desktopApp?.getTradeDatabaseStatus&&(force||!businessHealthDatabaseStatus)&&!businessHealthStatusPromise){
+    businessHealthStatusPromise=window.desktopApp.getTradeDatabaseStatus().then(next=>{businessHealthDatabaseStatus=next;renderBusinessHealth(false);}).catch(error=>console.error("Sicherungsstatus konnte nicht gelesen werden:",error)).finally(()=>businessHealthStatusPromise=null);
+  }
+}
+
+function renderSettlementReport() {
+  const target=document.getElementById("settlementReport");if(!target)return;
+  const records=[...(state.reconciliations||[])].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(!records.length){target.innerHTML='<div class="empty">Noch keine Cardmarket-Abrechnung importiert. Der Import erfolgt sicher über „Importe“.</div>';return;}
+  const latest=records[0];
+  target.innerHTML=`<div class="settlement-summary"><div><span>Datei</span><strong>${escapeHtml(latest.file||"Abrechnung")}</strong><small>${fmtDate(latest.date)}</small></div><div><span>Zugeordnet</span><strong>${Number(latest.matched||0)}</strong></div><div><span>Nicht zugeordnet</span><strong>${Number(latest.unmatched||0)}</strong></div><div><span>Abweichung</span><strong class="${Math.abs(Number(latest.difference||0))<0.02?"money-positive":"money-negative"}">${money(latest.difference)}</strong></div></div><div class="table-wrap"><table><thead><tr><th>Zeile</th><th>Datum</th><th>Bestellung</th><th>Buchung</th><th>Erwartet nach Gebühr</th><th>Abweichung</th><th>Status</th></tr></thead><tbody>${(latest.entries||[]).slice(0,100).map(row=>`<tr><td>${row.row}</td><td>${escapeHtml(row.date||"–")}</td><td>${escapeHtml(row.orderNo||"–")}</td><td>${money(row.amount)}</td><td>${row.matchedSaleId?money(row.expectedPayout):"–"}</td><td class="${Math.abs(Number(row.difference||0))<0.02?"money-positive":"money-negative"}">${row.matchedSaleId?money(row.difference):"–"}</td><td>${statusBadge(row.matchedSaleId?(Math.abs(Number(row.difference||0))<0.02?"Passend":"Abweichung"):"Nicht zugeordnet")}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function paintTradeDatabaseInsights(data) {
@@ -1798,6 +1888,12 @@ function removeImport(importRecord, ask=true) {
     state.sales=state.sales.filter(s=>s.importKey!==key && s.orderNo!==key);
   } else if(importRecord.type==="watchlist" && Array.isArray(importRecord.watchlistBefore)) {
     state.watchlist=structuredClone(importRecord.watchlistBefore);
+  } else if(importRecord.type==="seller" && Array.isArray(importRecord.createdIds)) {
+    const ids=new Set(importRecord.createdIds);state.sellers=state.sellers.filter(row=>!ids.has(row.id));
+  } else if(importRecord.type==="customer" && Array.isArray(importRecord.createdIds)) {
+    const ids=new Set(importRecord.createdIds);state.customers=state.customers.filter(row=>!ids.has(row.id));
+  } else if(importRecord.type==="settlement") {
+    state.reconciliations=state.reconciliations.filter(row=>row.id!==importRecord.reconciliationId&&row.importKey!==key);
   }
   state.imports=state.imports.filter(i=>i.id!==importRecord.id);
   saveState(); renderAll();
@@ -1852,7 +1948,7 @@ async function importStock(file) {
   return {rows:rows.length,cards,unknown,skippedOpenOrders};
 }
 
-async function importPurchases(file) {
+async function importPurchases(file,details={}) {
   const rows=parseCsv(await readFile(file));
   if(!rows.length) throw new Error("Keine Datenzeilen gefunden.");
   const shipment=(file.name.match(/(\d{6,})/)||[])[1]||`PURCHASE-${Date.now()}`;
@@ -1876,10 +1972,10 @@ async function importPurchases(file) {
     });
     cards+=quantity; total+=quantity*price;
   });
-  const importDate = document.getElementById("purchaseImportDate")?.value || todayISO();
-  const importSeller = document.getElementById("purchaseImportSeller")?.value?.trim() || "Aus CSV";
-  const importShipping = num(document.getElementById("purchaseImportShipping")?.value, 0);
-  const importExtra = num(document.getElementById("purchaseImportExtra")?.value, 0);
+  const importDate = details.date || document.getElementById("purchaseImportDate")?.value || todayISO();
+  const importSeller = String(details.seller || document.getElementById("purchaseImportSeller")?.value || "Aus CSV").trim() || "Aus CSV";
+  const importShipping = num(details.shipping ?? document.getElementById("purchaseImportShipping")?.value, 0);
+  const importExtra = num(details.extra ?? document.getElementById("purchaseImportExtra")?.value, 0);
 
   state.purchases.push({
     id:purchaseId,orderNo:shipment,date:importDate,seller:importSeller,country:"",items:cards,
@@ -1990,7 +2086,8 @@ const GENERIC_TEMPLATES = {
   sale: "orderNo;date;customer;country;quantity;cardNames;revenue;cost;status;note\n",
   watchlist: "priority;productId;name;set;version;stock;target;maxBuy;targetSell;currentBuy;trend;avg30;reprint;banlist\n",
   seller: "cardmarketName;realName;country;language;email;phone;status;favorite;rating;communication;shippingSpeed;packagingQuality;conditionAccuracy;complaints;note\n",
-  customer: "cardmarketName;realName;country;language;email;phone;status;favorite;rating;preferredShipping;trackingRequired;complaints;note\n"
+  customer: "cardmarketName;realName;country;language;email;phone;status;favorite;rating;preferredShipping;trackingRequired;complaints;note\n",
+  settlement: "date;orderNo;amount;description\n"
 };
 
 function detectImportType(file, rows, rawText="") {
@@ -1998,6 +2095,8 @@ function detectImportType(file, rows, rawText="") {
   if (name.endsWith(".json")) return "backup";
   if (name.endsWith(".html") || name.endsWith(".htm")) return "saleHtml";
   const keys = new Set(Object.keys(rows[0]||{}).map(k=>String(k).toLowerCase()));
+  const automatic=window.TcgBusinessAutomation?.detectCsvImportType(file?.name,Object.keys(rows[0]||{}));
+  if(automatic&&automatic!=="unknown")return automatic;
   const has = (...names) => names.some(n=>keys.has(n.toLowerCase()));
   if (has("articleid") && has("price_eur") && has("amount")) return "inventory";
   if (has("groupcount") && has("price") && has("idproduct")) return "purchase";
@@ -2022,6 +2121,7 @@ function boolValue(v) {
 function genericImportRecord(type, rows, file) {
   const key = `GEN-${type}-${Date.now()}`;
   let count = 0, cards = 0, created, updated;
+  const createdIds=[];
   if (type === "inventoryGeneric") {
     rows.forEach((r, idx)=>{
       const quantity = Math.max(1, Number(r.quantity||r.menge||1));
@@ -2090,13 +2190,14 @@ function genericImportRecord(type, rows, file) {
     });
     cards=created+updated;
   } else if (type === "sellerGeneric") {
-    rows.forEach(r=>{ state.sellers.push(normalizePartnerRecord({...r,name:r.cardmarketName||r.name,favorite:boolValue(r.favorite)},"seller")); count++; });
+    rows.forEach(r=>{ const partner=normalizePartnerRecord({...r,name:r.cardmarketName||r.name,favorite:boolValue(r.favorite)},"seller");state.sellers.push(partner);createdIds.push(partner.id);count++; });
   } else if (type === "customerGeneric") {
-    rows.forEach(r=>{ state.customers.push(normalizePartnerRecord({...r,name:r.cardmarketName||r.name,favorite:boolValue(r.favorite),trackingRequired:boolValue(r.trackingRequired)},"customer")); count++; });
+    rows.forEach(r=>{ const partner=normalizePartnerRecord({...r,name:r.cardmarketName||r.name,favorite:boolValue(r.favorite),trackingRequired:boolValue(r.trackingRequired)},"customer");state.customers.push(partner);createdIds.push(partner.id);count++; });
   }
   const importType = ({inventoryGeneric:"inventory",purchaseGeneric:"purchase",saleGeneric:"sale",watchlistGeneric:"watchlist",sellerGeneric:"seller",customerGeneric:"customer"})[type] || type;
   const importRecord={id:uid(),type:importType,key,file:file.name,date:new Date().toISOString(),rows:count,cards};
   if(type === "watchlistGeneric") importRecord.watchlistBefore=watchlistBefore;
+  if(createdIds.length) importRecord.createdIds=createdIds;
   state.imports.push(importRecord);
   saveState(); renderAll();
   return {type:importType,rows:count,cards,created:typeof created!=="undefined"?created:undefined,updated:typeof updated!=="undefined"?updated:undefined};
@@ -2256,7 +2357,19 @@ function importWatchlistUpdatePayload(payload,fileName="Watchlist-Update.json") 
   return {type:"watchlist",rows:payload.cards.length,cards:created+updated,created,updated,archived,skipped,warning:archived?`${archived} Einträge archiviert`:""};
 }
 
-async function universalImportFile(file) {
+function importSettlementRows(rows,file) {
+  if(!window.TcgBusinessAutomation)throw new Error("Abgleichsmodul ist nicht geladen.");
+  const key=`SETTLEMENT-${file.name}-${file.size||rows.length}-${file.lastModified||Date.now()}`;
+  if(state.imports.some(record=>record.type==="settlement"&&record.key===key))throw new Error("Diese Abrechnungsdatei wurde bereits importiert.");
+  const result=TcgBusinessAutomation.reconcileSettlementRows(rows,state);
+  const record={id:uid(),importKey:key,file:file.name,date:new Date().toISOString(),...result};
+  state.reconciliations.push(record);
+  state.imports.push({id:uid(),type:"settlement",key,file:file.name,date:record.date,rows:result.rows,cards:result.matched,reconciliationId:record.id});
+  saveState();renderAll();
+  return {type:"settlement",rows:result.rows,cards:result.matched,matched:result.matched,unmatched:result.unmatched,warning:result.unmatched?`${result.unmatched} Buchung(en) konnten noch keinem Verkauf zugeordnet werden.`:`Alle ${result.matched} Buchungen wurden zugeordnet.`};
+}
+
+async function universalImportFile(file,options={}) {
   if (!file) throw new Error("Keine Datei ausgewählt.");
   if (file.name.toLowerCase().endsWith(".json")) {
     const payload=JSON.parse(await file.text());
@@ -2272,27 +2385,116 @@ async function universalImportFile(file) {
   const text = await file.text();
   const rows = parseCsv(text);
   if (!rows.length) throw new Error("Die Datei enthält keine lesbaren Daten.");
-  const type = detectImportType(file, rows, text);
+  const type = options.forcedType || detectImportType(file, rows, text);
   if (type === "inventory") return {...await importStock(file),type:"inventory"};
-  if (type === "purchase") return {...await importPurchases(file),type:"purchase"};
+  if (type === "purchase") return {...await importPurchases(file,options.purchaseDetails||{}),type:"purchase"};
   if (type === "prices") return {...await importPrices(file),type:"prices"};
   if (type === "sale") return {...await importSales(file),type:"sale"};
+  if (type === "settlement") return importSettlementRows(rows,file);
   if (["inventoryGeneric","purchaseGeneric","saleGeneric","watchlistGeneric","sellerGeneric","customerGeneric"].includes(type)) return genericImportRecord(type,rows,file);
   throw new Error("Dateityp nicht erkannt. Nutze eine Vorlage oder wähle den Importtyp manuell.");
 }
 
-async function runUniversalImport(files) {
+const IMPORT_TYPE_LABELS={
+  inventory:"Cardmarket-Bestand",purchase:"Cardmarket-Einkauf",sale:"Cardmarket-Verkauf (CSV)",saleHtml:"Cardmarket-Verkauf (HTML)",prices:"Marktpreise",watchlist:"Watchlist",backup:"Komplettes Backup",productCatalog:"Produktkatalog",cardmarketBackup:"Cardmarket-Datensicherung",inventoryGeneric:"Eigener Bestand",purchaseGeneric:"Eigene Einkäufe",saleGeneric:"Eigene Verkäufe",watchlistGeneric:"Eigene Watchlist",sellerGeneric:"Händler",customerGeneric:"Kunden",settlement:"Cardmarket-Abrechnung",unknown:"Nicht erkannt"
+};
+const IMPORT_SELECT_TYPES=["inventory","purchase","sale","prices","settlement","inventoryGeneric","purchaseGeneric","saleGeneric","watchlistGeneric","sellerGeneric","customerGeneric"];
+let pendingImportBatch=[];
+let pendingFolderImports=[];
+
+function importDuplicateFor(type,key,fileName) {
+  if(!key&&type==="inventory")return state.imports.some(row=>row.type==="inventory"&&row.file===fileName);
+  if(!key)return false;
+  return state.imports.some(row=>row.type===({saleHtml:"sale",watchlistGeneric:"watchlist"}[type]||type)&&String(row.key)===String(key));
+}
+
+async function analyzeImportFile(file,metadata={}) {
+  const lower=file.name.toLowerCase();
+  const analysis={id:uid(),file,metadata,fileName:file.name,type:"unknown",rows:0,cards:0,key:"",warnings:[],duplicate:false,blocked:false};
+  try{
+    if(lower.endsWith(".json")){
+      const payload=JSON.parse(await file.text());
+      if(Array.isArray(payload?.priceGuides)||/price_guide_3\.json$/i.test(file.name)){analysis.type="prices";analysis.rows=(payload.priceGuides||payload.priceGuide||[]).length;analysis.cards=analysis.rows;}
+      else if(payload?.schema&&String(payload.schema).toLowerCase().includes("watchlist")&&Array.isArray(payload.cards)){analysis.type="watchlist";analysis.rows=payload.cards.length;analysis.cards=payload.cards.length;analysis.key=`WATCHLIST-${payload.version||file.lastModified}`;}
+      else if(Array.isArray(payload?.products)&&Array.isArray(payload?.priceHistory)){analysis.type="cardmarketBackup";analysis.rows=payload.priceHistory.length;analysis.cards=payload.products.length;}
+      else if(Array.isArray(payload?.products)&&payload.products.some(row=>row&&(row.idProduct||row.productId))){analysis.type="productCatalog";analysis.rows=payload.products.length;analysis.cards=payload.products.length;}
+      else if(payload&&typeof payload==="object"&&(Array.isArray(payload.inventory)||Array.isArray(payload.sales)||Array.isArray(payload.purchases))){analysis.type="backup";analysis.rows=1;analysis.cards=(payload.inventory||[]).length;analysis.warnings.push("Ein komplettes Backup ersetzt den aktuellen Datenstand. Nur importieren, wenn das ausdrücklich gewünscht ist.");}
+      else {analysis.type="backup";analysis.rows=1;analysis.warnings.push("JSON wird als komplettes Backup behandelt. Inhalt besonders sorgfältig prüfen.");}
+    } else if(/\.html?$/i.test(lower)){
+      const html=await file.text();const doc=new DOMParser().parseFromString(html,"text/html");
+      analysis.type="saleHtml";analysis.key=(doc.title.match(/#(\d{6,})/)||html.match(/Orders\/(\d{6,})/)||[])[1]||"";
+      analysis.rows=doc.querySelectorAll('[data-article-id][data-product-id]').length;
+      analysis.cards=[...doc.querySelectorAll('[data-article-id][data-product-id]')].reduce((sum,row)=>sum+Math.max(1,Number(row.dataset.amount||1)),0);
+      if(!analysis.key||!analysis.rows){analysis.blocked=true;analysis.warnings.push("Keine vollständige Cardmarket-Verkaufsseite erkannt.");}
+    } else {
+      const text=await file.text();const rows=parseCsv(text);
+      if(!rows.length)throw new Error("Keine lesbaren Datenzeilen gefunden.");
+      analysis.rows=rows.length;analysis.type=detectImportType(file,rows,text);
+      const quantityKeys=["Amount","amount","groupCount","quantity","Menge","count"];
+      analysis.cards=rows.reduce((sum,row)=>sum+Math.max(1,Math.round(num(getAny(row,quantityKeys),1))),0);
+      if(["purchase","sale"].includes(analysis.type))analysis.key=(file.name.match(/(\d{6,})/)||[])[1]||"";
+      if(analysis.type==="settlement"){analysis.cards=rows.length;analysis.key=`SETTLEMENT-${file.name}-${file.size||rows.length}-${file.lastModified||Date.now()}`;}
+      if(["purchaseGeneric","saleGeneric"].includes(analysis.type)){
+        const existing=new Set((analysis.type==="purchaseGeneric"?state.purchases:state.sales).map(row=>String(row.orderNo||"").trim()).filter(Boolean));
+        const duplicateOrders=rows.map(row=>String(getAny(row,["orderNo","bestellnr","Bestellnummer"])).trim()).filter(orderNo=>orderNo&&existing.has(orderNo));
+        if(duplicateOrders.length){analysis.duplicate=true;analysis.blocked=true;analysis.warnings.push(`Bestellnummer bereits vorhanden: ${[...new Set(duplicateOrders)].slice(0,5).join(", ")}`);}
+      }
+      if(analysis.type==="unknown")analysis.warnings.push("Dateityp konnte nicht sicher erkannt werden. Bitte den richtigen Typ auswählen.");
+    }
+    analysis.duplicate=analysis.duplicate||importDuplicateFor(analysis.type,analysis.key,file.name);
+    if(analysis.duplicate){analysis.blocked=true;analysis.warnings.push("Diese Datei oder Bestellnummer wurde bereits importiert.");}
+  }catch(error){analysis.blocked=true;analysis.error=error.message;analysis.warnings.push(error.message);}
+  return analysis;
+}
+
+function renderImportPreviewDialog() {
+  const content=document.getElementById("importPreviewContent");
+  const confirmButton=document.getElementById("importPreviewConfirm");
+  if(!content||!confirmButton)return;
+  const options=IMPORT_SELECT_TYPES.map(type=>`<option value="${type}">${escapeHtml(IMPORT_TYPE_LABELS[type])}</option>`).join("");
+  content.innerHTML=`<div class="import-preview-summary"><strong>${pendingImportBatch.length} Datei${pendingImportBatch.length===1?"":"en"}</strong><span>${pendingImportBatch.filter(row=>!row.blocked&&row.type!=="unknown").length} bereit · ${pendingImportBatch.filter(row=>row.blocked).length} gesperrt</span></div><div class="import-preview-list">${pendingImportBatch.map(item=>`<article class="import-preview-item ${item.blocked?"blocked":""}" data-import-preview-id="${item.id}"><div><strong>${escapeHtml(item.metadata.path||item.fileName)}</strong><small>${Number(item.rows||0)} Positionen · ca. ${Number(item.cards||0)} Karten${item.key?` · ${escapeHtml(item.key)}`:""}</small></div><label>Erkannter Typ<select data-import-type="${item.id}" ${/\.json$|\.html?$/i.test(item.fileName)?"disabled":""}><option value="${item.type}">${escapeHtml(IMPORT_TYPE_LABELS[item.type]||item.type)}</option>${options}</select></label>${item.type==="purchase"?`<div class="import-purchase-details"><label>Kaufdatum<input type="date" data-import-purchase-date="${item.id}" value="${todayISO()}"/></label><label>Verkäufer<input data-import-purchase-seller="${item.id}" placeholder="Cardmarket-Name"/></label><label>Einkaufsversand (€)<input type="number" min="0" step="0.01" data-import-purchase-shipping="${item.id}" value="0"/></label><label>Zusatzkosten (€)<input type="number" min="0" step="0.01" data-import-purchase-extra="${item.id}" value="0"/></label></div>`:""}${item.warnings.length?`<div class="import-preview-warnings">${item.warnings.map(message=>`<span>${escapeHtml(message)}</span>`).join("")}</div>`:`<div class="import-preview-ok">Keine Auffälligkeiten gefunden.</div>`}<label class="import-approval"><input type="checkbox" data-import-approved="${item.id}" ${item.blocked||item.type==="unknown"?"disabled":"checked"}/> Diese Datei importieren</label></article>`).join("")}</div>`;
+  confirmButton.disabled=!pendingImportBatch.some(item=>!item.blocked&&item.type!=="unknown");
+}
+
+function showImportPreview() {
+  renderImportPreviewDialog();
+  const dialog=document.getElementById("importPreviewDialog");
+  if(dialog.open)dialog.close();dialog.showModal();
+}
+
+async function runUniversalImport(files,metadata=[]) {
+  if(!files?.length)return;
+  const analyses=[];
+  for(let index=0;index<files.length;index++)analyses.push(await analyzeImportFile(files[index],metadata[index]||{}));
+  pendingImportBatch=analyses;
+  showImportPreview();
+}
+
+async function confirmImportPreview() {
   const out=document.getElementById("universalImportPreview");
   const results=[];
-  for (const file of files) {
-    try {
-      const r=await universalImportFile(file);
-      results.push(`<div class="success"><strong>${escapeHtml(file.name)}</strong><br>${escapeHtml(r.type||"Import")} · ${Number(r.rows||0)} Positionen · ${Number(r.cards||0)} Karten${r.warning?`<br><span class="warning-text">${escapeHtml(r.warning)}</span>`:""}</div>`);
-    } catch(err) {
-      results.push(`<div class="error"><strong>${escapeHtml(file.name)}</strong><br>${escapeHtml(err.message)}</div>`);
-    }
+  const selected=pendingImportBatch.filter(item=>!item.blocked&&document.querySelector(`[data-import-approved="${item.id}"]`)?.checked);
+  document.getElementById("importPreviewConfirm").disabled=true;
+  for(const item of selected){
+    try{
+      const forcedType=document.querySelector(`[data-import-type="${item.id}"]`)?.value||item.type;
+      const purchaseDetails=forcedType==="purchase"?{
+        date:document.querySelector(`[data-import-purchase-date="${item.id}"]`)?.value||todayISO(),
+        seller:document.querySelector(`[data-import-purchase-seller="${item.id}"]`)?.value||"Aus CSV",
+        shipping:document.querySelector(`[data-import-purchase-shipping="${item.id}"]`)?.value||0,
+        extra:document.querySelector(`[data-import-purchase-extra="${item.id}"]`)?.value||0
+      }:{};
+      const result=await universalImportFile(item.file,{forcedType,purchaseDetails});
+      if(item.metadata.path&&item.metadata.signature)state.sync.processedFiles[item.metadata.path]=item.metadata.signature;
+      results.push(`<div class="success"><strong>${escapeHtml(item.metadata.path||item.fileName)}</strong><br>${escapeHtml(IMPORT_TYPE_LABELS[result.type]||result.type||"Import")} · ${Number(result.rows||0)} Positionen · ${Number(result.cards||0)} Karten${result.warning?`<br><span class="warning-text">${escapeHtml(result.warning)}</span>`:""}</div>`);
+    }catch(error){results.push(`<div class="error"><strong>${escapeHtml(item.fileName)}</strong><br>${escapeHtml(error.message)}</div>`);}
   }
-  out.innerHTML=results.join("");
+  pendingFolderImports=pendingFolderImports.filter(folder=>!selected.some(item=>item.metadata.path===folder.path&&item.metadata.signature===folder.signature));
+  saveState();updateAutomationUi();
+  document.getElementById("importPreviewDialog").close();
+  if(out)out.innerHTML=results.join("")||'<div class="muted">Es wurde keine Datei ausgewählt.</div>';
+  const folderOut=document.getElementById("folderSyncPreview");if(folderOut&&results.length)folderOut.innerHTML=results.join("");
+  pendingImportBatch=[];renderAll();
 }
 
 
@@ -2441,17 +2643,12 @@ async function scanSyncFolder(manual=false){
       if(state.sync.processedFiles[path]!==signature) newFiles.push({file,path,signature});
     }
     if(!newFiles.length){if(manual&&out)out.innerHTML='<div class="success">Keine neuen oder geänderten Dateien gefunden.</div>';updateAutomationUi();return;}
-    const results=[];
-    for(const item of newFiles){
-      try{
-        const r=await universalImportFile(item.file);
-        state.sync.processedFiles[item.path]=item.signature;
-        results.push(`<div class="success"><strong>${escapeHtml(item.path)}</strong><br>${escapeHtml(r.type||"Import")} · ${Number(r.rows||0)} Positionen · ${Number(r.cards||0)} Karten</div>`);
-      }catch(err){
-        results.push(`<div class="error"><strong>${escapeHtml(item.path)}</strong><br>${escapeHtml(err.message)}</div>`);
-      }
-    }
-    saveState();renderAll();updateAutomationUi();if(out)out.innerHTML=results.join("");
+    newFiles.forEach(item=>{
+      if(!pendingFolderImports.some(pending=>pending.path===item.path&&pending.signature===item.signature))pendingFolderImports.push(item);
+    });
+    updateAutomationUi();
+    if(out)out.innerHTML=`<div class="warning"><strong>${pendingFolderImports.length} Datei${pendingFolderImports.length===1?" wartet":"en warten"} auf Prüfung</strong><br>Es wurde noch nichts gespeichert. Öffne die Vorschau und bestätige die richtigen Importtypen.</div>`;
+    if(manual)await runUniversalImport(pendingFolderImports.map(item=>item.file),pendingFolderImports.map(item=>({path:item.path,signature:item.signature})));
   }catch(err){if(out)out.innerHTML=`<div class="error">${escapeHtml(err.message)}</div>`;}
 }
 
@@ -2467,6 +2664,7 @@ function updateAutomationUi(){
   const price=document.getElementById("autoPriceStatus");
   if(price) price.textContent=state.sync.lastPriceUpdate ? `Zuletzt aktualisiert: ${new Date(state.sync.lastPriceUpdate).toLocaleString("de-DE")}` : "Noch nicht aktualisiert";
   const folderToggle=document.getElementById("autoFolderSyncToggle"); if(folderToggle) folderToggle.checked=state.sync.autoFolder!==false;
+  const reviewButton=document.getElementById("reviewFolderImportsBtn");if(reviewButton){reviewButton.hidden=!pendingFolderImports.length;reviewButton.textContent=pendingFolderImports.length?`${pendingFolderImports.length} wartende Datei${pendingFolderImports.length===1?"":"en"} prüfen`:"Wartende Dateien prüfen";}
   const priceToggle=document.getElementById("autoPriceToggle"); if(priceToggle) priceToggle.checked=state.sync.autoPrices!==false;
 }
 
@@ -2581,6 +2779,14 @@ if(universalDrop){
   ["dragleave","drop"].forEach(ev=>universalDrop.addEventListener(ev,e=>{e.preventDefault();universalDrop.classList.remove("drag-active");}));
   universalDrop.addEventListener("drop",async e=>{await runUniversalImport([...e.dataTransfer.files]);});
 }
+document.getElementById("importPreviewClose").onclick=()=>document.getElementById("importPreviewDialog").close();
+document.getElementById("importPreviewCancel").onclick=()=>document.getElementById("importPreviewDialog").close();
+document.getElementById("importPreviewConfirm").onclick=()=>confirmImportPreview();
+document.getElementById("importPreviewContent").addEventListener("change",event=>{
+  const select=event.target.closest("[data-import-type]");if(!select)return;
+  const item=pendingImportBatch.find(row=>row.id===select.dataset.importType);if(!item)return;
+  item.type=select.value;item.blocked=item.duplicate||item.type==="unknown";renderImportPreviewDialog();
+});
 document.addEventListener("click",e=>{
   const type=e.target.dataset.template;
   if(type && GENERIC_TEMPLATES[type]) downloadTextFile(`TCG_${type}_Vorlage.csv`,GENERIC_TEMPLATES[type]);
@@ -2631,12 +2837,23 @@ const chooseFolderBtn=document.getElementById("chooseSyncFolderBtn");
 if(chooseFolderBtn) chooseFolderBtn.onclick=()=>chooseSyncFolder().catch(err=>alert(err.message));
 const scanFolderBtn=document.getElementById("scanSyncFolderBtn");
 if(scanFolderBtn) scanFolderBtn.onclick=()=>scanSyncFolder(true);
+const reviewFolderImportsBtn=document.getElementById("reviewFolderImportsBtn");
+if(reviewFolderImportsBtn)reviewFolderImportsBtn.onclick=()=>runUniversalImport(pendingFolderImports.map(item=>item.file),pendingFolderImports.map(item=>({path:item.path,signature:item.signature})));
 const folderToggle=document.getElementById("autoFolderSyncToggle");
 if(folderToggle) folderToggle.onchange=e=>{state.sync.autoFolder=e.target.checked;saveState();startFolderSyncTimer();updateAutomationUi();};
 const priceButton=document.getElementById("updateMarketPricesBtn");
 if(priceButton) priceButton.onclick=()=>updateOfficialMarketPrices(true).catch(()=>{});
 const priceToggle=document.getElementById("autoPriceToggle");
 if(priceToggle) priceToggle.onchange=e=>{state.sync.autoPrices=e.target.checked;saveState();updateAutomationUi();};
+
+document.getElementById("repairWorkflowsBtn").onclick=()=>repairWorkflowConsistency(true);
+document.getElementById("refreshBusinessHealthBtn").onclick=()=>{businessHealthDatabaseStatus=null;renderBusinessHealth(true);};
+document.addEventListener("click",event=>{
+  const reportButton=event.target.closest("[data-performance-report]");
+  if(reportButton){activePerformanceReport=reportButton.dataset.performanceReport;renderAdvancedPerformanceReport();return;}
+  const jump=event.target.closest("[data-view-jump]");
+  if(jump&&!jump.matches(".nav-item"))showView(jump.dataset.viewJump);
+});
 
 const purchaseImportDateField = document.getElementById("purchaseImportDate");
 if (purchaseImportDateField && !purchaseImportDateField.value) purchaseImportDateField.value = todayISO();

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 function isoNow() {
   return new Date().toISOString();
@@ -176,6 +176,7 @@ class TcgDatabase {
     try {
       if (currentVersion < 4) this.migrateToVersion4();
       if (currentVersion < 5) this.migrateToVersion5();
+      if (currentVersion < 6) this.migrateToVersion6();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -242,6 +243,7 @@ class TcgDatabase {
       ['csv_import', 'file_import', 'Cardmarket CSV-/HTML-Import', 1, 1, 20, ''],
       ['cardmarket_price_guide', 'official_download', 'Cardmarket Price Guide', 1, 1, 30, 'https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_3.json'],
       ['cardmarket_api', 'api', 'Cardmarket API (vorbereitet)', 0, 1, 40, 'https://apiv2.cardmarket.com/ws/v2.0'],
+      ['cardmarket_settlement', 'file_import', 'Cardmarket Abrechnungen', 1, 1, 50, ''],
       ['legacy_state', 'migration', 'Bestehender Programmstand', 1, 1, 90, '']
     ];
     const statement = this.db.prepare(`
@@ -309,6 +311,10 @@ class TcgDatabase {
       }
     }
     this.refreshObservationSummaries();
+  }
+
+  migrateToVersion6() {
+    this.ensureDataSources();
   }
 
   close() {
@@ -460,7 +466,8 @@ class TcgDatabase {
     const collections = [
       ['purchase', 'purchases'],
       ['sale', 'sales'],
-      ['inventory', 'inventory']
+      ['inventory', 'inventory'],
+      ['settlement', 'reconciliations']
     ];
     const insert = this.db.prepare(`
       INSERT INTO business_events (
@@ -694,6 +701,42 @@ class TcgDatabase {
         });
       }
     });
+
+    const reconciliations = Array.isArray(state?.reconciliations) ? state.reconciliations : [];
+    this.db.exec('DELETE FROM settlement_entries; DELETE FROM settlement_imports;');
+    const insertSettlement = this.db.prepare(`
+      INSERT INTO settlement_imports (
+        settlement_id, import_key, source_id, file_name, imported_at,
+        row_count, matched_count, unmatched_count, total_difference, raw_json, updated_at
+      ) VALUES (?, ?, 'cardmarket_settlement', ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertSettlementEntry = this.db.prepare(`
+      INSERT INTO settlement_entries (
+        entry_key, settlement_id, row_number, transaction_date, external_order_id,
+        matched_sale_id, description, amount, expected_payout, difference,
+        match_status, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    reconciliations.forEach((settlement, settlementIndex) => {
+      const settlementId = recordId(settlement, settlementIndex);
+      insertSettlement.run(
+        settlementId, String(settlement.importKey || settlementId), String(settlement.file || ''),
+        String(settlement.date || updatedAt), Number(settlement.rows || 0),
+        Number(settlement.matched || 0), Number(settlement.unmatched || 0),
+        numberValue(settlement.difference), JSON.stringify(settlement), updatedAt
+      );
+      (Array.isArray(settlement.entries) ? settlement.entries : []).forEach((entry, entryIndex) => {
+        const matched = Boolean(entry.matchedSaleId);
+        const exact = matched && Math.abs(numberValue(entry.difference)) < 0.02;
+        insertSettlementEntry.run(
+          `${settlementId}:row:${entry.row || entryIndex + 2}`, settlementId,
+          Number(entry.row || entryIndex + 2), String(entry.date || ''), String(entry.orderNo || ''),
+          String(entry.matchedSaleId || ''), String(entry.description || ''), numberValue(entry.amount),
+          numberValue(entry.expectedPayout), numberValue(entry.difference),
+          matched ? (exact ? 'matched' : 'difference') : 'unmatched', JSON.stringify(entry), updatedAt
+        );
+      });
+    });
   }
 
   createDailyBackup(json, updatedAt) {
@@ -726,9 +769,26 @@ class TcgDatabase {
         (SELECT COUNT(*) FROM trade_lines WHERE archived = 0) AS line_count,
         (SELECT COUNT(*) FROM market_observations) AS observation_count,
         (SELECT COUNT(*) FROM pricing_recommendations) AS recommendation_count,
+        (SELECT COUNT(*) FROM settlement_imports) AS settlement_count,
+        (SELECT COUNT(*) FROM settlement_entries WHERE match_status = 'unmatched') AS unmatched_settlement_count,
         (SELECT MAX(occurred_at) FROM business_events) AS latest_event_at,
         (SELECT MAX(observed_date) FROM market_observations) AS latest_market_date
     `).get();
+    const automaticRoot = path.join(this.backupRoot, 'Automatisch');
+    let backupCount = 0;
+    let latestBackupAt = '';
+    let latestBackupFile = '';
+    try {
+      const backups = fs.readdirSync(automaticRoot)
+        .filter(name => /^TCG_Auto_Backup_\d{4}-\d{2}-\d{2}\.json$/i.test(name))
+        .map(name => ({ name, stats: fs.statSync(path.join(automaticRoot, name)) }))
+        .sort((a, b) => b.stats.mtimeMs - a.stats.mtimeMs);
+      backupCount = backups.length;
+      latestBackupAt = backups[0]?.stats?.mtime?.toISOString() || '';
+      latestBackupFile = backups[0]?.name || '';
+    } catch (_error) {
+      // Vor dem ersten Speichern existiert der automatische Sicherungsordner noch nicht.
+    }
     return {
       ready: true,
       eventCount: Number(counts?.event_count || 0),
@@ -736,8 +796,13 @@ class TcgDatabase {
       tradeLineCount: Number(counts?.line_count || 0),
       marketObservationCount: Number(counts?.observation_count || 0),
       recommendationCount: Number(counts?.recommendation_count || 0),
+      settlementCount: Number(counts?.settlement_count || 0),
+      unmatchedSettlementCount: Number(counts?.unmatched_settlement_count || 0),
       latestEventAt: String(counts?.latest_event_at || ''),
       latestMarketDate: String(counts?.latest_market_date || ''),
+      backupCount,
+      latestBackupAt,
+      latestBackupFile,
       dataSources: this.getDataSources()
     };
   }

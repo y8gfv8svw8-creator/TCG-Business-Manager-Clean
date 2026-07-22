@@ -7,7 +7,7 @@
 - Benutzerdateien: außerhalb des Programmordners unter Dokumente/TCG Business Manager
 
 SQLite ist die dauerhafte Datenbasis. Neben dem vollständigen Programmstand enthält
-Schema v5 eine append-only Änderungshistorie, normalisierte Handelszeilen,
+Schema v6 eine append-only Änderungshistorie, normalisierte Handelszeilen,
 quellengetrennte Marktbeobachtungen und berechnete EK-/VK-Empfehlungen.
 
 Die spätere Cardmarket-API wird als zusätzliche Datenquelle angebunden. Externe

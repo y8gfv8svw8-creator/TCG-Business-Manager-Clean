@@ -400,3 +400,43 @@ CREATE TABLE IF NOT EXISTS pricing_recommendations (
   confidence_level TEXT NOT NULL DEFAULT 'low',
   explanation_json TEXT NOT NULL DEFAULT '[]'
 );
+
+-- Importierte Cardmarket-Kontobewegungen werden getrennt von den Verkäufen
+-- gespeichert. Eine spätere API-Anbindung kann dieselben Tabellen befüllen.
+CREATE TABLE IF NOT EXISTS settlement_imports (
+  settlement_id TEXT PRIMARY KEY,
+  import_key TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL,
+  file_name TEXT NOT NULL DEFAULT '',
+  imported_at TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  matched_count INTEGER NOT NULL DEFAULT 0,
+  unmatched_count INTEGER NOT NULL DEFAULT 0,
+  total_difference REAL NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE TABLE IF NOT EXISTS settlement_entries (
+  entry_key TEXT PRIMARY KEY,
+  settlement_id TEXT NOT NULL,
+  row_number INTEGER NOT NULL,
+  transaction_date TEXT NOT NULL DEFAULT '',
+  external_order_id TEXT NOT NULL DEFAULT '',
+  matched_sale_id TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  amount REAL NOT NULL DEFAULT 0,
+  expected_payout REAL NOT NULL DEFAULT 0,
+  difference REAL NOT NULL DEFAULT 0,
+  match_status TEXT NOT NULL DEFAULT '',
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(settlement_id) REFERENCES settlement_imports(settlement_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_entries_order
+ON settlement_entries(external_order_id, transaction_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_entries_match
+ON settlement_entries(match_status, transaction_date DESC);

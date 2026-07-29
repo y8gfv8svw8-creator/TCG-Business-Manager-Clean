@@ -22,6 +22,77 @@
     .replace(/[^a-zA-Z0-9]+/g, '')
     .toLowerCase();
 
+  const normalizeCollectorNumber = value => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    // Die Sprachkennung einer Setnummer ist keine eigene Druckvariante.
+    // RA01-DE008 und RA01-EN008 beschreiben deshalb dieselbe Kartennummer.
+    .replace(/(DE|EN|FR|IT|ES|PT)(?=\d{2,4}$)/, '');
+
+  const comparableNames = record => {
+    const names = [record?.name, record?.germanName, record?.englishName,
+      record?.officialName, record?.officialBaseName]
+      .map(value => normalizeField(String(value || '').replace(/\(\s*V\.?\s*\d+[^)]*\)\s*$/i, '')))
+      .filter(Boolean);
+    return [...new Set(names)];
+  };
+
+  function inspectCardAssignment(record = {}, catalogEntry = null, options = {}) {
+    const issues = [];
+    const productId = String(record.productId ?? '').match(/\d+/)?.[0] || '';
+    const add = (code, severity, label) => {
+      if (!issues.some(issue => issue.code === code)) issues.push({ code, severity, label });
+    };
+    if (!productId) add('missing-id', 'warning', 'Cardmarket-ID fehlt');
+
+    const set = String(record.set || record.setName || '').trim();
+    const collectorNumber = String(record.collectorNumber || record.setCode || '').trim();
+    const rarity = String(record.rarity || record.version || record.variant || '').trim();
+    if (!set) add('missing-set', 'warning', 'Set fehlt');
+    if (!collectorNumber) add('missing-number', 'warning', 'Setnummer fehlt');
+    if (!rarity) add('missing-rarity', 'warning', 'Seltenheit fehlt');
+
+    if (productId && !catalogEntry) {
+      if (options.catalogReady !== false) add('unknown-id', 'info', 'ID ist im aktuellen Katalog nicht prüfbar');
+      return { productId, issues, needsReview: issues.length > 0 };
+    }
+    if (!catalogEntry) return { productId, issues, needsReview: issues.length > 0 };
+
+    const recordNumbers = [record.collectorNumber, record.setCode].map(normalizeCollectorNumber).filter(Boolean);
+    const catalogNumbers = [catalogEntry.collectorNumber, catalogEntry.setCode].map(normalizeCollectorNumber).filter(Boolean);
+    if (recordNumbers.length && catalogNumbers.length && !recordNumbers.some(value => catalogNumbers.includes(value))) {
+      add('number-conflict', 'danger', 'Setnummer passt nicht zur Cardmarket-ID');
+    }
+
+    const recordSets = [record.set, record.setName].map(normalizeField).filter(Boolean);
+    const catalogSets = [catalogEntry.set, catalogEntry.setName].map(normalizeField).filter(Boolean);
+    if (recordSets.length && catalogSets.length && !recordSets.some(value => catalogSets.includes(value))) {
+      add('set-conflict', 'danger', 'Set passt nicht zur Cardmarket-ID');
+    }
+
+    const recordRarities = [record.rarity, record.version, record.variant].map(normalizeField).filter(Boolean);
+    const catalogRarities = [catalogEntry.rarity, catalogEntry.version, catalogEntry.variant].map(normalizeField).filter(Boolean);
+    const rarityMatches = recordRarities.some(left => catalogRarities.some(right => left === right || left.includes(right) || right.includes(left)));
+    if (recordRarities.length && catalogRarities.length && !rarityMatches) {
+      add('rarity-conflict', 'danger', 'Seltenheit passt nicht zur Cardmarket-ID');
+    }
+
+    const recordNames = comparableNames(record);
+    const catalogNames = comparableNames(catalogEntry);
+    const nameMatches = recordNames.some(left => catalogNames.some(right => left === right));
+    // Namen sind wegen deutscher/englischer Übersetzungen nur dann ein starkes
+    // Konfliktsignal, wenn der Katalog beide Sprachen kennt oder keine weiteren
+    // Druckdaten für einen sicheren Vergleich vorhanden sind.
+    const catalogHasBilingualNames = Boolean(catalogEntry.germanName && catalogEntry.englishName);
+    const hasStrongPrintComparison = recordNumbers.length && catalogNumbers.length;
+    if (recordNames.length && catalogNames.length && !nameMatches && (catalogHasBilingualNames || !hasStrongPrintComparison)) {
+      add('name-conflict', 'danger', 'Kartenname passt nicht zur Cardmarket-ID');
+    }
+    return { productId, issues, needsReview: issues.length > 0 };
+  }
+
   const normalizedRow = row => Object.fromEntries(
     Object.entries(row || {}).map(([key, value]) => [normalizeField(key), value])
   );
@@ -1221,6 +1292,8 @@
   return {
     asNumber,
     normalizeField,
+    normalizeCollectorNumber,
+    inspectCardAssignment,
     detectCsvImportType,
     calculateSaleProfit,
     purchaseBusinessCost,

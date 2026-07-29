@@ -1,0 +1,24 @@
+QA-Bericht TCG Business Manager 6.2.1
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Preis- und Oberflächendateien bestanden.
+- 60 automatisierte Tests bestanden, 0 fehlgeschlagen.
+- Neue Regressionstests für fehlende Druckdaten, widersprüchliche Produkt-IDs und sprachneutrale Setnummern bestanden.
+
+Datensicherheit
+- Die Zuordnung verändert keine Mengen, Preise, Eigentumsart, Reservierungen oder Verkaufsstatus.
+- Verknüpfte Korrekturen folgen ausschließlich gespeicherten Einkaufslos- und Verkaufszuordnungen.
+- Jede Änderung erhält einen Grund und einen protokollierten Bewegungsverlauf.
+
+Oberflächenprüfung
+- Reparaturcenter im dunklen Grau-Modus geöffnet und auf Lesbarkeit geprüft.
+- Offene Zuordnungen aus Marktbeobachtung und Wantlist wurden bereichsübergreifend angezeigt.
+- Suche nach Kartenname und Bereichsfilter reduzierten die Liste korrekt auf den passenden Eintrag.
+- Der Zuordnungsdialog zeigt aktuelle Druckdaten, Anzahl der sicher verknüpften Datensätze, Suchfeld, Pflichtgrund und den Schutz von Mengen, Preisen und Status.
+- Keine neuen Fehler oder Warnungen in der Browser-Konsole.
+
+Installer
+- Datei: dist\TCG Business Manager-Setup-6.2.1.exe
+- Größe: 126.201.946 Bytes
+- SHA-256: 602497DADC4E82B518F31E198692D680B61BE3E2162EA29F0904606904CA8836
+- Windows-x64-NSIS-Build erfolgreich erstellt.

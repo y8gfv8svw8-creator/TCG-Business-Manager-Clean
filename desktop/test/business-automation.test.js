@@ -9,6 +9,38 @@ test('erkennt Bestände, Einkäufe und Cardmarket-Abrechnungen ohne Dateinamen-T
   assert.equal(automation.detectCsvImportType('export.csv', ['Datum', 'Bestellnummer', 'Betrag', 'Beschreibung']), 'settlement');
 });
 
+test('findet fehlende Karten- und Druckzuordnungen in jedem Datensatz', () => {
+  const result = automation.inspectCardAssignment({ name: 'Kashtira Fenrir' }, null, { catalogReady: true });
+  assert.equal(result.needsReview, true);
+  assert.deepEqual(result.issues.map(issue => issue.code), ['missing-id', 'missing-set', 'missing-number', 'missing-rarity']);
+});
+
+test('behandelt deutsche und englische Setnummern als dieselbe Drucknummer', () => {
+  const result = automation.inspectCardAssignment({
+    productId: '741203', name: 'Aschenblüte & Freudiger Frühling',
+    set: 'RA01', collectorNumber: 'RA01-DE008', rarity: 'V.3 - Secret Rare'
+  }, {
+    productId: '741203', germanName: 'Aschenblüte & Freudiger Frühling', englishName: 'Ash Blossom & Joyous Spring',
+    set: 'RA01', setName: '25th Anniversary Rarity Collection', collectorNumber: 'RA01-EN008', rarity: 'Secret Rare'
+  });
+  assert.equal(result.issues.some(issue => issue.code === 'number-conflict'), false);
+  assert.equal(result.issues.some(issue => issue.code === 'rarity-conflict'), false);
+});
+
+test('markiert eine vorhandene aber widersprüchliche Cardmarket-ID zur Prüfung', () => {
+  const result = automation.inspectCardAssignment({
+    productId: '999', name: 'Kashtira Fenrir', set: 'DABL', collectorNumber: 'DABL-DE012', rarity: 'Ultra Rare'
+  }, {
+    productId: '999', germanName: 'Raigeki', englishName: 'Raigeki', set: 'LOB', setName: 'Legend of Blue Eyes',
+    collectorNumber: 'LOB-EN053', rarity: 'Super Rare'
+  });
+  assert.equal(result.needsReview, true);
+  assert.ok(result.issues.some(issue => issue.code === 'number-conflict'));
+  assert.ok(result.issues.some(issue => issue.code === 'set-conflict'));
+  assert.ok(result.issues.some(issue => issue.code === 'rarity-conflict'));
+  assert.ok(result.issues.some(issue => issue.code === 'name-conflict'));
+});
+
 test('gleicht Cardmarket-Buchungen über die Bestellnummer mit erwarteten Nettoauszahlungen ab', () => {
   const result = automation.reconcileSettlementRows([
     { Datum: '2026-07-20', Bestellnummer: '123456789', Betrag: '10,45 €', Beschreibung: 'Auszahlung' },

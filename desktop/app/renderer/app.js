@@ -101,7 +101,7 @@ function collectUserProductIds() {
     if (productId) ids.add(productId);
     ["pendingItems", "items"].forEach(key => visit(value[key], depth + 1));
   };
-  [state.inventory, state.purchases, state.sales, state.watchlist].forEach(value => visit(value));
+  [state.inventory, state.privateCollection, state.purchases, state.sales, state.watchlist, state.wantlists].forEach(value => visit(value));
   return [...ids].sort((a, b) => Number(a) - Number(b));
 }
 
@@ -217,15 +217,22 @@ function applyBusinessProductMetadata(products=[]) {
       if(!value||!missingBusinessPrintField(source,record[target]))return;
       record[target]=value;changed++;
     });
+    if(watchlist){
+      [["setName",metadata.setName],["collectorNumber",metadata.collectorNumber],["rarity",metadata.rarity]].forEach(([field,value])=>{
+        if(value&&missingBusinessPrintField(field,record[field])){record[field]=value;changed++;}
+      });
+    }
   };
   const records=[];
   (state.inventory||[]).forEach(record=>records.push(record));
+  (state.privateCollection||[]).forEach(record=>records.push(record));
   (state.purchases||[]).forEach(order=>(order.pendingItems||[]).forEach(record=>records.push(record)));
   (state.sales||[]).forEach(order=>(order.items||[]).forEach(record=>records.push(record)));
   records.forEach(record=>apply(record,byId.get(cleanProductId(record.productId))));
   (state.watchlist||[]).forEach(record=>apply(record,byId.get(cleanProductId(record.productId)),true));
+  (state.wantlists||[]).forEach(list=>(list.entries||[]).forEach(record=>apply(record,byId.get(cleanProductId(record.productId)),true)));
 
-  const usedIds=new Set([...records,...(state.watchlist||[])].map(record=>cleanProductId(record.productId)).filter(Boolean));
+  const usedIds=new Set([...records,...(state.watchlist||[]),...(state.wantlists||[]).flatMap(list=>list.entries||[])].map(record=>cleanProductId(record.productId)).filter(Boolean));
   usedIds.forEach(productId=>{
     const product=byId.get(productId);if(!product)return;
     const current=state.productCatalog[productId]||{productId};
@@ -1215,14 +1222,41 @@ function openHistoricalCostRepair(saleId){
   });
 }
 
+let cardRepairRowsByKey=new Map();
+let cardRepairAreaFilter="";
+let cardRepairIssueFilter="";
+let cardRepairSearch="";
+
+function collectCardAssignmentRepairs(){
+  const rows=[];
+  const add=(area,areaLabel,key,record,context={})=>{
+    if(!record||typeof record!=="object")return;
+    const productId=cleanProductId(record.productId);
+    const rawCatalog=productId?(state.productCatalog?.[productId]||BUILTIN_PRODUCT_CATALOG[productId]):null;
+    const catalog=rawCatalog?{productId,...rawCatalog,...catalogCardData({productId})}:null;
+    const inspection=window.TcgBusinessAutomation?.inspectCardAssignment?.(record,catalog,{catalogReady:Object.keys(state.productCatalog||{}).length>0});
+    if(!inspection?.needsReview)return;
+    rows.push({area,areaLabel,key,record,context,inspection,catalog});
+  };
+  (state.inventory||[]).forEach(item=>add("inventory","Bestand",`inventory:${item.id}`,item,{itemId:item.id}));
+  (state.privateCollection||[]).forEach(item=>add("private","Privatsammlung",`private:${item.id}`,item,{itemId:item.id}));
+  (state.purchases||[]).forEach(purchase=>(purchase.pendingItems||[]).forEach((item,index)=>add("purchase","Einkauf",`purchase:${purchase.id}:${index}`,item,{purchase,index,orderNo:purchase.orderNo})));
+  (state.sales||[]).forEach(sale=>(sale.items||[]).forEach((item,index)=>add("sale","Verkauf",`sale:${sale.id}:${index}`,item,{sale,index,orderNo:sale.orderNo})));
+  (state.watchlist||[]).filter(item=>!item.archived).forEach(item=>add("watch","Marktbeobachtung",`watch:${item.id}`,item,{watchId:item.id}));
+  (state.wantlists||[]).forEach(list=>(list.entries||[]).filter(entry=>!entry.archived).forEach(entry=>add("want","Wantlist",`want:${list.id}:${entry.id}`,entry,{list,listId:list.id,entryId:entry.id})));
+  cardRepairRowsByKey=new Map(rows.map(row=>[row.key,row]));
+  return rows;
+}
+
+function cardRepairReference(row){
+  if(row.area==="purchase")return `Einkauf #${row.context.orderNo||"-"}`;
+  if(row.area==="sale")return `Verkauf #${row.context.orderNo||"-"}`;
+  if(row.area==="want")return row.context.list?.name||"Wantlist";
+  return row.areaLabel;
+}
+
 function dataRepairRecords(){
-  const missingInventory=(state.inventory||[]).filter(item=>!String(item.productId||"").match(/\d/));
-  const purchaseRows=[];
-  (state.purchases||[]).forEach(purchase=>(purchase.pendingItems||[]).forEach((item,index)=>{
-    const missingId=!String(item.productId||"").match(/\d/);
-    const incomplete=String(item.productId||"").match(/\d/)&&(!String(item.set||item.setName||"").trim()||!String(item.collectorNumber||"").trim()||!String(item.rarity||"").trim());
-    if(missingId||incomplete)purchaseRows.push({purchase,item,index,missingId,incomplete});
-  }));
+  const assignmentRows=collectCardAssignmentRepairs();
   const sales=(state.sales||[]).filter(sale=>{
     const calc=calculateSaleProfit(sale);
     const requested=(sale.items||[]).length?(sale.items||[]).reduce((sum,item)=>sum+Math.max(1,Number(item.quantity||1)),0):Math.max(0,Number(sale.quantity||0));
@@ -1230,7 +1264,7 @@ function dataRepairRecords(){
     const missingLots=requested>new Set(sale.itemIds||[]).size;
     return sale.status!=="Storniert"&&sale.status!=="Rückgabe eingetroffen"&&requested>0&&!historicalResolution&&(!calc.costKnown||missingLots);
   });
-  return {missingInventory,purchaseRows,sales};
+  return {assignmentRows,sales};
 }
 
 function renderDataRepairCenter(){
@@ -1238,10 +1272,118 @@ function renderDataRepairCenter(){
   const records=dataRepairRecords();
   const unknownConfirmed=(state.sales||[]).filter(sale=>sale.historicalCostStatus==="unknown").length;
   const section=(title,count,body)=>`<section class="repair-section"><div class="repair-section-head"><div><h3>${escapeHtml(title)}</h3><small>${count} offen</small></div></div>${body}</section>`;
-  const inventoryBody=records.missingInventory.length?`<div class="repair-list">${records.missingInventory.slice(0,50).map(item=>`<div class="repair-row"><div><strong>${escapeHtml(item.name||"Unbekannte Karte")}</strong><small>${escapeHtml([item.setName||item.set,item.collectorNumber,item.rarity].filter(Boolean).join(" · ")||"Druckvariante noch nicht zugeordnet")}</small></div><button type="button" class="secondary" data-repair-inventory-id="${escapeHtml(item.id)}">Karte zuordnen</button></div>`).join("")}</div>`:`<div class="success">Alle Bestandskarten besitzen eine Cardmarket-ID.</div>`;
-  const purchaseBody=records.purchaseRows.length?`<div class="repair-toolbar"><button type="button" class="secondary" id="repairMetadataBtn">Bekannte Kartendaten automatisch ergänzen</button><small>Nur eindeutige Treffer werden übernommen.</small></div><div class="repair-list">${records.purchaseRows.slice(0,75).map(row=>`<div class="repair-row"><div><strong>Einkauf #${escapeHtml(row.purchase.orderNo||"-")} · ${escapeHtml(row.item.name||"Karte")}</strong><small>${row.missingId?"Cardmarket-ID fehlt":"Set, Setnummer oder Seltenheit unvollständig"}</small></div><button type="button" class="secondary" data-repair-purchase-id="${escapeHtml(row.purchase.id)}" data-repair-purchase-line="${row.index}">Korrigieren</button></div>`).join("")}</div>`:`<div class="success">Alle Einkaufspositionen sind eindeutig zugeordnet.</div>`;
+  const areaCounts=records.assignmentRows.reduce((map,row)=>(map[row.area]=(map[row.area]||0)+1,map),{});
+  const criticalCount=records.assignmentRows.filter(row=>row.inspection.issues.some(issue=>issue.severity==="danger")).length;
+  const filtered=records.assignmentRows.filter(row=>(!cardRepairAreaFilter||row.area===cardRepairAreaFilter)&&(!cardRepairIssueFilter||row.inspection.issues.some(issue=>issue.code===cardRepairIssueFilter))&&(!cardRepairSearch||cardRecordMatchesSearch(row.record,cardRepairSearch)||normalizeSearchTerm(cardRepairReference(row)).includes(normalizeSearchTerm(cardRepairSearch))));
+  const issueOptions=[...new Map(records.assignmentRows.flatMap(row=>row.inspection.issues).map(issue=>[issue.code,issue.label])).entries()];
+  const assignmentBody=records.assignmentRows.length?`<div class="repair-toolbar card-repair-toolbar"><input id="cardRepairSearch" placeholder="Karte, Setnummer oder Bestellung suchen …" value="${escapeHtml(cardRepairSearch)}"><select id="cardRepairAreaFilter"><option value="">Alle Bereiche</option>${[["inventory","Bestand"],["private","Privatsammlung"],["purchase","Einkäufe"],["sale","Verkäufe"],["watch","Marktbeobachtung"],["want","Wantlisten"]].map(([value,label])=>`<option value="${value}" ${cardRepairAreaFilter===value?"selected":""}>${label} (${areaCounts[value]||0})</option>`).join("")}</select><select id="cardRepairIssueFilter"><option value="">Alle Hinweise</option>${issueOptions.map(([value,label])=>`<option value="${escapeHtml(value)}" ${cardRepairIssueFilter===value?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select><button type="button" class="secondary" id="repairMetadataBtn">Eindeutige Daten automatisch ergänzen</button></div><div class="repair-result-count">${filtered.length} von ${records.assignmentRows.length} Zuordnungen angezeigt</div><div class="repair-list card-assignment-repair-list">${filtered.slice(0,200).map(row=>{const names=cardDisplayNames(row.record);return `<div class="repair-row ${row.inspection.issues.some(issue=>issue.severity==="danger")?"repair-row-danger":""}"><div><span class="repair-area-badge">${escapeHtml(row.areaLabel)}</span><strong>${escapeHtml(names.primary||"Unbekannte Karte")}</strong><small>${escapeHtml(cardRepairReference(row))} · ${escapeHtml([row.record.setName||row.record.set,row.record.collectorNumber,row.record.rarity||row.record.version,`CM ${row.inspection.productId||"fehlt"}`].filter(Boolean).join(" · "))}</small><div class="repair-issue-list">${row.inspection.issues.map(issue=>`<span class="repair-issue ${issue.severity}">${escapeHtml(issue.label)}</span>`).join("")}</div></div><button type="button" class="secondary" data-card-repair-key="${escapeHtml(row.key)}">Zuordnung prüfen</button></div>`;}).join("")||'<div class="empty">Für diesen Filter gibt es keine offenen Zuordnungen.</div>'}</div>`:`<div class="success">Alle Karten in allen Bereichen sind vollständig und plausibel zugeordnet.</div>`;
   const salesBody=records.sales.length?`<div class="repair-list">${records.sales.map(sale=>`<div class="repair-row"><div><strong>Verkauf #${escapeHtml(sale.orderNo||"-")}</strong><small>${Number(sale.quantity||0)} Karte(n) · der bisher angezeigte Gewinn ist nicht belastbar</small></div><div class="row-actions"><button type="button" class="secondary" data-repair-sale-allocation="${escapeHtml(sale.id)}">Lose suchen</button><button type="button" class="primary" data-repair-sale-cost="${escapeHtml(sale.id)}">Wareneinsatz klären</button></div></div>`).join("")}</div>`:`<div class="success">Alle abgeschlossenen Verkäufe besitzen einen bestätigten Wareneinsatz.</div>`;
-  target.innerHTML=`<div class="repair-summary"><div><small>Bestand ohne ID</small><strong>${records.missingInventory.length}</strong></div><div><small>Einkaufsdaten offen</small><strong>${records.purchaseRows.length}</strong></div><div><small>Verkäufe zu klären</small><strong>${records.sales.length}</strong></div><div><small>Bewusst unbekannt</small><strong>${unknownConfirmed}</strong></div></div><div class="info repair-safety-note"><strong>Sicherheitsregel:</strong> Korrekturen ändern vorhandene Datensätze. Es werden keine Karten neu in den Bestand eingebucht. Bewusst unbekannte Einstandspreise fließen nicht in Gewinn- oder Preislernwerte ein.</div>${section("Bestandskarten zuordnen",records.missingInventory.length,inventoryBody)}${section("Einkaufs- und Druckdaten vervollständigen",records.purchaseRows.length,purchaseBody)}${section("Historischen Wareneinsatz klären",records.sales.length,salesBody)}`;
+  target.innerHTML=`<div class="repair-summary"><div><small>Kartenzuordnungen offen</small><strong>${records.assignmentRows.length}</strong></div><div><small>Widersprüchliche IDs</small><strong class="${criticalCount?"money-negative":"money-positive"}">${criticalCount}</strong></div><div><small>Verkäufe zu klären</small><strong>${records.sales.length}</strong></div><div><small>Bewusst unbekannt</small><strong>${unknownConfirmed}</strong></div></div><div class="info repair-safety-note"><strong>Sicherheitsregel:</strong> Eine bestätigte Kartenzuordnung ändert nur Namen, Cardmarket-ID und Druckdaten. Mengen, Besitzart, Einstand, Inseratspreis, Reservierungen und Verkäufe bleiben unverändert. Verknüpfte Einkaufs-, Bestands- und Verkaufsdatensätze werden gemeinsam berichtigt.</div>${section("Karten- und Druckzuordnung in allen Bereichen",records.assignmentRows.length,assignmentBody)}${section("Historischen Wareneinsatz klären",records.sales.length,salesBody)}`;
+}
+
+function purchaseRepairLinkKey(purchase,line,index){
+  return `${purchase.id}:${line.receiptLineKey||TcgBusinessAutomation.purchaseLineKey(line,index)}`;
+}
+
+function linkedCardRepairTargets(row){
+  const targets=[];
+  const recordsSeen=new Set();
+  const linkKeys=new Set();
+  const assetIds=new Set();
+  const add=(record,label,area)=>{
+    if(!record||recordsSeen.has(record))return;
+    recordsSeen.add(record);targets.push({record,label,area});
+  };
+  add(row.record,cardRepairReference(row),row.area);
+  if(["inventory","private"].includes(row.area)){
+    if(row.record.id)assetIds.add(row.record.id);
+    if(row.record.purchaseLineKey)linkKeys.add(row.record.purchaseLineKey);
+  }
+  if(row.area==="purchase")linkKeys.add(purchaseRepairLinkKey(row.context.purchase,row.record,row.context.index));
+  if(row.area==="sale")(row.record.matchedItemIds||[]).forEach(id=>assetIds.add(id));
+
+  const assets=[...(state.inventory||[]),...(state.privateCollection||[])];
+  for(let pass=0;pass<2;pass++)assets.forEach(asset=>{
+    if((asset.id&&assetIds.has(asset.id))||(asset.purchaseLineKey&&linkKeys.has(asset.purchaseLineKey))){
+      add(asset,asset.ownership==="private"?"Privatsammlung":"Bestand",asset.ownership==="private"?"private":"inventory");
+      if(asset.id)assetIds.add(asset.id);
+      if(asset.purchaseLineKey)linkKeys.add(asset.purchaseLineKey);
+    }
+  });
+  (state.purchases||[]).forEach(purchase=>(purchase.pendingItems||[]).forEach((line,index)=>{
+    if(linkKeys.has(purchaseRepairLinkKey(purchase,line,index)))add(line,`Einkauf #${purchase.orderNo||"-"}`,"purchase");
+  }));
+  (state.sales||[]).forEach(sale=>(sale.items||[]).forEach(line=>{
+    if((line.matchedItemIds||[]).some(id=>assetIds.has(id)))add(line,`Verkauf #${sale.orderNo||"-"}`,"sale");
+  }));
+  return targets;
+}
+
+function applyCardRepairIdentity(row,data,reason){
+  const targets=linkedCardRepairTargets(row);
+  const productId=cleanProductId(data.productId);
+  if(!productId)return 0;
+  const patch={
+    productId,metacardId:cleanProductId(data.metacardId),name:String(data.name||"").trim(),
+    germanName:String(data.germanName||data.name||"").trim(),englishName:String(data.englishName||"").trim(),
+    set:String(data.set||"").trim(),setName:String(data.setName||"").trim(),
+    rarity:String(data.rarity||"").trim(),collectorNumber:String(data.collectorNumber||"").trim(),
+    productUrl:String(data.productUrl||"").trim(),cardPasscode:String(data.cardPasscode||"").trim()
+  };
+  const previousIds=[...new Set(targets.map(target=>cleanProductId(target.record.productId)||"fehlt"))];
+  targets.forEach(target=>{
+    if(target.area==="want"){
+      target.record.history=Array.isArray(target.record.history)?target.record.history:[];
+      target.record.history.push({at:new Date().toISOString(),productId:target.record.productId||"",name:target.record.name||"",set:target.record.set||target.record.setName||"",version:target.record.version||target.record.rarity||"",collectorNumber:target.record.collectorNumber||"",action:"Druckzuordnung im Reparaturcenter korrigiert"});
+      target.record.history=target.record.history.slice(-100);
+    }
+    Object.assign(target.record,patch);
+    if(target.area==="watch"||target.area==="want"||Object.prototype.hasOwnProperty.call(target.record,"version"))target.record.version=patch.rarity;
+    if(target.area==="want")target.record.manuallyAssignedAt=new Date().toISOString();
+  });
+  state.productCatalog[productId]={...(state.productCatalog[productId]||{}),...patch,productId};
+  const touchedPurchases=new Set();
+  targets.forEach(target=>{
+    if(target.area==="purchase"){
+      const purchase=(state.purchases||[]).find(order=>(order.pendingItems||[]).includes(target.record));
+      if(purchase)touchedPurchases.add(purchase);
+    }
+  });
+  touchedPurchases.forEach(purchase=>refreshPurchaseAssetCosts(purchase));
+  addMovement({type:"Kartenzuordnung korrigiert",quantity:0,productId,reference:cardRepairReference(row),note:`CM ${previousIds.join("/")} → ${productId} · ${targets.length} verknüpfte Datensätze · ${String(reason||"").trim()}`});
+  return targets.length;
+}
+
+function openCardAssignmentRepair(row){
+  if(!row)return;
+  const targets=linkedCardRepairTargets(row);
+  inventoryCardSearchSequence++;inventoryPriceSequence++;
+  document.getElementById("modalTitle").textContent=`${row.areaLabel}: Karte und Druckvariante zuordnen`;
+  const wrap=document.getElementById("modalFields");
+  const current=[row.record.setName||row.record.set,row.record.collectorNumber,row.record.rarity||row.record.version,`CM ${cleanProductId(row.record.productId)||"fehlt"}`].filter(Boolean).join(" · ");
+  wrap.innerHTML=`
+    <div class="info full-width"><strong>Aktuell:</strong> ${escapeHtml(row.record.name||"Unbekannte Karte")}<br>${escapeHtml(current||"Noch keine Druckdaten")}<br><strong>${targets.length} Datensatz${targets.length===1?"":"sätze"}</strong> ${targets.length===1?"wird":"werden"} sicher gemeinsam berichtigt. Mengen, Preise und Status bleiben unverändert.</div>
+    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(row.record.collectorNumber||row.record.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Bitte die richtige Cardmarket-Druckvariante auswählen.</span></div>
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
+    <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
+    <input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Der Preis wird hier nicht verändert.</span></div>
+    <label class="full-width">Grund der Korrektur<input name="reason" value="Fehlende oder falsche Karten- und Druckzuordnung korrigiert" required></label>`;
+  wrap.dataset.inventorySelection="required";
+  modalHandler=data=>{
+    if(!data.productId||!data.name){alert("Bitte zuerst die richtige Druckvariante aus der Ergebnisliste auswählen.");return false;}
+    if(!String(data.reason||"").trim()){alert("Bitte einen kurzen Grund für die Korrektur eintragen.");return false;}
+    applyCardRepairIdentity(row,data,data.reason);
+    setTimeout(openDataRepairCenter,0);
+    return true;
+  };
+  let searchTimer;
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  inventoryModalVariants=new Map();configureModalAction({submitLabel:"Zuordnung übernehmen"});showDialogSafely(document.getElementById("modal"));
+  const query=row.record.collectorNumber||row.record.name||row.record.germanName||row.record.englishName||"";
+  if(query)setTimeout(()=>renderInventoryCardSearch(query),0);
 }
 
 function openDataRepairCenter(){
@@ -5062,17 +5204,22 @@ document.getElementById("repairWorkflowsBtn").onclick=openDataRepairCenter;
 document.getElementById("openDataRepairBtn").onclick=openDataRepairCenter;
 document.getElementById("dataRepairClose").onclick=()=>document.getElementById("dataRepairDialog").close();
 document.getElementById("dataRepairCloseBottom").onclick=()=>document.getElementById("dataRepairDialog").close();
+document.getElementById("dataRepairContent").addEventListener("input",event=>{
+  if(event.target.id!=="cardRepairSearch")return;
+  cardRepairSearch=event.target.value;
+  const position=event.target.selectionStart;
+  renderDataRepairCenter();
+  requestAnimationFrame(()=>{const input=document.getElementById("cardRepairSearch");input?.focus({preventScroll:true});if(input&&position!==null)input.setSelectionRange(position,position);});
+});
+document.getElementById("dataRepairContent").addEventListener("change",event=>{
+  if(event.target.id==="cardRepairAreaFilter")cardRepairAreaFilter=event.target.value;
+  else if(event.target.id==="cardRepairIssueFilter")cardRepairIssueFilter=event.target.value;
+  else return;
+  renderDataRepairCenter();
+});
 document.getElementById("dataRepairContent").addEventListener("click",async event=>{
-  const inventoryButton=event.target.closest("[data-repair-inventory-id]");
-  if(inventoryButton){const item=state.inventory.find(row=>row.id===inventoryButton.dataset.repairInventoryId);if(item){document.getElementById("dataRepairDialog").close();addInventory(item,"business");}return;}
-  const purchaseButton=event.target.closest("[data-repair-purchase-id]");
-  if(purchaseButton){
-    const purchase=state.purchases.find(row=>row.id===purchaseButton.dataset.repairPurchaseId),line=purchase?.pendingItems?.[Number(purchaseButton.dataset.repairPurchaseLine)];
-    document.getElementById("dataRepairDialog").close();
-    if(line&&!String(line.productId||"").match(/\d/))repairPurchaseLineIdentity(purchase.id,Number(purchaseButton.dataset.repairPurchaseLine));
-    else editPurchaseLine(purchaseButton.dataset.repairPurchaseId,Number(purchaseButton.dataset.repairPurchaseLine));
-    return;
-  }
+  const cardButton=event.target.closest("[data-card-repair-key]");
+  if(cardButton){const row=cardRepairRowsByKey.get(cardButton.dataset.cardRepairKey);if(row){document.getElementById("dataRepairDialog").close();openCardAssignmentRepair(row);}return;}
   const allocationButton=event.target.closest("[data-repair-sale-allocation]");
   if(allocationButton){document.getElementById("dataRepairDialog").close();openSaleAllocation(allocationButton.dataset.repairSaleAllocation);return;}
   const costButton=event.target.closest("[data-repair-sale-cost]");
@@ -5080,9 +5227,9 @@ document.getElementById("dataRepairContent").addEventListener("click",async even
   if(event.target.closest("#repairMetadataBtn")){
     const button=event.target.closest("#repairMetadataBtn");button.disabled=true;button.textContent="Kartendaten werden geprüft …";
     try{
-      const before=dataRepairRecords().purchaseRows.length;
+      const before=dataRepairRecords().assignmentRows.length;
       await window.tcgBackfillBusinessPrintMetadata?.();
-      const changed=Math.max(0,before-dataRepairRecords().purchaseRows.length);
+      const changed=Math.max(0,before-dataRepairRecords().assignmentRows.length);
       if(Number(changed||0)>0){addMovement({type:"Datenreparatur",quantity:0,reference:"Kartendatenbank",note:`${Number(changed)} eindeutige Namens- oder Druckdaten ergänzt`});saveState();renderAll();}
       renderDataRepairCenter();
       alert(Number(changed||0)>0?`${Number(changed)} eindeutige Kartendaten wurden ergänzt. Nicht eindeutige Varianten bleiben bewusst zur manuellen Prüfung offen.`:"Es wurden keine weiteren eindeutigen Kartendaten gefunden. Die verbleibenden Positionen müssen manuell geprüft werden.");

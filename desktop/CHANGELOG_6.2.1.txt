@@ -1,0 +1,18 @@
+TCG Business Manager 6.2.1 – Karten- und Druckzuordnung in allen Bereichen
+
+Neu
+- Das Reparaturcenter prüft Bestand, Privatsammlung, Einkäufe, Verkaufspositionen, Marktbeobachtung und Wantlisten gemeinsam.
+- Fehlende Cardmarket-IDs, Sets, Setnummern und Seltenheiten werden ebenso angezeigt wie plausible Widersprüche zu einer vorhandenen Produkt-ID.
+- Bereich, Hinweisart und Kartenname beziehungsweise Setnummer lassen sich filtern.
+- Die vollständige deutsche und englische Druckvariantensuche steht direkt im Reparaturdialog zur Verfügung.
+
+Korrigiert
+- Bereits vorhandene, aber unpassende Cardmarket-IDs können jetzt geprüft und ersetzt werden.
+- Eine bestätigte Zuordnung wird entlang echter Verknüpfungen zwischen Einkauf, konkretem Bestandsexemplar und Verkaufsposition übernommen.
+- Privatsammlung und Wantlisten werden bei der automatischen Ergänzung bekannter Druckdaten nicht mehr ausgelassen.
+- Deutsche und englische Setnummern derselben Karte, zum Beispiel RA01-DE008 und RA01-EN008, werden nicht fälschlich als unterschiedliche Drucknummer bewertet.
+
+Sicherheit
+- Es werden keine Karten neu eingebucht und keine Datensätze pauschal über eine alte Produkt-ID verändert.
+- Mengen, Besitzart, Einstandspreise, Inseratspreise, Reservierungen, Verkäufe und Status bleiben bei der Zuordnung unverändert.
+- Jede manuelle Korrektur verlangt eine bestätigte Druckvariante und wird im Bewegungsverlauf protokolliert.

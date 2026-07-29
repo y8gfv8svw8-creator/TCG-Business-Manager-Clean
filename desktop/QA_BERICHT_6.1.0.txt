@@ -1,0 +1,20 @@
+QA-Bericht TCG Business Manager 6.1.0
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Preis- und Oberflächendateien
+- 53 automatisierte Tests bestanden
+- Neue Tests für FIFO/günstigster/höchster EK
+- Neue Tests für Warenkorb-Nebenkosten, private Mengen und fehlende Marktdaten
+- Neue Tests für Einkaufsleistung und Nachfrage-Radar
+
+Oberflächenprüfung
+- Neuer Menüpunkt „Einkaufsplanung & Nachfrage“ öffnet korrekt
+- Warenkorbzeile wird eingelesen und in vollständigen EK, VK, Gewinn und ROI zerlegt
+- Dunkler Grau-Modus geprüft
+- Keine neuen Fehler in der Browser-Konsole
+
+Wichtige fachliche Grenzen
+- YGOPRODeck liefert Karten-, Set-, Archetyp-, Staple- und Banlistinformationen, aber keine vollständigen Cardmarket-Turnierhistorien.
+- Echte Meta-Häufigkeiten werden deshalb nur aus einer vom Nutzer importierten, gekennzeichneten CSV-/JSON-Quelle berechnet.
+- Price Guide und Produktkatalog bleiben die Quelle für konkrete Cardmarket-Druckvarianten und Marktpreise.
+

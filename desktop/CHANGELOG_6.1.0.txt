@@ -1,0 +1,20 @@
+TCG Business Manager 6.1.0 – Einkaufsplanung und Nachfrage-Radar
+
+Neu
+- Bestand zeigt vollständigen EK je physischem Exemplar mit Kartenpreis, anteiligem Einkaufsversand und Zusatzkosten.
+- Einkaufslos führt direkt zur ursprünglichen Bestellung und dokumentiert späteren Verkauf, VK, Gewinn und ROI.
+- Bestandsampel vergleicht EK mit dem marktgerechten VK: Grün, Gelb, Rot oder Grau bei fehlenden Daten.
+- Filter und Sortierung nach Wirtschaftlichkeit, fehlendem EK, EK-Höhe und erwartetem ROI.
+- Verkaufszuordnung wahlweise FIFO, niedrigster EK, höchster EK oder vollständig manuell.
+- Einkaufsbestellungen zeigen realisierten Umsatz/Gewinn, Restbestand, gebundenes Kapital, Marktwert und Prognose.
+- Neuer Warenkorb-Prüfer für HTML, CSV, JSON und eingefügte Positionen – ohne automatische Bestellung.
+- Einkaufsentwürfe speichern private Mengen getrennt und lassen sich einmalig in eine Bestellung überführen.
+- Neuer Nachfrage- und Shop-Radar für TCG-Staples sowie importierte Deck-/Turnierdaten.
+- Radar verbindet Nachfrage, eigene Verkäufe, Bestand, Marktpreise und Risiko mit begründeten Empfehlungen.
+
+Sicherheit
+- Vorhandene Bestände, Reservierungen, Verkäufe und Cardmarket-Produkt-IDs werden nicht neu angelegt oder gelöscht.
+- Einkaufsentwürfe und Nachfragedaten werden zusammen mit dem Programmstand dauerhaft in SQLite gesichert.
+- Meta-Daten speichern Quelle, Datenstand und Importzeitpunkt. Ohne belastbare Quelle werden keine Turnierdaten erfunden.
+- Der Warenkorb-Prüfer bestellt niemals selbst bei Cardmarket.
+

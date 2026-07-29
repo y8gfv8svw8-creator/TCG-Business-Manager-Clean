@@ -10,7 +10,13 @@ test('ergänzt neue Einstellungen verlustfrei bei alten Programmständen', () =>
   assert.equal(settings.scannerEnabled, true);
   assert.equal(settings.targetRoi, 30);
   assert.equal(settings.expectedCardsPerOrder, 3);
+  assert.equal(settings.saleAllocationStrategy, 'fifo');
   assert.equal(settings.customFutureValue, 'bleibt');
+});
+
+test('akzeptiert nur bekannte Strategien für die Einkaufslose', () => {
+  assert.equal(normalizeSettings({saleAllocationStrategy:'highest-cost'}).saleAllocationStrategy,'highest-cost');
+  assert.equal(normalizeSettings({saleAllocationStrategy:'beliebig'}).saleAllocationStrategy,'fifo');
 });
 
 test('begrenzt fehlerhafte Einstellungen auf sichere Werte', () => {

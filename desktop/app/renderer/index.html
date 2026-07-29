@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.0.5</title>
+  <title>TCG Business Manager 6.1.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.0.5 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.1.0 · SQLite</div>
         </div>
       </div>
 
@@ -26,6 +26,7 @@
         <button class="nav-item" data-view="materials">Versandmaterial</button>
         <button class="nav-item" data-view="expenses">Ausgaben</button>
         <button class="nav-item" data-view="watchlist">Marktbeobachtung</button>
+        <button class="nav-item" data-view="buying">Einkaufsplanung & Nachfrage</button>
         <button class="nav-item" data-view="cardmarket">Cardmarket-Datencenter</button>
         <button class="nav-item" data-view="partners">Händler & Kunden</button>
         <button class="nav-item" data-view="imports">Importe</button>
@@ -149,7 +150,8 @@
           <label>Zustand<select id="inventoryConditionFilter"><option value="">Alle Zustände</option></select></label>
           <label>Lagerdauer<select id="inventoryAgeFilter"><option value="">Jedes Alter</option><option value="0-30">0–30 Tage</option><option value="31-60">31–60 Tage</option><option value="61-90">61–90 Tage</option><option value="91+">Über 90 Tage</option></select></label>
           <label>Datenqualität<select id="inventoryQualityFilter"><option value="">Alle Daten</option><option value="complete">Vollständig</option><option value="incomplete">Druckdaten fehlen</option><option value="unpriced">Ohne Inseratspreis</option><option value="reprice">Preis prüfen</option></select></label>
-          <label>Sortierung<select id="inventorySort"><option value="name">Kartenname</option><option value="set">Set</option><option value="age-desc">Älteste zuerst</option><option value="age-asc">Neueste zuerst</option><option value="value-desc">Höchster VK zuerst</option><option value="quantity-desc">Höchster Bestand zuerst</option></select></label>
+          <label>Wirtschaftlichkeit<select id="inventoryProfitFilter"><option value="">Alle Ampeln</option><option value="green">Grün · Ziel erreicht</option><option value="yellow">Gelb · knapp rentabel</option><option value="red">Rot · nicht rentabel</option><option value="missing-cost">EK fehlt</option></select></label>
+          <label>Sortierung<select id="inventorySort"><option value="name">Kartenname</option><option value="set">Set</option><option value="age-desc">Älteste zuerst</option><option value="age-asc">Neueste zuerst</option><option value="value-desc">Höchster VK zuerst</option><option value="cost-desc">Höchster EK zuerst</option><option value="cost-asc">Niedrigster EK zuerst</option><option value="roi-desc">Höchster erwarteter ROI</option><option value="quantity-desc">Höchster Bestand zuerst</option></select></label>
           <button type="button" class="secondary filter-reset" id="inventoryFilterReset">Filter zurücksetzen</button>
         </div>
         <div class="collection-summary" id="inventorySummary"></div>
@@ -389,6 +391,30 @@
         </div>
       </section>
 
+      <section id="view-buying" class="view">
+        <article class="panel buying-panel">
+          <div class="panel-head"><div><h2>Warenkorb vor dem Kauf prüfen</h2><small>Cardmarket-Warenkorb als HTML-/CSV-/JSON-Datei laden oder Positionen einfügen. Der Manager bestellt niemals automatisch.</small></div><div class="row-actions"><select id="purchaseDraftSelect"><option value="">Neuer Entwurf</option></select><button id="newPurchaseDraftBtn" class="secondary" type="button">Neu</button><button id="savePurchaseDraftBtn" class="secondary" type="button">Entwurf speichern</button></div></div>
+          <div class="buying-input-grid">
+            <label>Warenkorb-Datei<input id="purchaseCartFile" type="file" accept=".html,.htm,.csv,.json,.txt" /></label>
+            <label>Verkäufer<input id="purchaseDraftSeller" placeholder="Cardmarket-Name" /></label>
+            <label>Versand (€)<input id="purchaseDraftShipping" type="number" min="0" step="0.01" value="0" /></label>
+            <label>Zusatzkosten (€)<input id="purchaseDraftExtra" type="number" min="0" step="0.01" value="0" /></label>
+          </div>
+          <label class="buying-paste-label">Positionen einfügen <small>Eine Zeile je Karte: Produkt-ID; Kartenname; Menge; Stückpreis; Sprache; Zustand</small><textarea id="purchaseCartPaste" rows="5" placeholder="889955; Requiem des Unterweltlerschmieds; 2; 0,75; DE; NM"></textarea></label>
+          <div class="row-actions buying-actions"><button id="analyzePurchaseCartBtn" class="primary" type="button">Warenkorb analysieren</button><button id="convertPurchaseDraftBtn" class="secondary" type="button">Als Einkauf übernehmen</button></div>
+          <div id="purchaseDraftSummary" class="collection-summary"></div>
+          <div class="table-wrap"><table><thead><tr><th>Geschäft</th><th>Privat</th><th>Karte / Druckvariante</th><th>Menge</th><th>Angebot</th><th>Vollständiger EK</th><th>CM Low / Trend</th><th>VK</th><th>Gewinn / ROI</th><th>Empfehlung</th></tr></thead><tbody id="purchaseDraftTable"><tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr></tbody></table></div>
+        </article>
+
+        <article class="panel buying-panel demand-panel">
+          <div class="panel-head"><div><h2>Nachfrage- & Shop-Radar</h2><small>Verbindet Deck-/Turnierhäufigkeit mit Price Guide, Verkäufen und Bestand. Quelle und Datum bleiben gespeichert.</small></div><div class="row-actions"><button id="refreshStaplesBtn" class="secondary" type="button">Aktuelle TCG-Staples laden</button><label class="secondary file-label">Meta-Datei importieren<input id="demandRadarFile" type="file" accept=".csv,.json" hidden /></label></div></div>
+          <div class="info">Die öffentliche Kartendatenquelle liefert Karten, Sets, Archetypen, Staple- und Banlist-Informationen, aber keine vollständigen Turnierergebnisse. Für echte Meta-Häufigkeiten importierst du eine CSV/JSON-Auswertung aus deiner Turnierquelle; der Manager kennzeichnet die Herkunft.</div>
+          <div class="filter-panel"><label>Kategorie<select id="demandCategoryFilter"><option value="">Alle Kategorien</option><option>Meta-Chance</option><option>Staple</option><option>Deck-Core</option><option>Basket-Add-on</option><option>Spekulativ</option></select></label><label>Empfehlung<select id="demandRecommendationFilter"><option value="">Alle Empfehlungen</option><option>Stark kaufen</option><option>Kleine Testmenge</option><option>Beobachten</option><option>Nicht kaufen</option><option>Hohes Risiko</option></select></label><label>Budget je Exemplar (€)<input id="demandBudgetFilter" type="number" min="0" step="0.01" placeholder="ohne Grenze" /></label><button id="demandFilterReset" class="secondary filter-reset" type="button">Filter zurücksetzen</button></div>
+          <div id="demandRadarSummary" class="collection-summary"></div>
+          <div class="table-wrap"><table><thead><tr><th>Karte / genaue Druckvariante</th><th>Kategorie</th><th>Meta-Signal</th><th>Bestand / Verkäufe</th><th>CM Low / Trend</th><th>Max-EK / VK</th><th>Score</th><th>Empfehlung / Grund</th></tr></thead><tbody id="demandRadarTable"><tr><td colspan="8" class="empty">Noch keine Nachfragedaten importiert.</td></tr></tbody></table></div>
+          <p id="demandRadarSource" class="muted"></p>
+        </article>
+      </section>
 
       <section id="view-cardmarket" class="view">
         <div class="metric-grid cm-metric-grid">
@@ -683,6 +709,7 @@
               <label>Standardzustand<select id="settingCondition"><option>NM</option><option>EX</option><option>GD</option><option>LP</option></select></label>
               <label>Bevorzugte Sprachen<input id="settingLanguages" placeholder="DE/EN" /></label>
               <label>Standard-Sollbestand<input id="settingTargetStock" type="number" min="0" step="1" /></label>
+              <label>Automatische Verkaufszuordnung<select id="settingSaleAllocationStrategy"><option value="fifo">FIFO · ältester Einkauf zuerst</option><option value="lowest-cost">Niedrigster EK zuerst</option><option value="highest-cost">Höchster EK zuerst</option><option value="manual">Immer manuell bestätigen</option></select></label>
               <label>Lagerhüter-Warnung nach Tagen<input id="settingStockAgeWarning" type="number" min="1" step="1" /></label>
               <label>Kritisches Lageralter nach Tagen<input id="settingStockAgeCritical" type="number" min="1" step="1" /></label>
             </div>

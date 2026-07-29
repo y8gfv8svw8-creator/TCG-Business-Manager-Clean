@@ -341,3 +341,52 @@ test('Cardmarket-Snapshot-Identität bleibt bei einer Preisänderung stabil', ()
     'variant-v2:999|DE|NM|1ST'
   );
 });
+
+test('Verkaufszuordnung unterstützt FIFO sowie niedrigsten und höchsten EK', () => {
+  const inventory=[
+    {id:'old',productId:'1',status:'Im Bestand',purchaseDate:'2026-01-01',cost:2},
+    {id:'cheap',productId:'1',status:'Im Bestand',purchaseDate:'2026-02-01',cost:1},
+    {id:'expensive',productId:'1',status:'Im Bestand',purchaseDate:'2026-03-01',cost:4}
+  ];
+  assert.equal(automation.selectInventoryForSale(inventory,{productId:'1',strategy:'fifo'},1).selected[0].id,'old');
+  assert.equal(automation.selectInventoryForSale(inventory,{productId:'1',strategy:'lowest-cost'},1).selected[0].id,'cheap');
+  assert.equal(automation.selectInventoryForSale(inventory,{productId:'1',strategy:'highest-cost'},1).selected[0].id,'expensive');
+});
+
+test('Warenkorbanalyse trennt private Karten und verteilt Nebenkosten', () => {
+  const result=automation.analyzePurchaseDraft([
+    {id:'a',quantity:2,privateQuantity:1,unitPrice:1,low:3,trend:3,avg7:3,avg30:3},
+    {id:'b',quantity:1,unitPrice:2,low:4,trend:4,avg7:4,avg30:4}
+  ],{shipping:2,extra:0},{feePercent:5,packaging:0.04,minRoi:25,targetRoi:30,safetyPercent:5});
+  assert.equal(result.totals.cards,3);
+  assert.equal(result.totals.businessCards,2);
+  assert.equal(result.totals.privateCards,1);
+  assert.equal(result.totals.paid,6);
+  assert.equal(result.lines[0].landedUnitCost,1.5);
+  assert.equal(result.lines[1].landedUnitCost,3);
+  const withoutMarket=automation.analyzePurchaseDraft([{quantity:1,unitPrice:1}],{}, {feePercent:5,packaging:0.04,minRoi:25,targetRoi:30});
+  assert.equal(withoutMarket.lines[0].pricing.suggestedSell,0);
+  assert.equal(withoutMarket.lines[0].recommendation,'Beobachten');
+});
+
+test('Einkaufsleistung trennt realisierten Gewinn und gebundenes Kapital', () => {
+  const result=automation.summarizePurchasePerformance({id:'p'},[
+    {id:'sold',purchaseId:'p',status:'Verkauft',saleId:'s',cost:1},
+    {id:'rest',purchaseId:'p',status:'Im Bestand',cost:2,marketValue:3}
+  ],[{id:'s',quantity:1,items:[{unitPrice:2.5,matchedItemIds:['sold']}]}]);
+  assert.equal(result.sold,1);
+  assert.equal(result.realizedProfit,1.5);
+  assert.equal(result.tiedCapital,2);
+  assert.equal(result.currentMarketValue,3);
+  assert.equal(result.projectedTotalProfit,2.5);
+});
+
+test('Nachfrage-Radar bewertet Häufigkeit, Eigenverkäufe, Bestand und Risiko', () => {
+  const rows=automation.scoreDemandRadar([
+    {productId:'1',name:'Staple',appearances:8,tournaments:10,copies:3},
+    {productId:'2',name:'Riskant',appearances:10,tournaments:10,copies:3,risk:'high reprint'}
+  ],{stockByProduct:{1:0,2:0},salesByProduct:{1:2,2:0}});
+  assert.equal(rows[0].name,'Staple');
+  assert.equal(rows[0].recommendation,'Stark kaufen');
+  assert.equal(rows.find(row=>row.name==='Riskant').recommendation,'Hohes Risiko');
+});

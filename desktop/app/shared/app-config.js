@@ -15,6 +15,7 @@
     condition: 'NM',
     languages: 'DE/EN',
     targetStock: 3,
+    saleAllocationStrategy: 'fifo',
     safetyPercent: 5,
     quickSellDiscount: 8,
     stockAgeWarningDays: 90,
@@ -39,8 +40,9 @@
   const VALID_DENSITIES = new Set(['comfortable', 'compact']);
   const VALID_VIEWS = new Set([
     'dashboard', 'inventory', 'private', 'purchases', 'sales', 'materials',
-    'expenses', 'watchlist', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
+    'expenses', 'watchlist', 'buying', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
   ]);
+  const VALID_ALLOCATION_STRATEGIES = new Set(['fifo', 'lowest-cost', 'highest-cost', 'manual']);
 
   const number = (value, fallback, minimum = 0, maximum = Number.POSITIVE_INFINITY) => {
     const parsed = Number(value);
@@ -67,6 +69,7 @@
     normalized.pricingModelVersion = String(source.pricingModelVersion || DEFAULT_SETTINGS.pricingModelVersion);
     normalized.priceAgeDays = Math.round(number(source.priceAgeDays, DEFAULT_SETTINGS.priceAgeDays, 1, 365));
     normalized.targetStock = Math.round(number(source.targetStock, DEFAULT_SETTINGS.targetStock, 0, 100000));
+    normalized.saleAllocationStrategy = VALID_ALLOCATION_STRATEGIES.has(source.saleAllocationStrategy) ? source.saleAllocationStrategy : DEFAULT_SETTINGS.saleAllocationStrategy;
     normalized.safetyPercent = number(source.safetyPercent, DEFAULT_SETTINGS.safetyPercent, 0, 50);
     normalized.quickSellDiscount = number(source.quickSellDiscount, DEFAULT_SETTINGS.quickSellDiscount, 0, 50);
     normalized.stockAgeWarningDays = Math.round(number(source.stockAgeWarningDays, DEFAULT_SETTINGS.stockAgeWarningDays, 1, 3650));

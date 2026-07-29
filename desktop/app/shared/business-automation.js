@@ -397,11 +397,135 @@
       if (condition && String(item.condition || '').toUpperCase() !== condition) value += 1;
       return value;
     };
-    available.sort((a, b) => rank(a) - rank(b) ||
-      String(a.purchaseDate || '').localeCompare(String(b.purchaseDate || '')) ||
-      String(a.id || '').localeCompare(String(b.id || ''))
-    );
+    const strategy = String(request.strategy || 'fifo');
+    available.sort((a, b) => {
+      const exactRank = rank(a) - rank(b);
+      if (exactRank) return exactRank;
+      if (strategy === 'lowest-cost') {
+        const difference = asNumber(a.cost) - asNumber(b.cost);
+        if (difference) return difference;
+      }
+      if (strategy === 'highest-cost') {
+        const difference = asNumber(b.cost) - asNumber(a.cost);
+        if (difference) return difference;
+      }
+      return String(a.purchaseDate || '').localeCompare(String(b.purchaseDate || '')) ||
+        String(a.id || '').localeCompare(String(b.id || ''));
+    });
     return { selected: available.slice(0, wanted), missing: Math.max(0, wanted - available.length), candidates: available };
+  }
+
+  function analyzePurchaseDraft(rows = [], costs = {}, settings = {}) {
+    const normalized = (rows || []).map((row, index) => {
+      const quantity = wholeQuantity(row.quantity || 1);
+      const privateQuantity = Math.min(quantity, wholeQuantity(row.privateQuantity));
+      const businessQuantity = row.enabled === false ? 0 : Math.max(0, quantity - privateQuantity);
+      const unitPrice = Math.max(0, asNumber(row.unitPrice));
+      const positiveMarketValue = value => asNumber(value) > 0 ? asNumber(value) : null;
+      const market = {
+        low: positiveMarketValue(row.low ?? row.marketLow),
+        trend: positiveMarketValue(row.trend ?? row.marketTrend),
+        avg7: positiveMarketValue(row.avg7),
+        avg30: positiveMarketValue(row.avg30)
+      };
+      return { ...row, index, quantity, privateQuantity, businessQuantity, unitPrice, lineValue: quantity * unitPrice, businessValue: businessQuantity * unitPrice, market };
+    });
+    const totalValue = normalized.reduce((sum, row) => sum + row.lineValue, 0);
+    const shipping = Math.max(0, asNumber(costs.shipping));
+    const extra = Math.max(0, asNumber(costs.extra));
+    const refund = Math.max(0, asNumber(costs.refund));
+    const adjustment = shipping + extra - refund;
+    const lines = normalized.map(row => {
+      const share = totalValue > 0 ? row.lineValue / totalValue : (normalized.length ? 1 / normalized.length : 0);
+      const allocatedTotal = adjustment * share;
+      const landedUnitCost = row.quantity ? Math.max(0, row.unitPrice + allocatedTotal / row.quantity) : 0;
+      const hasMarket = Object.values(row.market).some(value => asNumber(value) > 0);
+      const calculatedPricing = calculateOwnedCardPriceTargets({ ...row.market, cost: landedUnitCost }, settings);
+      const pricing = hasMarket ? calculatedPricing : { ...calculatedPricing, suggestedSell: 0, marketSell: 0, expectedProfit: 0, expectedRoi: 0, profitableAtMarket: null, meetsTargetRoi: null };
+      const expectedProfit = pricing.suggestedSell > 0 ? pricing.expectedProfit : 0;
+      const expectedRoi = landedUnitCost > 0 ? expectedProfit / landedUnitCost * 100 : 0;
+      let recommendation = 'Keine Preisdaten';
+      if (row.enabled === false || !row.businessQuantity) recommendation = 'Nicht geschäftlich';
+      else if (!pricing.suggestedSell) recommendation = 'Beobachten';
+      else if (pricing.profitableAtMarket && expectedRoi >= Math.max(40, asNumber(settings.targetRoi, 30))) recommendation = 'Stark kaufen';
+      else if (pricing.profitableAtMarket) recommendation = 'Kleine Testmenge';
+      else recommendation = 'Nicht kaufen';
+      return { ...row, share, allocatedTotal: roundMoney(allocatedTotal), landedUnitCost: roundMoney(landedUnitCost), pricing, expectedProfit: roundMoney(expectedProfit), expectedRoi, recommendation };
+    });
+    const businessLines = lines.filter(row => row.businessQuantity > 0 && row.enabled !== false);
+    const businessCost = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.landedUnitCost, 0);
+    const projectedRevenue = businessLines.reduce((sum, row) => sum + row.businessQuantity * asNumber(row.pricing.suggestedSell), 0);
+    const projectedProfit = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.expectedProfit, 0);
+    return {
+      lines,
+      totals: {
+        cards: normalized.reduce((sum, row) => sum + row.quantity, 0),
+        businessCards: businessLines.reduce((sum, row) => sum + row.businessQuantity, 0),
+        privateCards: normalized.reduce((sum, row) => sum + row.privateQuantity, 0),
+        cardValue: roundMoney(totalValue),
+        shipping: roundMoney(shipping),
+        extra: roundMoney(extra),
+        refund: roundMoney(refund),
+        paid: roundMoney(Math.max(0, totalValue + adjustment)),
+        businessCost: roundMoney(businessCost),
+        projectedRevenue: roundMoney(projectedRevenue),
+        projectedProfit: roundMoney(projectedProfit),
+        projectedRoi: businessCost > 0 ? projectedProfit / businessCost * 100 : 0
+      }
+    };
+  }
+
+  function summarizePurchasePerformance(purchase = {}, inventory = [], sales = []) {
+    const assets = (inventory || []).filter(item => String(item.purchaseId || '') === String(purchase.id || ''));
+    const current = assets.filter(item => !['Verkauft', 'Storniert'].includes(String(item.status || '')));
+    const sold = assets.filter(item => String(item.status || '') === 'Verkauft' || item.saleId);
+    const saleById = new Map((sales || []).map(sale => [String(sale.id || ''), sale]));
+    const realizedRevenue = sold.reduce((sum, item) => {
+      const sale = saleById.get(String(item.saleId || ''));
+      if (!sale) return sum;
+      const line = (sale.items || []).find(row => (row.matchedItemIds || []).includes(item.id));
+      return sum + asNumber(line?.unitPrice || (sale.quantity ? asNumber(sale.cardValue || sale.revenue) / asNumber(sale.quantity) : 0));
+    }, 0);
+    const realizedCost = sold.reduce((sum, item) => sum + asNumber(item.cost), 0);
+    const remainingCost = current.reduce((sum, item) => sum + asNumber(item.cost), 0);
+    const currentMarketValue = current.reduce((sum, item) => {
+      const market = asNumber(item.marketValue || item.suggestedSell || item.listingPrice);
+      return sum + market;
+    }, 0);
+    return {
+      cards: assets.length,
+      available: current.filter(item => String(item.status || '') !== 'Reserviert').length,
+      reserved: current.filter(item => String(item.status || '') === 'Reserviert').length,
+      sold: sold.length,
+      realizedRevenue: roundMoney(realizedRevenue),
+      realizedCost: roundMoney(realizedCost),
+      realizedProfit: roundMoney(realizedRevenue - realizedCost),
+      tiedCapital: roundMoney(remainingCost),
+      currentMarketValue: roundMoney(currentMarketValue),
+      projectedTotalProfit: roundMoney(realizedRevenue + currentMarketValue - realizedCost - remainingCost)
+    };
+  }
+
+  function scoreDemandRadar(records = [], context = {}, settings = {}) {
+    const stockByProduct = context.stockByProduct || {};
+    const salesByProduct = context.salesByProduct || {};
+    return (records || []).map(record => {
+      const productId = String(record.productId || '');
+      const appearances = Math.max(0, asNumber(record.appearances ?? record.deckCount ?? record.frequency));
+      const tournaments = Math.max(1, asNumber(record.tournaments || record.sampleSize || 1));
+      const metaRate = Math.min(1, appearances / tournaments);
+      const copies = Math.max(1, asNumber(record.copies || record.averageCopies || 1));
+      const ownSales = Math.max(0, asNumber(salesByProduct[productId]));
+      const stock = Math.max(0, asNumber(stockByProduct[productId]));
+      const trend = asNumber(record.trend);
+      const avg30 = asNumber(record.avg30);
+      const momentum = avg30 > 0 ? Math.max(-1, Math.min(1, (trend - avg30) / avg30)) : 0;
+      const risk = String(record.risk || '').toLowerCase();
+      const riskPenalty = /hoch|high|ban|reprint/.test(risk) ? 25 : /mittel|medium/.test(risk) ? 10 : 0;
+      const score = Math.max(0, Math.min(100, Math.round(metaRate * 55 + Math.min(20, copies * 5) + Math.min(15, ownSales * 3) + Math.max(-10, momentum * 20) - Math.min(15, stock * 2) - riskPenalty)));
+      const recommendation = riskPenalty >= 25 ? 'Hohes Risiko' : score >= 65 ? 'Stark kaufen' : score >= 50 ? 'Kleine Testmenge' : score >= 30 ? 'Beobachten' : 'Nicht kaufen';
+      return { ...record, score, recommendation, metaRate, stock, ownSales };
+    }).sort((a, b) => b.score - a.score || String(a.name || '').localeCompare(String(b.name || '')));
   }
 
   function planMaterialUsageChanges(materials = [], oldUsage = [], newUsage = []) {
@@ -957,6 +1081,9 @@
     planPurchaseReceipt,
     purchaseOwnershipTotals,
     selectInventoryForSale,
+    analyzePurchaseDraft,
+    summarizePurchasePerformance,
+    scoreDemandRadar,
     planMaterialUsageChanges,
     calculateInventoryBuckets,
     planInventoryTotalCorrection,

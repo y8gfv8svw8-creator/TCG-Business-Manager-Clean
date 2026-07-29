@@ -546,3 +546,22 @@ html[data-theme="dark"] .cm-price-source-note span{color:#c0d3e2}
 .repair-row>div:first-child{display:flex;flex-direction:column;gap:4px}.repair-row small{color:var(--muted)}.repair-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.repair-toolbar small{color:var(--muted)}
 html[data-theme="dark"] .repair-section,html[data-theme="dark"] .repair-row{color:var(--text)}
 @media(max-width:700px){.repair-row{align-items:flex-start;flex-direction:column}.repair-row .row-actions,.repair-row button{width:100%}.repair-row .row-actions{display:grid}}
+
+/* Version 6.2.0 – Einkaufszentrale, Wantlisten und belastbare Marktentscheidung */
+.purchasing-center-panel{margin-bottom:18px;border-color:#9ebbd0}
+.wantlist-import-note{margin:4px 0 14px;line-height:1.45}
+.wantlist-table-wrap{max-height:64vh}
+.wantlist-table{min-width:1520px;font-size:12px}
+.wantlist-table td{vertical-align:top}
+.wantlist-table td small{display:block;margin-top:4px;color:var(--muted);line-height:1.35}
+.wantlist-table .badge{white-space:nowrap}
+.wantlist-archived{opacity:.62}
+.wantlist-archived td{background:var(--surface-2)}
+.watch-repricing-panel{margin:18px 0}
+.watch-repricing-panel table{min-width:980px}
+.watch-repricing-panel td{vertical-align:top}
+.watch-repricing-panel td small{display:block;margin-top:4px;color:var(--muted)}
+html[data-theme="dark"] .purchasing-center-panel{border-color:#526b80}
+html[data-theme="dark"] .wantlist-import-note{background:#2c3b49;color:#d9ecfb;border-color:#526b80}
+html[data-theme="dark"] .wantlist-archived td{background:#292929}
+@media(max-width:760px){.purchasing-center-panel .panel-head{align-items:flex-start;flex-direction:column}.purchasing-center-panel .panel-head-actions{width:100%}.purchasing-center-panel .panel-head-actions>*{width:100%}.wantlist-table-wrap{max-height:none}}

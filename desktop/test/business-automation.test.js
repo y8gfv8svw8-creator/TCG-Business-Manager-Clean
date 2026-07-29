@@ -86,6 +86,73 @@ test('berechnet automatische Max-EK- und Ziel-VK-Werte mit einheitlicher Rundung
   assert.ok(updated.maxBuy > first.maxBuy);
 });
 
+test('normalisiert Cardmarket-Wantlist-Zeilen und erhält eigene Historie beim Folgeimport', () => {
+  const firstRows = [{
+    WantListName:'Geschäft', idWantsList:'12', idWant:'99', idProduct:'741203',
+    ProductName:'Ash Blossom & Joyous Spring', Expansion:'25th Anniversary Rarity Collection',
+    ExpansionCode:'RA01', Language:'German', MinCondition:'NM', MaxPrice_EUR:'3,50', Quantity:'3',
+    ProductUrl:'https://www.cardmarket.com/de/YuGiOh/Products/Singles/Test/Ash-Blossom'
+  }];
+  const first = automation.mergeWantlistSnapshot({}, firstRows, {name:'Geschäft',purpose:'Geschäftsbestand'}, '2026-07-29T10:00:00.000Z');
+  assert.equal(first.list.entries[0].productId, '741203');
+  assert.equal(first.list.entries[0].maxPrice, 3.5);
+  assert.equal(first.list.entries[0].quantity, 3);
+  assert.equal(first.stats.created, 1);
+
+  first.list.entries[0].note = 'Für Stammkunden';
+  const second = automation.mergeWantlistSnapshot(first.list, [{...firstRows[0],Quantity:'2',MaxPrice_EUR:'3,00'}], {name:'Geschäft',purpose:'Geschäftsbestand'}, '2026-07-30T10:00:00.000Z');
+  assert.equal(second.list.entries[0].quantity, 2);
+  assert.equal(second.list.entries[0].maxPrice, 3);
+  assert.equal(second.list.entries[0].note, 'Für Stammkunden');
+  assert.equal(second.list.entries[0].history.length, 1);
+  assert.equal(second.stats.updated, 1);
+});
+
+test('archiviert aus einem vollständigen Wantlist-Folgeimport entfernte Karten ohne sie zu löschen', () => {
+  const existing = automation.mergeWantlistSnapshot({}, [
+    {idWant:'1',idProduct:'100',ProductName:'Karte A'},
+    {idWant:'2',idProduct:'200',ProductName:'Karte B'}
+  ], {name:'Testliste'}, '2026-07-29T10:00:00.000Z').list;
+  const result = automation.mergeWantlistSnapshot(existing, [
+    {idWant:'1',idProduct:'100',ProductName:'Karte A'}
+  ], {name:'Testliste'}, '2026-07-30T10:00:00.000Z');
+  assert.equal(result.stats.archived, 1);
+  assert.equal(result.list.entries.length, 2);
+  assert.equal(result.list.entries.find(row=>row.productId==='200').archived, true);
+});
+
+test('behält eine manuell bestätigte Wantlist-Druckvariante bei späteren Importen', () => {
+  const existing = automation.mergeWantlistSnapshot({}, [
+    {idWant:'9',ProductName:'Ash Blossom',Quantity:1}
+  ], {name:'Testliste'}, '2026-07-29T10:00:00.000Z').list;
+  Object.assign(existing.entries[0], {productId:'741203',set:'RA01',rarity:'Secret Rare',manuallyAssignedAt:'2026-07-29T11:00:00.000Z'});
+  const result = automation.mergeWantlistSnapshot(existing, [
+    {idWant:'9',ProductName:'Ash Blossom',Quantity:2}
+  ], {name:'Testliste'}, '2026-07-30T10:00:00.000Z');
+  assert.equal(result.list.entries[0].productId,'741203');
+  assert.equal(result.list.entries[0].rarity,'Secret Rare');
+  assert.equal(result.list.entries[0].quantity,2);
+});
+
+test('trennt Wantlist-Preisgrenze, Markt-VK und maximalen vollständigen EK', () => {
+  const settings = {safetyPercent:5,feePercent:5,packaging:0.12,minRoi:30,priceAgeDays:7,targetStock:3};
+  const good = automation.evaluateMarketCandidate({
+    productId:'741203',set:'RA01',rarity:'Secret Rare',quantity:3,stock:0,maxPrice:4,
+    low:7.5,trend:8,avg7:8.2,avg30:8.5,priceDate:'2026-07-29',ownSales:2,demandScore:70
+  },settings,new Date('2026-07-29'));
+  assert.equal(good.recommendation,'Stark kaufen');
+  assert.ok(good.recommendedSell>0);
+  assert.ok(good.maxBuy>good.maxPrice);
+  assert.ok(good.limitProfit>0);
+
+  const missing = automation.evaluateMarketCandidate({name:'Unklare Karte',quantity:1,trend:10},settings,new Date('2026-07-29'));
+  assert.equal(missing.recommendation,'Druckvariante prüfen');
+  assert.equal(missing.exactVariant,false);
+
+  const stale = automation.evaluateMarketCandidate({productId:'1',set:'SET',rarity:'Rare',quantity:1,trend:10,avg30:10,priceDate:'2026-06-01'},settings,new Date('2026-07-29'));
+  assert.equal(stale.recommendation,'Preisstand erneuern');
+});
+
 test('plant Materialverbrauch, Entfernen und Bestandsrückbuchung ohne negative Bestände', () => {
   const materials = [
     { id: 'sleeve', name: 'Sleeve', unit: 'Stück', stock: 5 },

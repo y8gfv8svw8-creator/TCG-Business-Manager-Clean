@@ -1,0 +1,3 @@
+WantListName;idWant;idProduct;ProductName;Expansion;ExpansionCode;Version;CollectorNumber;Quantity;MaxPrice_EUR;Language;MinCondition;Priority;Note
+QA Einkauf;101;741203;Ash Blossom & Joyous Spring;25th Anniversary Rarity Collection;RA01;Secret Rare;RA01-EN008;3;4,00;English;NM;A;Für Geschäft testen
+QA Einkauf;102;;Kashtira Fenrir;;;;;1;2,00;German;EX;B;Druckvariante manuell wählen

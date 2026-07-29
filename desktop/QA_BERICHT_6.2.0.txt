@@ -1,0 +1,27 @@
+QA-Bericht TCG Business Manager 6.2.0
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Preis- und Oberflächendateien bestanden.
+- 57 automatisierte Tests bestanden, 0 fehlgeschlagen.
+- Neue Regressionstests für Wantlist-Normalisierung, Folgeimport, Archivierung, manuell bestätigte Druckvarianten und getrennte EK/VK-Berechnung bestanden.
+
+Oberflächenprüfung
+- Einkaufszentrale im dunklen Grau-Modus geöffnet und auf Lesbarkeit geprüft.
+- CSV-Wantlist mit einer eindeutigen und einer offenen Druckvariante importiert.
+- Folgeimport aktualisiert Menge und Preisgrenze, ohne die Liste zu duplizieren.
+- Filter „Druckvariante prüfen“ zeigt nur den offenen Eintrag.
+- Dialog „Wantlist-Druckvariante zuordnen“ öffnet mit Karten- und Druckvariantensuche.
+- Keine neuen Fehler oder Warnungen in der Browser-Konsole.
+
+Datensicherheit
+- Bestehende Datenfelder werden durch eine verlustfreie Migration ergänzt.
+- Wantlisten werden im normalen Programmstand und damit dauerhaft in SQLite gespeichert.
+- Entfernte Wantlist-Einträge werden archiviert, nicht gelöscht.
+- Manuell bestätigte Druckvarianten bleiben bei späteren Folgeimporten erhalten.
+- Der Manager löst keine automatischen Cardmarket-Käufe aus.
+
+Installer
+- Datei: dist\TCG Business Manager-Setup-6.2.0.exe
+- Größe: 126.199.453 Bytes
+- SHA-256: D67AB877BC4167CA9CB164CB1E34DF04471148E9A82BAAAB869738DBFE293F9F
+- Windows-x64-NSIS-Build erfolgreich erstellt.

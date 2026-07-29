@@ -180,8 +180,12 @@
     const weightedSell = weightTotal
       ? weighted.reduce((sum, row) => sum + row[0] * row[1], 0) / weightTotal
       : 0;
+    // Cardmarket Low ist ein historischer Price-Guide-Wert und kein garantiert
+    // aktuell kaufbares Angebot für Sprache/Zustand. Sobald belastbarere
+    // Referenzen vorhanden sind, wird der Markt-VK daher aus Trend und
+    // Durchschnittswerten gebildet; Low dient nur als Rückfallwert.
     const recommendedSell = pricePointCount
-      ? roundMoney(Math.max(0, weightedSell, low || 0))
+      ? roundMoney(Math.max(0, weightedSell || low || 0))
       : 0;
     const safety = clamp(settings.safetyPercent, 0, 50) / 100;
     const feeRate = clamp(settings.feePercent, 0, 100) / 100;
@@ -526,6 +530,157 @@
       const recommendation = riskPenalty >= 25 ? 'Hohes Risiko' : score >= 65 ? 'Stark kaufen' : score >= 50 ? 'Kleine Testmenge' : score >= 30 ? 'Beobachten' : 'Nicht kaufen';
       return { ...record, score, recommendation, metaRate, stock, ownSales };
     }).sort((a, b) => b.score - a.score || String(a.name || '').localeCompare(String(b.name || '')));
+  }
+
+  function normalizeWantlistEntry(raw = {}, index = 0) {
+    const productId = String(pick(raw, ['idProduct', 'productId', 'Produkt-ID', 'CM Produkt-ID']) || '').replace(/\D/g, '');
+    const name = String(pick(raw, ['ProductName', 'name', 'cardName', 'Kartenname', 'Karte']) || '').trim();
+    const setName = String(pick(raw, ['Expansion', 'setName', 'Setname', 'Set']) || '').trim();
+    const set = String(pick(raw, ['ExpansionCode', 'setCode', 'Setkürzel', 'Setcode']) || '').trim();
+    const version = String(pick(raw, ['Version', 'rarity', 'Seltenheit']) || '').trim();
+    const collectorNumber = String(pick(raw, ['CollectorNumber', 'Setnummer', 'cardNumber']) || '').trim();
+    const sourceEntryId = String(pick(raw, ['idWant', 'wantId', 'entryId']) || '').replace(/\D/g, '');
+    const productUrl = String(pick(raw, ['ProductUrl', 'productUrl', 'URL', 'Link']) || '').trim();
+    const quantity = Math.max(1, Math.round(asNumber(pick(raw, ['Quantity', 'Amount', 'Menge', 'Anzahl'])) || 1));
+    const maxPrice = Math.max(0, asNumber(pick(raw, ['MaxPrice_EUR', 'MaxPrice', 'Buy Price', 'Kaufpreis', 'Preisgrenze', 'Max EK'])));
+    const language = String(pick(raw, ['Language', 'Sprache']) || '').trim();
+    const condition = String(pick(raw, ['MinCondition', 'Condition', 'Mindestzustand', 'Zustand']) || '').trim();
+    const foilValue = String(pick(raw, ['IsFoil', 'Foil']) || '').trim().toLowerCase();
+    const priorityValue = String(pick(raw, ['Priority', 'Priorität', 'Prio']) || 'B').trim().toUpperCase();
+    const priority = ['A', 'B', 'C'].includes(priorityValue) ? priorityValue : 'B';
+    const normalizedIdentity = [productId, normalizeField(name), normalizeField(set || setName), normalizeField(version), normalizeField(collectorNumber)].join('|');
+    return {
+      id: String(raw.id || ''),
+      sourceEntryId,
+      sourceKey: sourceEntryId ? `want:${sourceEntryId}` : `row:${normalizedIdentity || index + 1}`,
+      productId, productUrl, name, germanName: String(raw.germanName || raw.nameDe || ''), englishName: String(raw.englishName || raw.nameEn || ''),
+      set, setName, version, rarity: version, collectorNumber,
+      quantity, maxPrice, language, condition, foil: ['y', 'yes', 'ja', 'true', '1'].includes(foilValue), priority,
+      note: String(pick(raw, ['Note', 'Notiz', 'Kommentar']) || '').trim(),
+      sourceRow: index + 1
+    };
+  }
+
+  function mergeWantlistSnapshot(existing = {}, incomingRows = [], metadata = {}, nowValue = new Date().toISOString()) {
+    const current = Array.isArray(existing.entries) ? existing.entries : [];
+    const incoming = (incomingRows || []).map(normalizeWantlistEntry).filter(row => row.productId || row.name || row.productUrl);
+    const result = current.map(row => ({ ...row }));
+    const touched = new Set();
+    const normalizedIdentity = row => [String(row.productId || ''), normalizeField(row.name), normalizeField(row.set || row.setName), normalizeField(row.version || row.rarity), normalizeField(row.collectorNumber)].join('|');
+    let created = 0;
+    let updated = 0;
+    let restored = 0;
+
+    incoming.forEach((row, index) => {
+      let target = result.find(item => row.sourceEntryId && String(item.sourceEntryId || '') === row.sourceEntryId);
+      if (!target && row.productId) target = result.find(item => String(item.productId || '') === row.productId);
+      if (!target) target = result.find(item => normalizedIdentity(item) === normalizedIdentity(row));
+      if (!target) {
+        target = { ...row, id: row.id || `want-entry-${Date.now()}-${index}`, firstSeenAt: nowValue, history: [], archived: false };
+        result.push(target);
+        created += 1;
+      } else {
+        const before = { quantity: target.quantity, maxPrice: target.maxPrice, language: target.language, condition: target.condition, productId: target.productId };
+        const preservedNote = String(target.note || '');
+        const preservedManualIdentity = target.manuallyAssignedAt && !row.productId ? {
+          productId: target.productId, productUrl: target.productUrl, name: target.name,
+          germanName: target.germanName, englishName: target.englishName,
+          set: target.set, setName: target.setName, version: target.version,
+          rarity: target.rarity, collectorNumber: target.collectorNumber,
+          metacardId: target.metacardId, manuallyAssignedAt: target.manuallyAssignedAt
+        } : null;
+        const changed = Object.keys(before).some(key => String(before[key] ?? '') !== String(row[key] ?? ''));
+        if (changed) {
+          target.history = Array.isArray(target.history) ? target.history : [];
+          target.history.push({ at: nowValue, ...before });
+          target.history = target.history.slice(-100);
+          updated += 1;
+        }
+        if (target.archived) restored += 1;
+        Object.assign(target, row, { id: target.id, note: row.note || preservedNote, firstSeenAt: target.firstSeenAt || nowValue, archived: false, archivedAt: '' });
+        if (preservedManualIdentity) Object.assign(target, preservedManualIdentity);
+      }
+      target.lastSeenAt = nowValue;
+      touched.add(target.id);
+    });
+
+    let archived = 0;
+    if (metadata.completeSnapshot !== false) {
+      result.forEach(entry => {
+        if (touched.has(entry.id) || entry.archived) return;
+        entry.archived = true;
+        entry.archivedAt = nowValue;
+        archived += 1;
+      });
+    }
+    return {
+      list: {
+        ...existing,
+        ...metadata,
+        id: existing.id || metadata.id || `wantlist-${Date.now()}`,
+        entries: result,
+        importedAt: nowValue,
+        updatedAt: nowValue,
+        createdAt: existing.createdAt || nowValue
+      },
+      stats: { rows: incoming.length, created, updated, restored, archived, active: result.filter(row => !row.archived).length }
+    };
+  }
+
+  function evaluateMarketCandidate(candidate = {}, settings = {}, nowValue = new Date()) {
+    const pricing = calculateAutomaticPriceTargets(candidate, settings);
+    const productId = String(candidate.productId || '').replace(/\D/g, '');
+    const exactVariant = Boolean(productId && (candidate.set || candidate.setName) && (candidate.version || candidate.rarity || candidate.collectorNumber));
+    const target = Math.max(0, Math.round(asNumber(candidate.target ?? candidate.quantity ?? settings.targetStock ?? 0)));
+    const stock = Math.max(0, Math.round(asNumber(candidate.stock)));
+    const missing = Math.max(0, target - stock);
+    const maxPrice = Math.max(0, asNumber(candidate.maxPrice ?? candidate.userMaxPrice));
+    const ownSales = Math.max(0, asNumber(candidate.ownSales));
+    const demandScore = clamp(candidate.demandScore, 0, 100);
+    const risk = String(candidate.risk || candidate.reprint || candidate.banlist || '').toLowerCase();
+    const highRisk = /hoch|high|ban|reprint/.test(risk);
+    const priceDate = candidate.priceDate || candidate.date || '';
+    const parsedDate = priceDate ? new Date(priceDate) : null;
+    const ageDays = parsedDate && !Number.isNaN(parsedDate.getTime()) ? Math.max(0, Math.floor((new Date(nowValue) - parsedDate) / 86400000)) : null;
+    const stale = ageDays === null || ageDays > Math.max(1, asNumber(settings.priceAgeDays) || 7);
+    const hasMarket = pricing.recommendedSell > 0 && pricing.pricePointCount > 0;
+    const limitProfit = maxPrice > 0 && hasMarket ? roundMoney(pricing.safeSell - pricing.safeSell * pricing.feeRate - pricing.packaging - maxPrice) : 0;
+    const limitRoi = maxPrice > 0 ? limitProfit / maxPrice * 100 : 0;
+    let recommendation = 'Preis prüfen';
+    let reason = 'Eine konkrete Angebotsposition inklusive Versand muss noch geprüft werden.';
+    if (!productId || !exactVariant) {
+      recommendation = 'Druckvariante prüfen';
+      reason = 'Ohne eindeutige Cardmarket-Produkt-ID und Druckvariante wird keine Kaufgrenze berechnet.';
+    } else if (!hasMarket) {
+      recommendation = 'Keine Preisdaten';
+      reason = 'Für diese Druckvariante fehlen belastbare Price-Guide-Werte.';
+    } else if (stale) {
+      recommendation = 'Preisstand erneuern';
+      reason = `Der Preisstand ist ${ageDays === null ? 'nicht datiert' : `${ageDays} Tage alt`}.`;
+    } else if (!missing) {
+      recommendation = 'Sollbestand erreicht';
+      reason = 'Der gewünschte Bestand ist bereits vorhanden.';
+    } else if (highRisk) {
+      recommendation = 'Nicht kaufen';
+      reason = 'Banlist- oder Reprint-Risiko ist als hoch markiert.';
+    } else if (maxPrice > 0 && maxPrice <= pricing.maxBuy) {
+      recommendation = maxPrice <= pricing.maxBuy * 0.82 ? 'Stark kaufen' : 'Kaufgrenze passend';
+      reason = `Deine Preisgrenze liegt innerhalb des maximalen vollständigen EK von ${pricing.maxBuy.toFixed(2)} €.`;
+    } else if (maxPrice > pricing.maxBuy && pricing.maxBuy > 0) {
+      recommendation = 'Preisgrenze senken';
+      reason = `Deine Wantlist-Grenze liegt über dem maximalen vollständigen EK von ${pricing.maxBuy.toFixed(2)} €.`;
+    }
+    const confidence = Math.max(0, Math.min(100, pricing.confidenceScore + (exactVariant ? 20 : 0) + (!stale ? 15 : 0)));
+    const needScore = target > 0 ? Math.min(25, missing / Math.max(1, target) * 25) : 0;
+    const salesScore = Math.min(20, ownSales * 4);
+    const priceScore = hasMarket && !stale ? 20 : hasMarket ? 8 : 0;
+    const dealScore = maxPrice > 0 && pricing.maxBuy > 0 ? Math.max(-15, Math.min(20, (pricing.maxBuy - maxPrice) / pricing.maxBuy * 40)) : 0;
+    const score = Math.max(0, Math.min(100, Math.round(needScore + salesScore + demandScore * 0.2 + priceScore + dealScore + confidence * 0.15 - (highRisk ? 30 : 0))));
+    return {
+      ...pricing, exactVariant, target, stock, missing, maxPrice, ownSales, demandScore,
+      priceDate, ageDays, stale, hasMarket, highRisk, limitProfit, limitRoi,
+      recommendation, reason, confidence, score
+    };
   }
 
   function planMaterialUsageChanges(materials = [], oldUsage = [], newUsage = []) {
@@ -1084,6 +1239,9 @@
     analyzePurchaseDraft,
     summarizePurchasePerformance,
     scoreDemandRadar,
+    normalizeWantlistEntry,
+    mergeWantlistSnapshot,
+    evaluateMarketCandidate,
     planMaterialUsageChanges,
     calculateInventoryBuckets,
     planInventoryTotalCorrection,

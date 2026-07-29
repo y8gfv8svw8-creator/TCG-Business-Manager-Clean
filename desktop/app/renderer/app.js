@@ -33,6 +33,7 @@ const defaultState = {
   ],
   purchaseDrafts: [],
   activePurchaseDraftId: "",
+  wantlists: [],
   demandRadar: {records:[], source:"", importedAt:"", sourceDate:""},
   sellers: [],
   customers: [],
@@ -74,7 +75,7 @@ const views = {
   sales: ["Verkäufe", "Verkaufsbestellungen, Gebühren und tatsächlicher Gewinn."],
   materials: ["Versandmaterial", "Materialbestand, Stückkosten, Mindestbestände und eigene Versandvorlagen."],
   expenses: ["Ausgaben", "Sonstige Betriebsausgaben und Materialeinkäufe nachvollziehbar erfassen."],
-  watchlist: ["Marktbeobachtung", "Kaufgrenzen, Zielpreise und Ampelentscheidungen."],
+    watchlist: ["Marktbeobachtung", "Wantlisten, Kaufgrenzen, Marktpreise und Preisprüfungen."],
   buying: ["Einkaufsplanung & Nachfrage", "Warenkorb prüfen, Einkaufsentwürfe speichern und gefragte Karten erkennen."],
   partners: ["Händler & Kunden", "Kontakte, Bewertungen, Bestellungen und Umsatz."],
   imports: ["Importe", "Cardmarket-Einkäufe, Verkäufe, Marktpreise und Backups."],
@@ -386,6 +387,11 @@ function migrateState(data) {
   migrated.watchlist = Array.isArray(data.watchlist) ? data.watchlist : structuredClone(defaultState.watchlist);
   migrated.purchaseDrafts = Array.isArray(data.purchaseDrafts) ? data.purchaseDrafts : [];
   migrated.activePurchaseDraftId = String(data.activePurchaseDraftId||"");
+  migrated.wantlists = (Array.isArray(data.wantlists) ? data.wantlists : []).map(list=>({
+    ...list,
+    purpose:list.purpose||"Geschäftsbestand",
+    entries:(Array.isArray(list.entries)?list.entries:[]).map(entry=>({history:[],archived:false,...entry}))
+  }));
   migrated.demandRadar = {...defaultState.demandRadar,...(data.demandRadar||{})};
   migrated.demandRadar.records = Array.isArray(data.demandRadar?.records) ? data.demandRadar.records : [];
   migrated.expenses = Array.isArray(data.expenses) ? data.expenses : [];
@@ -614,9 +620,9 @@ const uid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `tcg-${
 function statusBadge(status) {
   const s = String(status||"");
   let c = "blue";
-  if (["TOP DEAL","KAUFEN","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen","Verkaufsbereit","Gebucht"].includes(s)) c="green";
-  if (["BEOBACHTEN","KEINE PREISDATEN","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen","Teilweise erstattet","Vielleicht"].includes(s)) c="yellow";
-  if (["STOP","NICHT KAUFEN","FALLEND","Storniert","Beschädigt","Verlustverkauf","Erstattet"].includes(s)) c="red";
+  if (["TOP DEAL","KAUFEN","Stark kaufen","Kaufgrenze passend","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen","Verkaufsbereit","Gebucht"].includes(s)) c="green";
+  if (["BEOBACHTEN","KEINE PREISDATEN","Preis prüfen","Preisstand erneuern","Druckvariante prüfen","Keine Preisdaten","Privater Bedarf","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen","Teilweise erstattet","Vielleicht"].includes(s)) c="yellow";
+  if (["STOP","NICHT KAUFEN","Nicht kaufen","Preisgrenze senken","FALLEND","Storniert","Beschädigt","Verlustverkauf","Erstattet"].includes(s)) c="red";
   if (["Reserviert","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe unterwegs","Nicht verkaufen"].includes(s)) c="purple";
   return `<span class="badge ${c}">${escapeHtml(s||"-")}</span>`;
 }
@@ -776,9 +782,33 @@ function forwardPricingSettings(){
   return {...state.settings,minProfit:0,packaging:Number(packagingAllocation().perCard||0)};
 }
 
+function marketRecordForProduct(record={}){
+  const productId=cleanProductId(record.productId);
+  const catalog=productId?(state.productCatalog?.[productId]||{}):{};
+  const firstPositive=(...values)=>values.find(value=>Number(value)>0)??"";
+  return {
+    ...record,...catalog,
+    productId:productId||cleanProductId(catalog.productId),
+    name:catalog.germanName||catalog.name||record.name||"",
+    germanName:catalog.germanName||record.germanName||"",
+    englishName:catalog.englishName||catalog.officialBaseName||catalog.officialName||record.englishName||"",
+    set:catalog.set||record.set||"",setName:catalog.setName||record.setName||"",
+    collectorNumber:catalog.collectorNumber||record.collectorNumber||"",
+    rarity:catalog.rarity||catalog.variant||record.rarity||record.version||"",
+    version:catalog.rarity||catalog.variant||record.version||record.rarity||"",
+    productUrl:catalog.productUrl||record.productUrl||"",
+    low:firstPositive(catalog.low,catalog.marketLow,record.low,record.currentBuy),
+    currentBuy:firstPositive(catalog.low,catalog.marketLow,record.low,record.currentBuy),
+    trend:firstPositive(catalog.trend,record.trend),avg1:firstPositive(catalog.avg1,record.avg1),
+    avg7:firstPositive(catalog.avg7,record.avg7),avg30:firstPositive(catalog.avg30,record.avg30),
+    priceDate:catalog.priceDate||catalog.date||record.priceDate||""
+  };
+}
+
 function automaticWatchTargets(w={}){
   const pricingSettings=forwardPricingSettings();
-  const shared=window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(w,pricingSettings);
+  const market=marketRecordForProduct(w);
+  const shared=window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(market,pricingSettings);
   if(shared)return {targetSell:Number(shared.recommendedSell||0),maxBuy:Number(shared.maxBuy||0)};
   const low=Number(w.low||w.currentBuy||0),trend=Number(w.trend||0),avg7=Number(w.avg7||0),avg30=Number(w.avg30||0),avg1=Number(w.avg1||0);
   const weighted=[];if(trend>0)weighted.push([trend,.45]);if(avg7>0)weighted.push([avg7,.35]);if(avg30>0)weighted.push([avg30,.20]);if(!weighted.length&&avg1>0)weighted.push([avg1,1]);if(!weighted.length&&low>0)weighted.push([low,1]);
@@ -796,7 +826,12 @@ function automaticWatchTargets(w={}){
 function syncAutomaticWatchPrices(){
   let changed=false;
   state.watchlist.forEach(w=>{
-    if(w.archived||w.pricingMode==="manual")return;
+    if(w.archived)return;
+    const market=marketRecordForProduct(w);
+    ["low","currentBuy","trend","avg1","avg7","avg30","priceDate","set","setName","collectorNumber","version","productUrl","germanName","englishName"].forEach(field=>{
+      if(market[field]!==undefined&&market[field]!==""&&String(w[field]??"")!==String(market[field])){w[field]=market[field];changed=true;}
+    });
+    if(w.pricingMode==="manual")return;
     const next=automaticWatchTargets(w);if(!next.targetSell)return;
     if(Number(w.targetSell||0)!==next.targetSell||Number(w.maxBuy||0)!==next.maxBuy){w.targetSell=next.targetSell;w.maxBuy=next.maxBuy;w.pricingMode="automatic";w.pricingUpdatedAt=new Date().toISOString();changed=true;}
   });
@@ -805,22 +840,27 @@ function syncAutomaticWatchPrices(){
 
 function calculateWatch(w) {
   const pricingSettings=forwardPricingSettings();
-  const buy = Number(w.currentBuy||0);
+  const market=marketRecordForProduct(w);
+  const buy = Number(market.low||market.currentBuy||0);
   const sell = Number(w.targetSell||0);
   const fee = sell * pricingSettings.feePercent/100;
   const net = sell - fee - pricingSettings.packaging;
   const profit = buy ? net-buy : 0;
   const roi = buy ? profit/buy*100 : 0;
   let status = "BEOBACHTEN";
-  if (w.reprint==="Hoch" || w.banlist==="Hoch") status="STOP";
+  const exactVariant=Boolean(cleanProductId(w.productId)&&(market.set||market.setName)&&(market.version||market.rarity||market.collectorNumber));
+  const stale=!market.priceDate||daysBetween(market.priceDate)>Number(state.settings.priceAgeDays||7);
+  if(!exactVariant)status="KEINE PREISDATEN";
+  else if (w.reprint==="Hoch" || w.banlist==="Hoch") status="STOP";
   else if (w.stock >= w.target && w.target>0) status="STOP";
   else if (!buy || !sell) status="KEINE PREISDATEN";
-  else if (Number(w.trend||0)>0&&Number(w.avg30||0)>0&&Number(w.trend)<Number(w.avg30)*0.9) status="FALLEND";
+  else if(stale)status="BEOBACHTEN";
+  else if (Number(market.trend||0)>0&&Number(market.avg30||0)>0&&Number(market.trend)<Number(market.avg30)*0.9) status="FALLEND";
   else if (buy && buy <= Number(w.maxBuy||0) && profit >= 0 && roi >= pricingSettings.minRoi) {
     status = buy <= Number(w.maxBuy||0)*0.8 ? "TOP DEAL" : "KAUFEN";
   } else if(Number(w.maxBuy||0)>0&&buy<=Number(w.maxBuy||0)*1.08)status="BEOBACHTEN";
   else status="NICHT KAUFEN";
-  return {profit,roi,status};
+  return {profit,roi,status,market,exactVariant,stale};
 }
 
 function showView(name) {
@@ -2046,20 +2086,202 @@ function renderPurchaseAnalysis() {
       <div class="analysis-history"><details><summary>Eigene Historie (${a.purchases.length} Einkäufe / ${a.sales.length} Verkäufe)</summary><h4>Einkäufe</h4><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Menge</th><th>EK</th><th>Händler</th><th>Bestellung</th></tr></thead><tbody>${purchaseRows||'<tr><td colspan="5" class="empty">Keine Einkäufe gespeichert</td></tr>'}</tbody></table></div><h4>Verkäufe</h4><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Menge</th><th>VK</th><th>Kunde</th><th>Bestellung</th></tr></thead><tbody>${saleRows||'<tr><td colspan="5" class="empty">Keine Verkäufe gespeichert</td></tr>'}</tbody></table></div></details></div></article>`;
   }).join("")}</div>`;
 }
+
+function canonicalCardmarketProductPath(value=""){
+  try{
+    const url=new URL(String(value),"https://www.cardmarket.com");
+    return decodeURIComponent(url.pathname).replace(/^\/(?:de|en|fr|es|it)(?=\/)/i,"").replace(/\/$/,"").toLowerCase();
+  }catch{return "";}
+}
+
+let cardmarketProductUrlIndexCache={catalog:null,importedAt:"",size:0,index:new Map()};
+function cardmarketProductUrlIndex(){
+  const catalog=state.productCatalog||{},entries=Object.entries(catalog),importedAt=String(state.cardmarket?.productImportedAt||"");
+  if(cardmarketProductUrlIndexCache.catalog===catalog&&cardmarketProductUrlIndexCache.importedAt===importedAt&&cardmarketProductUrlIndexCache.size===entries.length)return cardmarketProductUrlIndexCache.index;
+  const index=new Map();
+  entries.forEach(([productId,product])=>{const path=canonicalCardmarketProductPath(product.productUrl);if(path&&!index.has(path))index.set(path,{productId,...product});});
+  cardmarketProductUrlIndexCache={catalog,importedAt,size:entries.length,index};
+  return index;
+}
+
+function productFromCardmarketLink(productUrl=""){
+  const direct=cleanProductId((String(productUrl).match(/[?&]idProduct=(\d+)/i)||[])[1]);
+  if(direct)return state.productCatalog?.[direct]?{productId:direct,...state.productCatalog[direct]}:resolveProduct(direct,{productUrl});
+  const path=canonicalCardmarketProductPath(productUrl);if(!path)return null;
+  return cardmarketProductUrlIndex().get(path)||null;
+}
+
+function exactLocalWantProduct(raw={}){
+  const normalized=window.TcgBusinessAutomation?.normalizeWantlistEntry?.(raw)||raw;
+  const linked=productFromCardmarketLink(normalized.productUrl);
+  if(linked)return linked;
+  if(normalized.productId)return marketRecordForProduct(normalized);
+  const wantedNames=[normalized.name,normalized.germanName,normalized.englishName].map(normalizeCardName).filter(Boolean);
+  if(!wantedNames.length)return null;
+  const wantedSet=normalizeSearchTerm(normalized.set||normalized.setName||"");
+  const wantedVersion=normalizeSearchTerm(normalized.version||normalized.rarity||"");
+  const candidates=Object.entries(state.productCatalog||{}).filter(([,product])=>{
+    const names=[product.name,product.germanName,product.englishName,product.officialName,product.officialBaseName].map(normalizeCardName);
+    if(!wantedNames.some(name=>names.includes(name)))return false;
+    if(wantedSet&&!normalizeSearchTerm([product.set,product.setName,product.collectorNumber].join(" ")).includes(wantedSet))return false;
+    if(wantedVersion&&!normalizeSearchTerm([product.rarity,product.variant].join(" ")).includes(wantedVersion))return false;
+    return true;
+  });
+  return candidates.length===1?{productId:candidates[0][0],...candidates[0][1]}:null;
+}
+
+function enrichWantlistRow(raw={},index=0){
+  const normalized=window.TcgBusinessAutomation.normalizeWantlistEntry(raw,index);
+  const product=exactLocalWantProduct(normalized);
+  return product?{...normalized,...product,productId:cleanProductId(product.productId),maxPrice:normalized.maxPrice,quantity:normalized.quantity,language:normalized.language||product.language||"",condition:normalized.condition||product.condition||"",foil:normalized.foil,priority:normalized.priority,note:normalized.note,sourceEntryId:normalized.sourceEntryId,sourceKey:normalized.sourceKey}:{...normalized};
+}
+
+function wantlistTextValue(container,selectors=[],patterns=[]){
+  for(const selector of selectors){const field=container.querySelector?.(selector);const value=field?.value||field?.getAttribute?.("value")||field?.textContent;if(String(value||"").trim())return String(value).trim();}
+  const text=String(container.textContent||"").replace(/\s+/g," ");
+  for(const pattern of patterns){const match=text.match(pattern);if(match?.[1])return match[1].trim();}
+  return "";
+}
+
+function parseWantlistHtml(text,fileName="Wantlist"){
+  const doc=new DOMParser().parseFromString(text,"text/html");
+  const title=String(doc.querySelector("h1")?.textContent||doc.title||fileName.replace(/\.[^.]+$/,"")).replace(/\s+/g," ").trim();
+  const anchors=[...doc.querySelectorAll('a[href*="/YuGiOh/Products/Singles/"],a[href*="idProduct="]')];
+  const rows=[];const seen=new Set();
+  anchors.forEach((link,index)=>{
+    const container=link.closest("tr,article,li,[data-product-id],[data-id-product],.row")||link.parentElement;
+    if(!container)return;
+    const productUrl=new URL(link.getAttribute("href")||"","https://www.cardmarket.com").href;
+    const productId=cleanProductId(container.dataset?.productId||container.dataset?.idProduct||(productUrl.match(/[?&]idProduct=(\d+)/i)||[])[1]);
+    const name=String(link.textContent||container.dataset?.name||"").replace(/\s+/g," ").trim();
+    if(!name)return;
+    const quantity=wantlistTextValue(container,['input[name*="amount" i]','input[name*="quantity" i]','select[name*="amount" i]'],[/(?:Menge|Quantity|Amount|Qty)\s*:?\s*(\d+)/i]);
+    const maxPrice=wantlistTextValue(container,['input[name*="price" i]'],[/(?:Max(?:imal)?preis|Max\.?\s*Price|Buy Price|Kaufpreis)\s*:?\s*([\d.,]+)\s*€/i]);
+    const language=wantlistTextValue(container,['select[name*="language" i] option:checked','[data-language]'],[/(?:Sprache|Language)\s*:?\s*([A-Za-zÄÖÜäöü/]+)/i]);
+    const condition=wantlistTextValue(container,['select[name*="condition" i] option:checked','[data-condition]'],[/(?:Zustand|Condition)\s*:?\s*([A-Z]{2,3})/i]);
+    const key=productId||canonicalCardmarketProductPath(productUrl)||`${normalizeCardName(name)}:${index}`;
+    if(seen.has(key))return;seen.add(key);
+    rows.push({idProduct:productId,ProductName:name,ProductUrl:productUrl,Quantity:quantity||1,MaxPrice_EUR:maxPrice,Language:language,MinCondition:condition});
+  });
+  return [{name:title||"Cardmarket-Wantlist",externalListId:"",rows}];
+}
+
+function groupWantlistRows(rows=[],fallbackName="Cardmarket-Wantlist"){
+  const groups=new Map();
+  rows.forEach(row=>{
+    const name=String(getAny(row,["WantListName","WantsListName","Listenname","Liste"])||fallbackName).trim();
+    const externalListId=cleanProductId(getAny(row,["idWantsList","idWantList","WantListId"]));
+    const key=externalListId?`id:${externalListId}`:`name:${normalizeSearchTerm(name)}`;
+    if(!groups.has(key))groups.set(key,{name,externalListId,rows:[]});groups.get(key).rows.push(row);
+  });
+  return [...groups.values()];
+}
+
+async function parseWantlistFile(file){
+  const text=await file.text();
+  if(/\.html?$/i.test(file.name)||/<html|\/YuGiOh\/Products\/Singles\//i.test(text))return parseWantlistHtml(text,file.name);
+  if(/\.json$/i.test(file.name)||/^\s*[\[{]/.test(text)){
+    const payload=JSON.parse(text);const rows=Array.isArray(payload)?payload:payload.entries||payload.cards||payload.items||payload.wantlist||payload.wantlists||[];
+    if(Array.isArray(payload.wantlists))return payload.wantlists.map((list,index)=>({name:list.name||`Wantlist ${index+1}`,externalListId:cleanProductId(list.id||list.idWantsList),rows:list.entries||list.cards||[]}));
+    return groupWantlistRows(rows,payload.name||file.name.replace(/\.[^.]+$/, ""));
+  }
+  return groupWantlistRows(parseCsv(text),file.name.replace(/\.[^.]+$/, ""));
+}
+
+async function importWantlistFile(file){
+  const purpose=document.getElementById("wantlistImportPurpose")?.value||"Geschäftsbestand";
+  const groups=await parseWantlistFile(file);if(!groups.length)throw new Error("Keine Wantlist gefunden.");
+  let totalRows=0,created=0,updated=0,archived=0,unmatched=0;
+  for(const group of groups){
+    const enriched=group.rows.map(enrichWantlistRow).filter(row=>row.name||row.productId||row.productUrl);
+    if(!enriched.length)continue;
+    unmatched+=enriched.filter(row=>!cleanProductId(row.productId)).length;
+    const existing=state.wantlists.find(list=>(group.externalListId&&String(list.externalListId||"")===group.externalListId)||(!group.externalListId&&normalizeSearchTerm(list.name)===normalizeSearchTerm(group.name)));
+    const merged=window.TcgBusinessAutomation.mergeWantlistSnapshot(existing||{},enriched,{name:group.name||"Cardmarket-Wantlist",externalListId:group.externalListId,purpose,sourceFile:file.name,sourceType:/\.html?$/i.test(file.name)?"Cardmarket HTML":/\.json$/i.test(file.name)?"JSON":"CSV",completeSnapshot:true});
+    if(existing)Object.assign(existing,merged.list);else state.wantlists.push(merged.list);
+    totalRows+=merged.stats.rows;created+=merged.stats.created;updated+=merged.stats.updated;archived+=merged.stats.archived;
+  }
+  if(!totalRows)throw new Error("Die Datei enthielt keine erkennbaren Kartenpositionen.");
+  addMovement({type:"Wantlist-Import",quantity:0,reference:file.name,note:`${totalRows} Einträge · ${created} neu · ${updated} geändert · ${archived} archiviert · ${unmatched} ohne eindeutige CM-ID`});
+  saveState();renderAll();
+  return {totalRows,created,updated,archived,unmatched};
+}
+
+function wantlistMarketRows(){
+  const salesByProduct={},demandByProduct={};
+  state.sales.forEach(sale=>(sale.items||[]).forEach(item=>{const id=cleanProductId(item.productId);if(id)salesByProduct[id]=(salesByProduct[id]||0)+Number(item.quantity||1);}));
+  demandRadarRows().forEach(row=>{const id=cleanProductId(row.productId);if(id)demandByProduct[id]=Math.max(demandByProduct[id]||0,Number(row.score||0));});
+  return (state.wantlists||[]).flatMap(list=>(list.entries||[]).map(entry=>{
+    const market=marketRecordForProduct(entry),productId=cleanProductId(market.productId);
+    const usePrivate=["Private Sammlung","Konkretes Deck"].includes(list.purpose);
+    const stock=(usePrivate?state.privateCollection:state.inventory).filter(item=>!item.archived&&!['Verkauft','Storniert','Abgegeben'].includes(item.status)&&((productId&&cleanProductId(item.productId)===productId)||(!productId&&normalizeCardName(item.name)===normalizeCardName(entry.name)))).length;
+    const evaluation=window.TcgBusinessAutomation.evaluateMarketCandidate({...market,maxPrice:entry.maxPrice,quantity:entry.quantity,target:entry.quantity,stock,ownSales:salesByProduct[productId]||0,demandScore:demandByProduct[productId]||0},forwardPricingSettings());
+    if(usePrivate&&evaluation.recommendation!=="Druckvariante prüfen"&&evaluation.recommendation!=="Keine Preisdaten"&&evaluation.recommendation!=="Preisstand erneuern"){
+      evaluation.recommendation=evaluation.missing?"Privater Bedarf":"Sollbestand erreicht";
+      evaluation.reason=evaluation.missing?"Privater Bedarf wird nicht als geschäftliche Renditeentscheidung gewertet.":"Die gewünschte private Menge ist bereits vorhanden.";
+    }
+    return {list,entry,market,...evaluation,productId};
+  }));
+}
+
+function renderWantlists(){
+  const table=document.getElementById("wantlistTable");if(!table)return;
+  const listFilter=document.getElementById("wantlistFilter"),selected=listFilter?.value||"";
+  if(listFilter){listFilter.innerHTML=`<option value="">Alle Wantlisten</option>${(state.wantlists||[]).map(list=>`<option value="${escapeHtml(list.id)}" ${selected===list.id?"selected":""}>${escapeHtml(list.name)}</option>`).join("")}`;}
+  const purpose=document.getElementById("wantlistPurposeFilter")?.value||"",recommendation=document.getElementById("wantlistRecommendationFilter")?.value||"",showArchived=document.getElementById("wantlistShowArchived")?.checked;
+  const all=wantlistMarketRows();
+  const rows=all.filter(row=>(!selected||row.list.id===selected)&&(!purpose||row.list.purpose===purpose)&&(!recommendation||row.recommendation===recommendation)&&(showArchived||!row.entry.archived)).sort((a,b)=>Number(a.entry.archived)-Number(b.entry.archived)||b.score-a.score||String(a.entry.name).localeCompare(String(b.entry.name),"de"));
+  const active=all.filter(row=>!row.entry.archived),missingQty=active.reduce((sum,row)=>sum+row.missing,0),buyable=active.filter(row=>["Stark kaufen","Kaufgrenze passend"].includes(row.recommendation)).length,unmatched=active.filter(row=>!row.exactVariant).length;
+  document.getElementById("wantlistSummary").innerHTML=`<div><small>Wantlisten</small><strong>${state.wantlists.length}</strong></div><div><small>Aktive Kartenwünsche</small><strong>${active.length}</strong></div><div><small>Fehlende Exemplare</small><strong>${missingQty}</strong></div><div><small>Kaufgrenze passend</small><strong class="money-positive">${buyable}</strong></div><div><small>Druckvariante offen</small><strong class="${unmatched?"money-negative":"money-positive"}">${unmatched}</strong></div>`;
+  table.innerHTML=rows.length?rows.map(row=>{const names=cardDisplayNames(row.market);const dataClass=row.confidence>=70?"high":row.confidence>=45?"medium":"low";return `<tr class="${row.entry.archived?"wantlist-archived":""}"><td><strong>${escapeHtml(row.list.name)}</strong><br><small>${escapeHtml(row.list.purpose)} · ${escapeHtml(row.list.sourceType||"Import")}<br>${row.list.importedAt?new Date(row.list.importedAt).toLocaleString("de-DE"):"–"}</small></td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(row.market))}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary||row.entry.name)}</strong> ↗</a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>${escapeHtml([row.market.setName||row.market.set,row.market.collectorNumber,row.market.rarity||row.market.version].filter(Boolean).join(" · ")||"Druckvariante nicht eindeutig")} · CM ${escapeHtml(row.productId||"fehlt")}</small></td><td><strong>${row.stock} / ${row.target}</strong><br><small>${row.missing} fehlen</small></td><td>${escapeHtml(row.entry.language||"alle Sprachen")} · ${escapeHtml(row.entry.condition||"jeder Zustand")}<br><small>${row.entry.foil?"Foil · ":""}Priorität ${escapeHtml(row.entry.priority||"B")}</small></td><td>${row.recommendedSell?`<strong>${money(row.recommendedSell)}</strong><br><small>Price Guide · ${row.priceDate?fmtDate(row.priceDate):"ohne Datum"}</small>`:"–"}</td><td>${row.maxBuy?`<strong>${money(row.maxBuy)}</strong><br><small>inkl. Gebührenrisiko und Verpackung</small>`:"–"}</td><td>${row.maxPrice?`<strong>${money(row.maxPrice)}</strong><br><small>${row.limitProfit>=0?`bei dieser Grenze ${money(row.limitProfit)} · ${pct(row.limitRoi)}`:"nicht rentabel"}</small>`:'<span class="muted">nicht gesetzt</span>'}</td><td><strong>${row.score}/100</strong><br><span class="trade-confidence ${dataClass}">${row.confidence}% Datenvertrauen</span></td><td>${statusBadge(row.recommendation)}<br><small>${escapeHtml(row.reason)}</small></td><td><div class="row-actions">${!row.entry.archived&&!row.exactVariant?`<button class="icon-button" data-assign-want-variant="${escapeHtml(row.list.id)}|${escapeHtml(row.entry.id)}">Druckvariante zuordnen</button>`:""}${!row.entry.archived&&row.exactVariant?`<button class="icon-button" data-want-to-watch="${escapeHtml(row.list.id)}|${escapeHtml(row.entry.id)}">Beobachten</button>`:""}<button class="icon-button" data-toggle-want-archive="${escapeHtml(row.list.id)}|${escapeHtml(row.entry.id)}">${row.entry.archived?"Wiederherstellen":"Archivieren"}</button></div></td></tr>`;}).join(""):'<tr><td colspan="10" class="empty">Keine passenden Wantlist-Einträge vorhanden.</td></tr>';
+}
+
+function assignWantlistVariant(listId,entryId){
+  const list=state.wantlists.find(row=>row.id===listId),entry=list?.entries?.find(row=>row.id===entryId);if(!list||!entry)return;
+  inventoryCardSearchSequence++;inventoryPriceSequence++;
+  document.getElementById("modalTitle").textContent="Wantlist-Druckvariante zuordnen";
+  const wrap=document.getElementById("modalFields");
+  wrap.innerHTML=`<div class="info full-width">Wähle nur die Druckvariante aus, die wirklich zu deinem Wantlist-Eintrag gehört. Menge, Preisgrenze, Sprache und Zustand bleiben erhalten.</div><label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher/englischer Name oder Setnummer …" value="${escapeHtml(entry.name||entry.germanName||entry.englishName||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label><div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}<label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label><input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen; der Price Guide dient nur als Markt-Orientierung.</span></div>`;
+  wrap.dataset.inventorySelection="required";
+  modalHandler=data=>{
+    if(!data.productId||!data.name){alert("Bitte zuerst die richtige Druckvariante aus der Ergebnisliste auswählen.");return false;}
+    entry.history=Array.isArray(entry.history)?entry.history:[];
+    entry.history.push({at:new Date().toISOString(),productId:entry.productId||"",name:entry.name||"",set:entry.set||entry.setName||"",version:entry.version||entry.rarity||"",collectorNumber:entry.collectorNumber||"",action:"Druckvariante manuell zugeordnet"});
+    entry.history=entry.history.slice(-100);
+    Object.assign(entry,{productId:cleanProductId(data.productId),metacardId:data.metacardId||"",name:data.name,germanName:data.germanName||data.name,englishName:data.englishName||"",set:data.set||"",setName:data.setName||"",version:data.rarity||"",rarity:data.rarity||"",collectorNumber:data.collectorNumber||"",productUrl:data.productUrl||"",manuallyAssignedAt:new Date().toISOString()});
+    return true;
+  };
+  let searchTimer;
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
+  if(entry.name)setTimeout(()=>renderInventoryCardSearch(entry.name),0);
+}
+
+function renderInventoryRepricing(){
+  const table=document.getElementById("watchRepricingTable");if(!table)return;
+  const rows=getInventoryGroups().map(group=>({group,pricing:inventoryGroupPricing(group),stats:inventoryGroupStats(group)})).filter(row=>row.pricing.needsReprice||row.pricing.unprofitableAtMarket).sort((a,b)=>Math.abs(b.pricing.listingPrice-b.pricing.suggestedSell)-Math.abs(a.pricing.listingPrice-a.pricing.suggestedSell)).slice(0,100);
+  const unprofitable=rows.filter(row=>row.pricing.unprofitableAtMarket).length;
+  document.getElementById("watchRepricingSummary").innerHTML=`<div><small>Zu prüfen</small><strong>${rows.length}</strong></div><div><small>Nicht kostendeckend</small><strong class="${unprofitable?"money-negative":"money-positive"}">${unprofitable}</strong></div><div><small>Nur mit exakter CM-ID</small><strong>${rows.filter(row=>cleanProductId(row.group.first.productId)).length}</strong></div>`;
+  table.innerHTML=rows.length?rows.map(({group,pricing,stats})=>{const names=cardDisplayNames(group.first),difference=Number(pricing.suggestedSell||0)-Number(pricing.listingPrice||0);return `<tr class="${pricing.unprofitableAtMarket?"inventory-price-review":""}"><td><strong>${escapeHtml(names.primary)}</strong><br><small>${escapeHtml([group.first.setName||group.first.set,group.first.collectorNumber,group.first.rarity].filter(Boolean).join(" · "))} · CM ${escapeHtml(group.first.productId||"fehlt")}</small></td><td>${stats.total} · ${stats.available} verfügbar</td><td>${pricing.averageCost?money(pricing.averageCost):"fehlt"}</td><td>${pricing.listingPrice?money(pricing.listingPrice):"nicht inseriert"}</td><td>${pricing.suggestedSell?money(pricing.suggestedSell):"keine Preisdaten"}</td><td class="${difference>0?"money-positive":difference<0?"money-negative":"muted"}">${pricing.suggestedSell?`${difference>0?"+":""}${money(difference)}`:"–"}</td><td>${pricing.unprofitableAtMarket?statusBadge("NICHT KAUFEN"):statusBadge("BEOBACHTEN")}</td><td>${pricing.suggestedSell?`<button type="button" class="secondary compact-button" data-apply-group-price="${escapeHtml(group.key)}">Preis prüfen</button>`:""}</td></tr>`;}).join(""):'<tr><td colspan="8" class="empty">Keine Preisprüfung erforderlich.</td></tr>';
+}
+
 function renderWatchlist() {
+  renderWantlists();
+  renderInventoryRepricing();
   renderPurchaseAnalysis();
   const q = document.getElementById("watchSearch").value;
   const f = document.getElementById("watchStatusFilter").value;
   const priorityFilter=document.getElementById("watchPriorityFilter")?.value||"",stockFilter=document.getElementById("watchStockFilter")?.value||"",dataFilter=document.getElementById("watchDataFilter")?.value||"",pricingFilter=document.getElementById("watchPricingFilter")?.value||"";
   const dataState=w=>{if(!w.priceDate||(!Number(w.currentBuy||0)&&!Number(w.trend||0)&&!Number(w.avg30||0)))return "missing";return daysBetween(w.priceDate)>Number(state.settings.priceAgeDays||7)?"stale":"fresh";};
   const rank={"TOP DEAL":0,"KAUFEN":1,"BEOBACHTEN":2,"FALLEND":3,"NICHT KAUFEN":4,"STOP":5,"KEINE PREISDATEN":6};
-  const all=state.watchlist.filter(w=>!w.archived).map(w=>({...w,...calculateWatch(w)}));
+  const all=state.watchlist.filter(w=>!w.archived).map(w=>{const calculation=calculateWatch(w);return {...w,...calculation.market,...calculation};});
   const rows = all.filter(w=>cardRecordMatchesSearch(w,q) && (!f || w.status===f)&&(!priorityFilter||w.priority===priorityFilter)&&(!stockFilter||(stockFilter==="below"?Number(w.stock||0)<Number(w.target||0):Number(w.stock||0)>=Number(w.target||0)))&&(!dataFilter||dataState(w)===dataFilter)&&(!pricingFilter||(w.pricingMode||"automatic")===pricingFilter)).sort((a,b)=>(rank[a.status]??99)-(rank[b.status]??99)||Number(b.roi||0)-Number(a.roi||0));
   const summary=document.getElementById("watchSummary");if(summary)summary.innerHTML=`<div><small>Beobachtete Druckvarianten</small><strong>${rows.length}</strong></div><div><small>Kaufchancen</small><strong class="money-positive">${rows.filter(row=>["TOP DEAL","KAUFEN"].includes(row.status)).length}</strong></div><div><small>Preisdaten veraltet / fehlen</small><strong class="${rows.some(row=>dataState(row)!=="fresh")?"money-negative":"money-positive"}">${rows.filter(row=>dataState(row)!=="fresh").length}</strong></div><div><small>Unter Sollbestand</small><strong>${rows.filter(row=>Number(row.stock||0)<Number(row.target||0)).length}</strong></div>`;
   document.getElementById("watchTable").innerHTML = rows.length ? rows.map(w=>{ const names=cardDisplayNames(w); return `
     <tr><td>${escapeHtml(w.priority)}</td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(w))}" title="${escapeHtml(`Cardmarket öffnen · Produkt-ID ${w.productId||"nicht vorhanden"} · ${w.set||"Set unbekannt"} · ${w.version||w.rarity||"Version unbekannt"}`)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(w.productId||"-")}</small></td>
     <td>${escapeHtml(w.set||"")}<br><small>${escapeHtml(w.version||"")}</small></td><td>${w.stock}</td><td>${w.target}</td>
-    <td>${money(w.maxBuy)}</td><td>${money(w.targetSell)}</td><td>${w.trend!==""?money(w.trend):"-"}</td><td>${w.avg30!==""?money(w.avg30):"-"}</td>
+    <td>${w.maxBuy?money(w.maxBuy):"–"}</td><td>${w.targetSell?money(w.targetSell):"–"}</td><td>${w.low!==""?money(w.low):"–"}</td><td>${w.trend!==""?money(w.trend):"–"} / ${w.avg30!==""?money(w.avg30):"–"}</td>
     <td>${w.currentBuy!==""?money(w.profit):"-"}</td><td>${w.currentBuy!==""?pct(w.roi):"-"}</td><td class="${dataState(w)==="fresh"?"money-positive":"money-negative"}">${w.priceDate?fmtDate(w.priceDate):"fehlt"}<br><small>${dataState(w)==="fresh"?"aktuell":dataState(w)==="stale"?"veraltet":"keine Preise"}</small></td><td>${statusBadge(w.status)}</td>
     <td><div class="row-actions"><button class="icon-button" data-edit-watch="${w.id}">Bearbeiten</button><button class="icon-button" data-delete-watch="${w.id}">Löschen</button></div></td></tr>`;}).join("") : `<tr><td colspan="14" class="empty">Keine Karten gefunden</td></tr>`;
 }
@@ -2105,7 +2327,10 @@ function renderBuyingPlanner(){
   if(!analysis){summary.innerHTML="";table.innerHTML='<tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr>';}
   else{
     const totals=analysis.totals;
-    summary.innerHTML=`<div><small>Karten / geschäftlich</small><strong>${totals.cards} / ${totals.businessCards}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(totals.paid)}</strong></div><div><small>Geschäftlicher EK</small><strong>${money(totals.businessCost)}</strong></div><div><small>Prognose Umsatz</small><strong>${money(totals.projectedRevenue)}</strong></div><div><small>Prognose Gewinn</small><strong class="${totals.projectedProfit>=0?"money-positive":"money-negative"}">${money(totals.projectedProfit)}</strong></div><div><small>Prognose ROI</small><strong>${pct(totals.projectedRoi)}</strong></div>`;
+    const enabledLines=analysis.lines.filter(row=>row.enabled!==false&&Number(row.businessQuantity||0)>0),missingPrices=enabledLines.filter(row=>!Number(row.pricing?.suggestedSell||0)).length,minRoi=Number(state.settings.minRoi||25);
+    const overallDecision=missingPrices?"Preisdaten prüfen":totals.projectedProfit<0?"Nicht kaufen":totals.projectedRoi>=minRoi?"Warenkorb lohnt sich":totals.projectedRoi>0?"Nur knapp rentabel":"Nicht kaufen";
+    const overallClass=overallDecision==="Warenkorb lohnt sich"?"money-positive":overallDecision==="Nicht kaufen"?"money-negative":"money-warning";
+    summary.innerHTML=`<div><small>Karten / geschäftlich</small><strong>${totals.cards} / ${totals.businessCards}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(totals.paid)}</strong></div><div><small>Geschäftlicher EK</small><strong>${money(totals.businessCost)}</strong></div><div><small>Prognose Umsatz</small><strong>${money(totals.projectedRevenue)}</strong></div><div><small>Prognose Gewinn</small><strong class="${totals.projectedProfit>=0?"money-positive":"money-negative"}">${money(totals.projectedProfit)}</strong></div><div><small>Prognose ROI</small><strong>${pct(totals.projectedRoi)}</strong></div><div><small>Gesamtentscheidung</small><strong class="${overallClass}">${overallDecision}</strong>${missingPrices?`<small>${missingPrices} Position(en) ohne Preis</small>`:""}</div>`;
     table.innerHTML=analysis.lines.map(row=>`<tr class="draft-${row.recommendation.toLowerCase().replaceAll(" ","-")}"><td><input type="checkbox" data-draft-enabled="${escapeHtml(row.id)}" ${row.enabled!==false?"checked":""}></td><td><input class="draft-number" type="number" min="0" max="${row.quantity}" value="${row.privateQuantity}" data-draft-private="${escapeHtml(row.id)}"></td><td><strong>${escapeHtml(cardDisplayNames(row).primary)}</strong><br><small>${escapeHtml([row.setName||row.set,row.collectorNumber,row.rarity,row.language,row.condition].filter(Boolean).join(" · "))} · CM ${escapeHtml(row.productId||"fehlt")}</small></td><td><input class="draft-number" type="number" min="1" value="${row.quantity}" data-draft-quantity="${escapeHtml(row.id)}"></td><td><input class="draft-price" type="number" min="0" step="0.01" value="${row.unitPrice}" data-draft-price="${escapeHtml(row.id)}"></td><td><strong>${money(row.landedUnitCost)}</strong></td><td>${row.low?money(row.low):"–"} / ${row.trend?money(row.trend):"–"}</td><td>${row.pricing.suggestedSell?money(row.pricing.suggestedSell):"–"}</td><td class="${row.expectedProfit>=0?"money-positive":"money-negative"}">${row.pricing.suggestedSell?`${money(row.expectedProfit)} · ${pct(row.expectedRoi)}`:"–"}</td><td>${statusBadge(row.recommendation)}</td></tr>`).join("");
   }
   renderDemandRadar();
@@ -3410,10 +3635,10 @@ function addWatch(initial={}) {
     {name:"target",label:"Sollbestand",type:"number",value:state.settings.targetStock},
     {name:"pricingMode",label:"Preisgrenzen",type:"select",options:[{value:"automatic",label:"Automatisch aus Marktdaten"},{value:"manual",label:"Manuell festlegen"}]},
     {name:"maxBuy",label:"Max. Einkauf (€)",type:"number",step:"0.01"},
-    {name:"currentBuy",label:"Aktuelles Angebot (€)",type:"number",step:"0.01"},
-    {name:"targetSell",label:"Zielverkauf (€)",type:"number",step:"0.01"},
-    {name:"trend",label:"CM Trend (€)",type:"number",step:"0.01"},
-    {name:"avg30",label:"Ø 30 Tage (€)",type:"number",step:"0.01"},
+    {name:"currentBuy",label:"Price Guide Low (€)",type:"number",step:"0.01"},
+    {name:"targetSell",label:"Marktgestützter Ziel-VK (€)",type:"number",step:"0.01"},
+    {name:"trend",label:"Cardmarket Price Trend (€)",type:"number",step:"0.01"},
+    {name:"avg30",label:"Cardmarket Ø 30 Tage (€)",type:"number",step:"0.01"},
     {name:"reprint",label:"Reprint-Risiko",type:"select",options:["Niedrig","Mittel","Hoch"]},
     {name:"banlist",label:"Banlist-Risiko",type:"select",options:["Niedrig","Mittel","Hoch"]}
   ], modalInitial, data=>{
@@ -4531,13 +4756,14 @@ document.querySelectorAll("[data-view-jump]").forEach(b=>b.addEventListener("cli
 ["inventorySearch","privateSearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
 // Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
 // während des Öffnens würde das native Auswahlmenü sofort wieder schließen.
-["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","expenseCategoryFilter","expenseTypeFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
+["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter","wantlistShowArchived","expenseCategoryFilter","expenseTypeFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
 
 document.getElementById("inventoryFilterReset").onclick=()=>{["inventorySearch","inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter"].forEach(id=>document.getElementById(id).value="");document.getElementById("inventorySort").value="name";renderAll();};
 document.getElementById("privateFilterReset").onclick=()=>{["privateSearch","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 document.getElementById("purchaseFilterReset").onclick=()=>{["purchaseSearch","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 document.getElementById("salesFilterReset").onclick=()=>{["salesSearch","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 document.getElementById("watchFilterReset").onclick=()=>{["watchSearch","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
+document.getElementById("wantlistFilterReset").onclick=()=>{["wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter"].forEach(id=>document.getElementById(id).value="");document.getElementById("wantlistShowArchived").checked=false;renderAll();};
 
 document.getElementById("addInventoryBtn").onclick=()=>addInventory();
 document.getElementById("addPrivateBtn").onclick=()=>addInventory({},"private");
@@ -4553,6 +4779,7 @@ document.getElementById("buyMaterialBtn").onclick=()=>buyMaterial();
 document.getElementById("addTemplateBtn").onclick=()=>addTemplate();
 document.getElementById("addExpenseBtn").onclick=()=>addExpense();
 document.getElementById("addWatchBtn").onclick=()=>addWatch();
+document.getElementById("wantlistImportFile").onchange=async event=>{const file=event.target.files?.[0];if(!file)return;try{const result=await importWantlistFile(file);alert(`${result.totalRows} Wantlist-Einträge verarbeitet: ${result.created} neu, ${result.updated} geändert, ${result.archived} archiviert.${result.unmatched?` ${result.unmatched} Einträge benötigen noch eine eindeutige Druckvariante.`:""}`);}catch(error){alert(`Wantlist konnte nicht importiert werden: ${error.message}`);}finally{event.target.value="";}};
 document.getElementById("newPurchaseDraftBtn").onclick=()=>{state.activePurchaseDraftId="";document.getElementById("purchaseCartPaste").value="";document.getElementById("purchaseDraftSeller").value="";document.getElementById("purchaseDraftShipping").value="0";document.getElementById("purchaseDraftExtra").value="0";renderBuyingPlanner();};
 document.getElementById("purchaseDraftSelect").onchange=event=>{state.activePurchaseDraftId=event.target.value;renderBuyingPlanner();};
 document.getElementById("analyzePurchaseCartBtn").onclick=()=>{
@@ -4571,6 +4798,21 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
+  const wantButton=e.target.closest("[data-want-to-watch], [data-toggle-want-archive], [data-assign-want-variant]");
+  if(wantButton){
+    const value=wantButton.dataset.wantToWatch||wantButton.dataset.toggleWantArchive||wantButton.dataset.assignWantVariant||"";const [listId,entryId]=value.split("|");
+    const list=state.wantlists.find(row=>row.id===listId),entry=list?.entries?.find(row=>row.id===entryId);
+    if(!list||!entry)return;
+    if(wantButton.dataset.assignWantVariant){assignWantlistVariant(listId,entryId);return;}
+    if(wantButton.dataset.toggleWantArchive){entry.archived=!entry.archived;entry.archivedAt=entry.archived?new Date().toISOString():"";saveState();renderAll();return;}
+    const market=marketRecordForProduct(entry),productId=cleanProductId(market.productId);
+    if(!productId){alert("Bitte zuerst eine eindeutige Cardmarket-Druckvariante zuordnen.");return;}
+    const existing=state.watchlist.find(row=>!row.archived&&cleanProductId(row.productId)===productId);
+    if(existing){showView("watchlist");document.getElementById("watchSearch").value=productId;renderAll();return;}
+    const targets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(market,forwardPricingSettings());
+    state.watchlist.push({id:uid(),priority:entry.priority||"B",productId,name:market.name,germanName:market.germanName,englishName:market.englishName,set:market.set||market.setName,version:market.rarity||market.version,stock:0,target:Number(entry.quantity||state.settings.targetStock||0),maxBuy:Number(targets.maxBuy||0),targetSell:Number(targets.recommendedSell||0),currentBuy:market.low||"",low:market.low||"",trend:market.trend||"",avg1:market.avg1||"",avg7:market.avg7||"",avg30:market.avg30||"",reprint:"",banlist:"",priceDate:market.priceDate||"",productUrl:market.productUrl||"",pricingMode:"automatic",sourceWantlistId:list.id});
+    saveState();renderAll();return;
+  }
   const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-apply-group-price], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-toggle-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
@@ -4871,6 +5113,7 @@ document.addEventListener("click",event=>{
   if(jump&&!jump.matches(".nav-item")){
     const view=jump.dataset.viewJump,query=String(jump.dataset.filterQuery||"").trim();
     showView(view);
+    if(view==="inventory"&&jump.dataset.filterQuality&&document.getElementById("inventoryQualityFilter")){document.getElementById("inventoryQualityFilter").value=jump.dataset.filterQuality;renderAll();}
     const searchId={inventory:"inventorySearch",private:"privateSearch",purchases:"purchaseSearch",sales:"salesSearch",watchlist:"watchSearch",materials:"materialSearch",expenses:"expenseSearch"}[view];
     if(query&&searchId&&document.getElementById(searchId)){
       document.getElementById(searchId).value=query;

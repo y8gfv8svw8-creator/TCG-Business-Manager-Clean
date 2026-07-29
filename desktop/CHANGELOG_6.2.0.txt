@@ -1,0 +1,21 @@
+TCG Business Manager 6.2.0 – Einkaufszentrale und Cardmarket-Wantlisten
+
+Neu
+- Cardmarket-Wantlisten aus einer vollständig gespeicherten HTML-Seite sowie aus CSV oder JSON importieren.
+- Mehrere Wantlisten und Zwecke getrennt verwalten: Geschäftsbestand, Privatsammlung, Meta-Beobachtung, konkretes Deck und Nachkauf.
+- Folgeimporte aktualisieren die Liste, archivieren entfernte Wünsche und erhalten Notizen sowie Änderungshistorie.
+- Nicht eindeutig gelieferte Wantlist-Karten lassen sich über die vollständige Druckvariantensuche manuell und dauerhaft zuordnen.
+- Kaufentscheidungen zeigen Markt-VK, maximalen vollständigen EK, eigene Preisgrenze, Bedarf, Datenvertrauen und Begründung getrennt.
+- Preisprüfung für den eigenen Bestand zeigt abweichende oder nicht kostendeckende Inserate.
+- Der Warenkorb-Prüfer gibt zusätzlich eine Gesamtentscheidung aus.
+
+Korrigiert
+- Cardmarket Price Guide Low wird nicht mehr als garantiert aktuelles Angebot bezeichnet.
+- Sobald Trend- oder Durchschnittswerte vorhanden sind, bestimmen diese den marktgestützten VK; Low bleibt ein Rückfallwert.
+- Automatische Watchlist-Werte werden aus dem neuesten Preisstand der exakten Produkt-ID erneuert.
+- Die Marktbeobachtung berechnet keine Kaufempfehlung ohne eindeutige Druckvariante oder bei veraltetem Preisstand.
+
+Sicherheit
+- Kein automatischer Kauf und keine Verbindung zum Cardmarket-Konto erforderlich.
+- Bestehende Produkt-IDs, Bestände, Einstandspreise, Reservierungen, Verkäufe und Nutzerdaten bleiben unverändert.
+- Entfernte Wantlist-Einträge werden archiviert und nicht gelöscht.

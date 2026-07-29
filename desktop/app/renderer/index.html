@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.1.0</title>
+  <title>TCG Business Manager 6.2.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.1.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.2.0 · SQLite</div>
         </div>
       </div>
 
@@ -307,6 +307,31 @@
       </section>
 
       <section id="view-watchlist" class="view">
+        <article class="panel purchasing-center-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Einkaufszentrale</h2>
+              <p class="muted">Cardmarket-Wantlisten, eigener Bedarf, Marktpreise und tatsächliche Verkäufe werden getrennt bewertet. Der Manager kauft niemals automatisch.</p>
+            </div>
+            <div class="panel-head-actions">
+              <select id="wantlistImportPurpose" title="Zweck der importierten Wantlist">
+                <option>Geschäftsbestand</option><option>Private Sammlung</option><option>Meta-Beobachtung</option><option>Konkretes Deck</option><option>Nachkauf ausverkaufter Karten</option>
+              </select>
+              <label class="primary file-label">Cardmarket-Wantlist importieren<input id="wantlistImportFile" type="file" accept=".html,.htm,.csv,.json" hidden /></label>
+            </div>
+          </div>
+          <div class="info wantlist-import-note"><strong>Empfohlen:</strong> Wantlist bei Cardmarket öffnen, im Browser als vollständige HTML-Datei speichern und hier auswählen. CSV-/JSON-Exporte werden ebenfalls erkannt. Entfernte Einträge werden archiviert; Notizen und Verlauf bleiben erhalten.</div>
+          <div class="filter-panel" aria-label="Wantlisten filtern">
+            <label>Wantlist<select id="wantlistFilter"><option value="">Alle Wantlisten</option></select></label>
+            <label>Zweck<select id="wantlistPurposeFilter"><option value="">Alle Zwecke</option><option>Geschäftsbestand</option><option>Private Sammlung</option><option>Meta-Beobachtung</option><option>Konkretes Deck</option><option>Nachkauf ausverkaufter Karten</option></select></label>
+            <label>Entscheidung<select id="wantlistRecommendationFilter"><option value="">Alle Entscheidungen</option><option>Stark kaufen</option><option>Kaufgrenze passend</option><option>Preis prüfen</option><option>Preisgrenze senken</option><option>Preisstand erneuern</option><option>Druckvariante prüfen</option><option>Keine Preisdaten</option><option>Privater Bedarf</option><option>Sollbestand erreicht</option><option>Nicht kaufen</option></select></label>
+            <label class="switch-label"><input id="wantlistShowArchived" type="checkbox" /> archivierte Einträge anzeigen</label>
+            <button type="button" class="secondary filter-reset" id="wantlistFilterReset">Filter zurücksetzen</button>
+          </div>
+          <div class="collection-summary" id="wantlistSummary"></div>
+          <div class="table-wrap wantlist-table-wrap"><table class="wantlist-table"><thead><tr><th>Quelle / Zweck</th><th>Karte / genaue Druckvariante</th><th>Bedarf</th><th>Vorgaben</th><th>Markt-VK</th><th>Max. vollständiger EK</th><th>Eigene Preisgrenze</th><th>Score / Daten</th><th>Entscheidung</th><th></th></tr></thead><tbody id="wantlistTable"><tr><td colspan="10" class="empty">Noch keine Cardmarket-Wantlist importiert.</td></tr></tbody></table></div>
+        </article>
+
         <div class="toolbar">
           <input id="watchSearch" class="search" placeholder="Karte auf Deutsch oder Englisch suchen …" />
           <select id="watchStatusFilter">
@@ -329,6 +354,11 @@
           <button type="button" class="secondary filter-reset" id="watchFilterReset">Filter zurücksetzen</button>
         </div>
         <div class="collection-summary" id="watchSummary"></div>
+        <article class="panel watch-repricing-panel">
+          <div class="panel-head"><div><h2>Preisprüfung eigener Bestände</h2><p class="muted">Zeigt nur Karten, deren Inserat vom aktuellen marktgestützten VK abweicht oder am Markt nicht rentabel wäre.</p></div><button class="secondary" type="button" data-view-jump="inventory" data-filter-quality="reprice">Im Bestand öffnen</button></div>
+          <div id="watchRepricingSummary" class="collection-summary"></div>
+          <div class="table-wrap"><table><thead><tr><th>Karte</th><th>Bestand</th><th>Ø vollständiger EK</th><th>Inserat</th><th>Markt-VK</th><th>Abweichung</th><th>Bewertung</th><th></th></tr></thead><tbody id="watchRepricingTable"><tr><td colspan="8" class="empty">Keine Preisprüfung erforderlich.</td></tr></tbody></table></div>
+        </article>
         <section class="purchase-analysis-panel">
           <div class="panel-head">
             <div>
@@ -342,8 +372,8 @@
           <table>
             <thead><tr>
               <th>Prio</th><th>Karte</th><th>Set / Version</th><th>Bestand</th><th>Soll</th>
-              <th>Max EK</th><th>Ziel VK</th><th>CM Trend</th><th>Ø 30 Tage</th>
-              <th>Gewinn</th><th>ROI</th><th>Preisstand</th><th>Empfehlung</th><th></th>
+              <th>Max. vollständiger EK</th><th>Markt-VK</th><th>Price Guide Low</th><th>CM Trend / Ø 30</th>
+              <th>Gewinn bei Low</th><th>ROI bei Low</th><th>Preisstand</th><th>Empfehlung</th><th></th>
             </tr></thead>
             <tbody id="watchTable"></tbody>
           </table>

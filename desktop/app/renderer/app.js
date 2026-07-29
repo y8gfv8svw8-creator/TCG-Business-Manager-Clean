@@ -12,7 +12,8 @@ const WATCHLIST_REFERENCE = {
 };
 
 const DEFAULT_SETTINGS = window.TcgAppConfig?.DEFAULT_SETTINGS || {
-  feePercent: 5, packaging: 0.12, minProfit: 0.75, minRoi: 20,
+  feePercent: 5, packaging: 0.12, minProfit: 0, minRoi: 25, targetRoi: 30,
+  expectedCardsPerOrder: 3, pricingModelVersion: "market-roi-v1",
   priceAgeDays: 7, condition: "NM", languages: "DE/EN", targetStock: 3,
   safetyPercent: 5, themeMode: "system", density: "comfortable", startView: "dashboard"
 };
@@ -363,9 +364,17 @@ function customerStats(customer) {
 
 function migrateState(data) {
   const migrated = {...structuredClone(defaultState), ...data};
+  const settingsInput={...(data.settings||{})};
+  if(settingsInput.pricingModelVersion!=="market-roi-v1"){
+    settingsInput.minProfit=0;
+    settingsInput.minRoi=Math.max(25,Number(settingsInput.minRoi||0));
+    settingsInput.targetRoi=Math.max(30,Number(settingsInput.targetRoi||0));
+    settingsInput.expectedCardsPerOrder=Math.max(1,Number(settingsInput.expectedCardsPerOrder||3));
+    settingsInput.pricingModelVersion="market-roi-v1";
+  }
   migrated.settings = window.TcgAppConfig?.normalizeSettings
-    ? window.TcgAppConfig.normalizeSettings(data.settings||{})
-    : {...defaultState.settings, ...(data.settings||{})};
+    ? window.TcgAppConfig.normalizeSettings(settingsInput)
+    : {...defaultState.settings, ...settingsInput};
   migrated.inventory = Array.isArray(data.inventory) ? data.inventory : [];
   migrated.privateCollection = Array.isArray(data.privateCollection) ? data.privateCollection : [];
   migrated.purchases = Array.isArray(data.purchases) ? data.purchases : [];
@@ -748,20 +757,31 @@ function calculateSaleProfit(sale) {
   return {gross,refund,netRevenue:gross-refund,fee, packaging, postage, cost, profit:gross-refund-fee-packaging-postage-cost};
 }
 
+function packagingAllocation(){
+  return window.TcgBusinessAutomation?.estimatePackagingPerCard?.(state,state.settings)||{
+    perCard:Number(state.settings.packaging||0)/Math.max(1,Number(state.settings.expectedCardsPerOrder||3)),
+    perOrder:Number(state.settings.packaging||0),averageCardsPerOrder:Number(state.settings.expectedCardsPerOrder||3),sampleCount:0,source:"fallback"
+  };
+}
+
+function forwardPricingSettings(){
+  return {...state.settings,minProfit:0,packaging:Number(packagingAllocation().perCard||0)};
+}
+
 function automaticWatchTargets(w={}){
-  const shared=window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(w,state.settings);
+  const pricingSettings=forwardPricingSettings();
+  const shared=window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(w,pricingSettings);
   if(shared)return {targetSell:Number(shared.recommendedSell||0),maxBuy:Number(shared.maxBuy||0)};
   const low=Number(w.low||w.currentBuy||0),trend=Number(w.trend||0),avg7=Number(w.avg7||0),avg30=Number(w.avg30||0),avg1=Number(w.avg1||0);
   const weighted=[];if(trend>0)weighted.push([trend,.45]);if(avg7>0)weighted.push([avg7,.35]);if(avg30>0)weighted.push([avg30,.20]);if(!weighted.length&&avg1>0)weighted.push([avg1,1]);if(!weighted.length&&low>0)weighted.push([low,1]);
   const totalWeight=weighted.reduce((sum,row)=>sum+row[1],0);
   const weightedSell=totalWeight?weighted.reduce((sum,row)=>sum+row[0]*row[1],0)/totalWeight:0;
   const targetSell=Math.round(Math.max(low,weightedSell)*100)/100;
-  const safeSell=targetSell*Math.max(0,1-Number(state.settings.safetyPercent||0)/100);
-  const net=safeSell*(1-Number(state.settings.feePercent||0)/100)-Number(state.settings.packaging||0);
-  const byProfit=net-Number(state.settings.minProfit||0);
-  const minRoi=Math.max(0,Number(state.settings.minRoi||0))/100;
+  const safeSell=targetSell*Math.max(0,1-Number(pricingSettings.safetyPercent||0)/100);
+  const net=safeSell*(1-Number(pricingSettings.feePercent||0)/100)-Number(pricingSettings.packaging||0);
+  const minRoi=Math.max(0,Number(pricingSettings.minRoi||25))/100;
   const byRoi=net/Math.max(1,1+minRoi);
-  const maxBuy=targetSell>0?Math.max(0,Math.floor(Math.min(byProfit,byRoi)*100)/100):0;
+  const maxBuy=targetSell>0?Math.max(0,Math.floor(byRoi*100)/100):0;
   return {targetSell,maxBuy};
 }
 
@@ -776,10 +796,11 @@ function syncAutomaticWatchPrices(){
 }
 
 function calculateWatch(w) {
+  const pricingSettings=forwardPricingSettings();
   const buy = Number(w.currentBuy||0);
   const sell = Number(w.targetSell||0);
-  const fee = sell * state.settings.feePercent/100;
-  const net = sell - fee - state.settings.packaging;
+  const fee = sell * pricingSettings.feePercent/100;
+  const net = sell - fee - pricingSettings.packaging;
   const profit = buy ? net-buy : 0;
   const roi = buy ? profit/buy*100 : 0;
   let status = "BEOBACHTEN";
@@ -787,7 +808,7 @@ function calculateWatch(w) {
   else if (w.stock >= w.target && w.target>0) status="STOP";
   else if (!buy || !sell) status="KEINE PREISDATEN";
   else if (Number(w.trend||0)>0&&Number(w.avg30||0)>0&&Number(w.trend)<Number(w.avg30)*0.9) status="FALLEND";
-  else if (buy && buy <= Number(w.maxBuy||0) && profit >= state.settings.minProfit && roi >= state.settings.minRoi) {
+  else if (buy && buy <= Number(w.maxBuy||0) && profit >= 0 && roi >= pricingSettings.minRoi) {
     status = buy <= Number(w.maxBuy||0)*0.8 ? "TOP DEAL" : "KAUFEN";
   } else if(Number(w.maxBuy||0)>0&&buy<=Number(w.maxBuy||0)*1.08)status="BEOBACHTEN";
   else status="NICHT KAUFEN";
@@ -1065,7 +1086,7 @@ function renderAutomationOverview() {
 }
 
 function businessIssueButton(row,showCategory=true){
-  const action=row.action?`data-repair-action="${escapeHtml(row.action)}" data-record-id="${escapeHtml(row.recordId||"")}"`:`data-view-jump="${escapeHtml(row.target||"reports")}"`;
+  const action=row.action?`data-repair-action="${escapeHtml(row.action)}" data-record-id="${escapeHtml(row.recordId||"")}"`:`data-view-jump="${escapeHtml(row.target||"reports")}" data-filter-query="${escapeHtml(row.searchTerm||"")}"`;
   const title=showCategory?`${row.category||row.type||"Hinweis"}: ${row.title}`:row.title;
   return `<button type="button" class="business-issue ${escapeHtml(row.severity)}" ${action}><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(row.details||row.type||"")}</small></span><span>${row.action?"Reparieren":"Öffnen"} →</span></button>`;
 }
@@ -1410,7 +1431,7 @@ function inventoryGroupPricing(group){
   const productId=cleanProductId(group.first?.productId);
   const catalog=state.productCatalog?.[productId]||{};
   const prices={...catalog,...group.first,cost:averageCost};
-  const calculated=window.TcgBusinessAutomation?.calculateOwnedCardPriceTargets?.(prices,state.settings)||{suggestedSell:0,marketSell:0,priceFloor:0,expectedProfit:0};
+  const calculated=window.TcgBusinessAutomation?.calculateOwnedCardPriceTargets?.(prices,forwardPricingSettings())||{suggestedSell:0,marketSell:0,priceFloor:0,expectedProfit:0};
   const listed=items.filter(item=>item.listed&&Number(item.listingPrice||0)>0);
   const listingPrice=listed.length?listed.reduce((sum,item)=>sum+Number(item.listingPrice||0),0)/listed.length:0;
   const suggestedSell=Number(calculated.suggestedSell||0);
@@ -1422,7 +1443,8 @@ function inventoryGroupPricing(group){
     : Number(catalog.trend||0)-Number(catalog.previousTrend??catalog.trend??0);
   const trendBase=Number(catalog.previousTrend||0);
   const changePercent=trendBase?dailyChange/trendBase*100:0;
-  return {averageCost,listingPrice,listedCount:listed.length,itemCount:items.length,suggestedSell,difference,needsReprice:Boolean(listed.length&&suggestedSell&&Math.abs(difference)>=threshold),dailyChange:Number.isFinite(dailyChange)?dailyChange:0,changePercent:Number.isFinite(changePercent)?changePercent:0,priceDate:catalog.priceDate||"",marketLow:Number(catalog.low||0),marketTrend:Number(catalog.trend||0),calculated};
+  const unprofitableAtMarket=Boolean(averageCost>0&&suggestedSell>0&&!calculated.profitableAtMarket);
+  return {averageCost,listingPrice,listedCount:listed.length,itemCount:items.length,suggestedSell,difference,needsReprice:Boolean(listed.length&&suggestedSell&&Math.abs(difference)>=threshold),unprofitableAtMarket,dailyChange:Number.isFinite(dailyChange)?dailyChange:0,changePercent:Number.isFinite(changePercent)?changePercent:0,priceDate:catalog.priceDate||"",marketLow:Number(catalog.low||0),marketTrend:Number(catalog.trend||0),calculated};
 }
 
 function inventoryAgeMatches(days, filter) {
@@ -1492,7 +1514,7 @@ function renderInventory() {
       ? `${money(pricing.listingPrice)}${pricing.listedCount!==pricing.itemCount?`<br><small>${pricing.listedCount} Exemplar${pricing.listedCount===1?"":"e"} inseriert</small>`:""}`
       : '<span class="muted">Nicht inseriert</span>';
     const changeClass=pricing.dailyChange>0?"money-positive":pricing.dailyChange<0?"money-negative":"muted";
-    const rowClass=pricing.needsReprice?"inventory-price-review":"";
+    const rowClass=pricing.needsReprice||pricing.unprofitableAtMarket?"inventory-price-review":"";
     return `<tr class="${rowClass}">
       <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
       <td>${escapeHtml(i.setName||i.set||"-")}${i.setName&&i.set?`<br><small>${escapeHtml(i.set)}</small>`:""}${i.collectorNumber?`<br><small>${escapeHtml(i.collectorNumber)}</small>`:""}</td>
@@ -1500,7 +1522,7 @@ function renderInventory() {
       <td><button class="stock-detail-button" data-inventory-details="${escapeHtml(group.key)}"><strong>${group.quantity}</strong><span>Details</span></button></td>
       <td>${pricing.averageCost?money(pricing.averageCost):'<span class="muted">fehlt</span>'}</td>
       <td>${price}</td>
-      <td>${pricing.suggestedSell?`<strong>${money(pricing.suggestedSell)}</strong><br><small>${pricing.calculated.priceFloor?`Kostenuntergrenze ${money(pricing.calculated.priceFloor)}`:"Marktberechnung"}</small><br><button type="button" class="link-button compact-button" data-apply-group-price="${escapeHtml(group.key)}">Übernehmen</button>`:'<span class="muted">Keine Preisdaten</span>'}</td>
+      <td>${pricing.suggestedSell?`<strong>${money(pricing.suggestedSell)}</strong><br><small>Marktbasierter VK${pricing.calculated.targetRoiPrice?` · ROI-Ziel ${money(pricing.calculated.targetRoiPrice)}`:""}</small>${pricing.unprofitableAtMarket?'<br><small class="money-negative">Zum Marktpreis nicht rentabel</small>':""}<br><button type="button" class="link-button compact-button" data-apply-group-price="${escapeHtml(group.key)}">Übernehmen</button>`:'<span class="muted">Keine Preisdaten</span>'}</td>
       <td>${pricing.priceDate?`<span class="${changeClass}"><strong>${pricing.dailyChange>0?"+":""}${money(pricing.dailyChange)}</strong></span><br><small>${pricing.changePercent?`${pricing.changePercent>0?"+":""}${pricing.changePercent.toFixed(1)} % · `:""}Price Guide ${fmtDate(pricing.priceDate)}</small>${pricing.needsReprice?'<br><span class="badge yellow">Preis prüfen</span>':""}`:'<span class="muted">Kein Preisstand</span>'}</td>
       <td>${statusBadge(displayStatus)}</td>
       <td>${daysBetween(group.oldestDate)} Tage</td>
@@ -1944,12 +1966,12 @@ function cardAnalysis(card) {
   const marketAvg30=Number(watch?.avg30||catalog.avg30||catalog.AVG30||0);
   const marketPrice=marketLow||marketTrend||marketAvg30;
   const expectedSell=marketAvg30||marketTrend||marketLow;
-  const safety=Math.max(0,Number(state.settings.safetyPercent||0))/100;
+  const pricingSettings=forwardPricingSettings();
+  const safety=Math.max(0,Number(pricingSettings.safetyPercent||0))/100;
   const safeSell=expectedSell*(1-safety);
-  const netBeforeBuy=safeSell*(1-Number(state.settings.feePercent||0)/100)-Number(state.settings.packaging||0);
-  const maxByProfit=Math.max(0,netBeforeBuy-Number(state.settings.minProfit||0));
-  const maxByRoi=Math.max(0,netBeforeBuy/(1+Number(state.settings.minRoi||0)/100));
-  const calculatedMaxBuy=expectedSell?Math.min(maxByProfit,maxByRoi):0;
+  const netBeforeBuy=safeSell*(1-Number(pricingSettings.feePercent||0)/100)-Number(pricingSettings.packaging||0);
+  const maxByRoi=Math.max(0,netBeforeBuy/(1+Number(pricingSettings.minRoi||25)/100));
+  const calculatedMaxBuy=expectedSell?maxByRoi:0;
   const maxBuy=Number(watch?.maxBuy||0)||calculatedMaxBuy;
   const estimatedProfit=maxBuy?netBeforeBuy-maxBuy:0;
   const estimatedMargin=maxBuy?estimatedProfit/maxBuy*100:0;
@@ -1980,7 +2002,7 @@ function renderPurchaseAnalysis() {
         <div class="analysis-metric"><span>Eigene Kaufgrenze</span><strong>${a.watch?.maxBuy?money(a.watch.maxBuy):"-"}</strong></div><div class="analysis-metric"><span>Bester eigener EK</span><strong>${a.bestBuy?money(a.bestBuy):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Ø eigener EK</span><strong>${a.avgBuy?money(a.avgBuy):"Keine Daten"}</strong></div>
         <div class="analysis-metric"><span>Bester eigener VK</span><strong>${a.bestSell?money(a.bestSell):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Ø eigener VK</span><strong>${a.avgSell?money(a.avgSell):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Geschätzter Gewinn</span><strong class="${a.estimatedProfit>=0?'money-positive':'money-negative'}">${a.expectedSell?money(a.estimatedProfit):"-"}</strong></div>
         <div class="analysis-metric"><span>Geschätzte Marge</span><strong>${a.expectedSell?pct(a.estimatedMargin):"-"}</strong></div><div class="analysis-metric"><span>Bestand / reserviert</span><strong>${a.total} / ${a.reserved}</strong></div><div class="analysis-metric"><span>Verfügbar</span><strong>${a.available}</strong></div>
-      </div><div class="analysis-recommendation"><span class="muted">Einkaufsempfehlung</span><br><strong class="${cls}">${escapeHtml(a.recommendation)}</strong><div class="analysis-note">Berechnung mit ${Number(state.settings.feePercent||0).toFixed(1).replace('.',',')} % Gebühr, ${money(state.settings.packaging)}, ${money(state.settings.minProfit)} Mindestgewinn, ${Number(state.settings.minRoi||0)} % Mindest-ROI und ${Number(state.settings.safetyPercent||0)} % Sicherheitsabschlag.</div></div>
+      </div><div class="analysis-recommendation"><span class="muted">Einkaufsempfehlung</span><br><strong class="${cls}">${escapeHtml(a.recommendation)}</strong><div class="analysis-note">Berechnung mit ${Number(state.settings.feePercent||0).toFixed(1).replace('.',',')} % Gebühr, ${money(packagingAllocation().perCard)} anteiliger Verpackung, ${Number(state.settings.minRoi||25)} % Mindest-ROI und ${Number(state.settings.safetyPercent||0)} % Sicherheitsabschlag.</div></div>
       <div class="analysis-history"><details><summary>Eigene Historie (${a.purchases.length} Einkäufe / ${a.sales.length} Verkäufe)</summary><h4>Einkäufe</h4><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Menge</th><th>EK</th><th>Händler</th><th>Bestellung</th></tr></thead><tbody>${purchaseRows||'<tr><td colspan="5" class="empty">Keine Einkäufe gespeichert</td></tr>'}</tbody></table></div><h4>Verkäufe</h4><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Menge</th><th>VK</th><th>Kunde</th><th>Bestellung</th></tr></thead><tbody>${saleRows||'<tr><td colspan="5" class="empty">Keine Verkäufe gespeichert</td></tr>'}</tbody></table></div></details></div></article>`;
   }).join("")}</div>`;
 }
@@ -2272,7 +2294,7 @@ function paintTradeDatabaseInsights(data) {
       <td>${row.ownBuyAverage?money(row.ownBuyAverage):"–"}</td>
       <td>${row.ownSellAverage?money(row.ownSellAverage):"–"}</td>
       <td><strong>${row.recommendedBuy?money(row.recommendedBuy):"–"}</strong></td>
-      <td><strong>${row.recommendedSell?money(row.recommendedSell):"–"}</strong><small>${row.quickSell?`Schnell ${money(row.quickSell)}`:""}${row.priceFloor?` · Untergrenze ${money(row.priceFloor)}`:""}</small></td>
+      <td><strong>${row.recommendedSell?money(row.recommendedSell):"–"}</strong><small>${row.quickSell?`Schnell ${money(row.quickSell)}`:""}${row.priceFloor?` · ROI-Ziel ${money(row.priceFloor)}`:""}${row.profitableAtMarket===false?' · nicht rentabel':""}</small></td>
       <td><span class="trade-confidence ${escapeHtml(row.confidenceLevel)}">${confidenceLabel} · ${Math.round(Number(row.confidenceScore||0))}%</span><small title="${escapeHtml((row.explanation||[]).join(" · "))}">${escapeHtml((row.explanation||[])[0]||"Weitere Daten erforderlich")}</small></td>
     </tr>`;
   }).join(""):`<tr><td colspan="7" class="empty">Noch keine kartengenauen Ein- oder Verkäufe vorhanden. Produkt-IDs in Importen und Bestandskarten bilden automatisch die Datenbasis.</td></tr>`;
@@ -2307,8 +2329,9 @@ async function renderTradeDatabaseInsights(force=false) {
 function renderSettings() {
   document.getElementById("settingFee").value = state.settings.feePercent;
   document.getElementById("settingPackaging").value = state.settings.packaging;
-  document.getElementById("settingMinProfit").value = state.settings.minProfit;
+  document.getElementById("settingExpectedCardsPerOrder").value = state.settings.expectedCardsPerOrder ?? 3;
   document.getElementById("settingMinRoi").value = state.settings.minRoi;
+  document.getElementById("settingTargetRoi").value = state.settings.targetRoi ?? 30;
   document.getElementById("settingPriceAge").value = state.settings.priceAgeDays;
   document.getElementById("settingCondition").value = state.settings.condition;
   document.getElementById("settingLanguages").value = state.settings.languages;
@@ -2328,8 +2351,9 @@ function renderSettings() {
   document.getElementById("settingArchiveImports").checked = Boolean(state.settings.archiveOriginalImports);
   const preview=document.getElementById("settingsCalculationPreview");
   if(preview){
-    const sell=5, fee=sell*Number(state.settings.feePercent||0)/100, packaging=Number(state.settings.packaging||0), safety=sell*Number(state.settings.safetyPercent||0)/100;
-    preview.innerHTML=`<strong>Beispiel bei ${money(sell)}</strong><span>Gebühr ${money(fee)} · Verpackungsschätzung ${money(packaging)} · Sicherheitsabschlag ${money(safety)} · verbleibend ${money(Math.max(0,sell-fee-packaging-safety))}</span>`;
+    const sell=5, fee=sell*Number(state.settings.feePercent||0)/100, allocation=packagingAllocation(), safety=sell*Number(state.settings.safetyPercent||0)/100;
+    const source=allocation.source==="actual"?`aus ${allocation.sampleCount} echten Bestellungen gelernt`:`mit ${allocation.averageCardsPerOrder} Karten je Bestellung geschätzt`;
+    preview.innerHTML=`<strong>Beispiel bei ${money(sell)}</strong><span>Gebühr ${money(fee)} · anteilige Verpackung ${money(allocation.perCard)} (${escapeHtml(source)}) · Sicherheitsabschlag ${money(safety)} · verbleibend ${money(Math.max(0,sell-fee-allocation.perCard-safety))}</span>`;
   }
   const status=document.getElementById("settingsDatabaseStatus");
   if(status&&window.desktopApp?.getTradeDatabaseStatus&&!renderSettings.statusPending){
@@ -2625,7 +2649,7 @@ async function inventoryPricingSuggestion(product={}){
   if(window.tcgProductPricing)return window.tcgProductPricing(product);
   const learned=product.learnedPricing||((await window.desktopApp?.getTradeRecommendations?.({productIds:[String(product.productId||"")],limit:1}))?.recommendations||[])[0]||{};
   const marketValues=[product.trend,product.avg7,product.avg30,product.low].map(Number).filter(value=>value>0);
-  return {recommendedSell:Number(learned.recommendedSell||marketValues[0]||0),recommendedBuy:Number(learned.recommendedBuy||0),priceFloor:Number(learned.priceFloor||0),quickSell:Number(learned.quickSell||0),confidence:learned.confidenceLevel||"low"};
+  return {recommendedSell:Number(learned.recommendedSell||marketValues[0]||0),recommendedBuy:Number(learned.recommendedBuy||0),priceFloor:Number(learned.priceFloor||0),quickSell:Number(learned.quickSell||0),profitableAtMarket:learned.profitableAtMarket!==false,confidence:learned.confidenceLevel||"low"};
 }
 
 async function chooseInventoryVariant(productId,preserveResults=false){
@@ -2647,7 +2671,7 @@ async function chooseInventoryVariant(productId,preserveResults=false){
   if(priceSequence!==inventoryPriceSequence||document.querySelector('#modalFields [name="productId"]')?.value!==String(productId))return;
   const suggestionField=document.querySelector('#modalFields [name="suggestedSell"]');if(suggestionField)suggestionField.value=Number(suggestion.recommendedSell||0).toFixed(2);
   const priceInfo=document.getElementById("inventoryPriceSuggestion");
-  if(priceInfo)priceInfo.innerHTML=suggestion.recommendedSell?`<strong>VK-Vorschlag ${money(suggestion.recommendedSell)}</strong><span>${suggestion.quickSell?`Schnellverkauf ${money(suggestion.quickSell)} · `:""}${suggestion.priceFloor?`Persönliche Preisuntergrenze ${money(suggestion.priceFloor)} · `:""}Maximaler sinnvoller EK ${suggestion.recommendedBuy?money(suggestion.recommendedBuy):"noch ohne ausreichende Daten"} · Datenbasis ${escapeHtml({high:"hoch",medium:"mittel",low:"niedrig"}[suggestion.confidence]||suggestion.confidence||"niedrig")}</span><button type="button" class="link-button" id="applyInventorySuggestedPrice">Vorschlag als Inseratspreis übernehmen</button>`:`<span>Noch kein belastbarer VK-Vorschlag für diese Druckvariante vorhanden.</span>`;
+  if(priceInfo)priceInfo.innerHTML=suggestion.recommendedSell?`<strong>Marktbasierter VK-Vorschlag ${money(suggestion.recommendedSell)}</strong><span>${suggestion.quickSell?`Schnellverkauf ${money(suggestion.quickSell)} · `:""}${suggestion.priceFloor?`VK für Ziel-ROI ${money(suggestion.priceFloor)} · `:""}Maximaler sinnvoller EK ${suggestion.recommendedBuy?money(suggestion.recommendedBuy):"noch ohne ausreichende Daten"} · Datenbasis ${escapeHtml({high:"hoch",medium:"mittel",low:"niedrig"}[suggestion.confidence]||suggestion.confidence||"niedrig")}</span>${suggestion.profitableAtMarket===false?'<span class="money-negative">Der aktuelle Marktpreis erreicht den Mindest-ROI nicht. Der Vorschlag wird nicht künstlich erhöht.</span>':""}<button type="button" class="link-button" id="applyInventorySuggestedPrice">Vorschlag als Inseratspreis übernehmen</button>`:`<span>Noch kein belastbarer VK-Vorschlag für diese Druckvariante vorhanden.</span>`;
 }
 
 function scannerReviewTitle(scan={}){
@@ -3003,7 +3027,7 @@ function renderPurchaseReceipt(purchase){
   const body=rows.map(row=>{
     const r=row.receipt,names=cardDisplayNames(row.item);
     const productId=cleanProductId(row.item.productId),catalog=state.productCatalog?.[productId]||{};
-    const pricing=TcgBusinessAutomation.calculateOwnedCardPriceTargets({...catalog,...row.item,cost:Number(row.unitCost||0)},state.settings);
+    const pricing=TcgBusinessAutomation.calculateOwnedCardPriceTargets({...catalog,...row.item,cost:Number(row.unitCost||0)},forwardPricingSettings());
     const suggested=Number(row.item.suggestedSell||pricing.suggestedSell||0),listingPrice=Number(row.item.receiptListingPrice||suggested||0);
     const complete=inventoryPrintComplete(row.item);
     return `<tr data-receipt-row data-receipt-key="${escapeHtml(r.key)}" data-ordered="${r.quantity}" data-min-business="${r.materializedBusiness}" data-min-private="${r.materializedPrivate}" data-min-damaged="${r.materializedDamaged}">
@@ -3011,7 +3035,7 @@ function renderPurchaseReceipt(purchase){
       <td><strong>${r.quantity}</strong></td>
       ${["business","private","damaged","cancelled"].map(key=>`<td><input class="receipt-quantity" data-receipt-value="${key}" type="number" min="${key==="business"?r.materializedBusiness:key==="private"?r.materializedPrivate:key==="damaged"?r.materializedDamaged:0}" max="${r.quantity}" step="1" value="${r[key]||0}"></td>`).join("")}
       <td data-receipt-open><strong>${r.open}</strong></td><td><strong>${money(row.unitCost)}</strong><small>Karte, Versand und Zusatzkosten</small></td>
-      <td>${suggested?`<strong>${money(suggested)}</strong><small>${pricing.priceFloor?`Kostenuntergrenze ${money(pricing.priceFloor)}`:"Offizieller Price Guide"}</small>${pricing.costFloorAboveMarket?'<small class="money-negative">Kosten liegen über Markt-Vorschlag</small>':""}`:'<span class="muted">Noch keine Preisdaten</span>'}</td>
+      <td>${suggested?`<strong>${money(suggested)}</strong><small>Marktbasierter VK${pricing.targetRoiPrice?` · ROI-Ziel ${money(pricing.targetRoiPrice)}`:""}</small>${pricing.profitableAtMarket===false?'<small class="money-negative">Zum Marktpreis nicht rentabel</small>':""}`:'<span class="muted">Noch keine Preisdaten</span>'}</td>
       <td><input class="receipt-listing-price" data-receipt-listing-price type="number" min="0" step="0.01" value="${listingPrice?listingPrice.toFixed(2):""}"><label class="receipt-list-check"><input data-receipt-list type="checkbox" ${row.item.listBusiness?"checked":""}> Im Manager direkt als inseriert markieren</label><input data-receipt-suggested type="hidden" value="${suggested}"></td></tr>`;
   }).join("");
   target.innerHTML=rows.length?`<div class="table-wrap"><table class="receipt-table"><thead><tr><th>Karte / Druck</th><th>Bestellt</th><th>Geschäft</th><th>Privat</th><th>Beschädigt</th><th>Storniert</th><th>Offen</th><th>Genauer EK</th><th>Berechneter VK</th><th>Direkt inserieren</th></tr></thead><tbody>${body}</tbody></table></div><div class="info">„Direkt inserieren“ speichert Preis und Inseratstatus im Manager. Eine Veröffentlichung bei Cardmarket selbst ist erst mit einem künftigen API-Zugang möglich.</div><div id="purchaseReceiptValidation" class="receipt-validation"></div>`:`<div class="warning">Für diesen Einkauf sind keine einzelnen Kartenpositionen vorhanden. Bitte zuerst Karten hinzufügen.</div>`;
@@ -4475,8 +4499,11 @@ document.getElementById("saveSettingsBtn").onclick=()=>{
   const next={...state.settings,
     feePercent:Number(document.getElementById("settingFee").value||0),
     packaging:Number(document.getElementById("settingPackaging").value||0),
-    minProfit:Number(document.getElementById("settingMinProfit").value||0),
+    minProfit:0,
     minRoi:Number(document.getElementById("settingMinRoi").value||0),
+    targetRoi:Number(document.getElementById("settingTargetRoi").value||30),
+    expectedCardsPerOrder:Number(document.getElementById("settingExpectedCardsPerOrder").value||3),
+    pricingModelVersion:"market-roi-v1",
     priceAgeDays:Number(document.getElementById("settingPriceAge").value||7),
     condition:document.getElementById("settingCondition").value,
     languages:document.getElementById("settingLanguages").value,
@@ -4693,7 +4720,16 @@ document.addEventListener("click",event=>{
   const reportButton=event.target.closest("[data-performance-report]");
   if(reportButton){activePerformanceReport=reportButton.dataset.performanceReport;renderAdvancedPerformanceReport();return;}
   const jump=event.target.closest("[data-view-jump]");
-  if(jump&&!jump.matches(".nav-item"))showView(jump.dataset.viewJump);
+  if(jump&&!jump.matches(".nav-item")){
+    const view=jump.dataset.viewJump,query=String(jump.dataset.filterQuery||"").trim();
+    showView(view);
+    const searchId={inventory:"inventorySearch",private:"privateSearch",purchases:"purchaseSearch",sales:"salesSearch",watchlist:"watchSearch",materials:"materialSearch",expenses:"expenseSearch"}[view];
+    if(query&&searchId&&document.getElementById(searchId)){
+      document.getElementById(searchId).value=query;
+      renderAll();
+      requestAnimationFrame(()=>document.getElementById(searchId)?.focus());
+    }
+  }
 });
 
 const purchaseImportDateField = document.getElementById("purchaseImportDate");

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.0.4</title>
+  <title>TCG Business Manager 6.0.5</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.0.4 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.0.5 · SQLite</div>
         </div>
       </div>
 
@@ -635,7 +635,7 @@
               <tbody id="tradeRecommendationTable"><tr><td colspan="7" class="empty">Noch keine kartengenauen Handelsdaten vorhanden.</td></tr></tbody>
             </table>
           </div>
-          <p class="muted trade-database-note">Die Empfehlung beachtet Gebühren, Verpackung, Mindestgewinn, Mindest-ROI und Sicherheitsabschlag aus den Einstellungen. Sie wird mit jedem neuen Kauf, Verkauf und Price-Guide-Stand genauer.</p>
+          <p class="muted trade-database-note">Die Empfehlung beachtet Marktpreis, Gebühren, anteilige Verpackung, Mindest-ROI und Sicherheitsabschlag. Sie wird mit jedem neuen Kauf, Verkauf und Price-Guide-Stand genauer.</p>
         </article>
         <article class="panel trade-database-panel">
           <div class="panel-head">
@@ -666,9 +666,10 @@
             <div class="panel-head"><div><h2>Preise &amp; Wirtschaftlichkeit</h2><small>Tatsächliche Gebühren und Materialien haben immer Vorrang vor diesen Schätzwerten.</small></div></div>
             <div class="settings-grid">
               <label>Standardgebühr, falls unbekannt (%)<input id="settingFee" type="number" min="0" max="100" step="0.1" /></label>
-              <label>Verpackungsschätzung, falls unbekannt (€)<input id="settingPackaging" type="number" min="0" step="0.01" /></label>
-              <label>Mindestgewinn (€)<input id="settingMinProfit" type="number" min="0" step="0.01" /></label>
+              <label>Verpackung pro Bestellung, falls unbekannt (€)<input id="settingPackaging" type="number" min="0" step="0.01" /></label>
+              <label>Erwartete Karten pro Bestellung<input id="settingExpectedCardsPerOrder" type="number" min="1" step="0.1" /></label>
               <label>Mindest-ROI (%)<input id="settingMinRoi" type="number" min="0" step="1" /></label>
+              <label>Ziel-ROI (%)<input id="settingTargetRoi" type="number" min="0" step="1" /></label>
               <label>Sicherheitsabschlag Marktpreis (%)<input id="settingSafetyPercent" type="number" min="0" max="50" step="0.5" /></label>
               <label>Schnellverkaufsabschlag (%)<input id="settingQuickSellDiscount" type="number" min="0" max="50" step="0.5" /></label>
               <label>Preiswarnung nach Tagen<input id="settingPriceAge" type="number" min="1" step="1" /></label>

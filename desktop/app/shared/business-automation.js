@@ -74,7 +74,7 @@
       ? materialUsageCost
       : hasManualPackaging
         ? asNumber(sale.material !== undefined && sale.material !== '' ? sale.material : sale.packaging)
-        : Math.max(0, asNumber(sale.quantity)) * asNumber(settings.packaging);
+        : Math.max(0, asNumber(settings.packaging));
     const postage = asNumber(sale.postage);
     const returnedToInventory = String(sale.status || '') === 'Rückgabe eingetroffen';
     const historicalCostStatus = String(sale.historicalCostStatus || '').trim().toLowerCase();
@@ -119,6 +119,50 @@
   const floorMoney = value => Math.max(0, Math.floor((Number(value) + Number.EPSILON) * 100) / 100);
   const clamp = (value, min, max) => Math.min(max, Math.max(min, asNumber(value)));
 
+  function estimatePackagingPerCard(state = {}, settings = state.settings || {}) {
+    const sales = Array.isArray(state.sales) ? state.sales : [];
+    let totalCost = 0;
+    let totalCards = 0;
+    let sampleCount = 0;
+    sales.forEach(sale => {
+      if (String(sale.status || '').toLowerCase().includes('storniert')) return;
+      const quantity = Math.max(0, asNumber(sale.quantity) || (Array.isArray(sale.items)
+        ? sale.items.reduce((sum, item) => sum + Math.max(0, asNumber(item.quantity || 1)), 0)
+        : 0));
+      if (!quantity) return;
+      const materialUsageCost = Array.isArray(sale.materialUsage) && sale.materialUsage.length
+        ? sale.materialUsage.reduce((sum, row) => sum + Math.max(0, asNumber(row.quantity)) * Math.max(0, asNumber(row.unitCost)), 0)
+        : null;
+      const manualCost = sale.material !== undefined && sale.material !== ''
+        ? Math.max(0, asNumber(sale.material))
+        : sale.packaging !== undefined && sale.packaging !== ''
+          ? Math.max(0, asNumber(sale.packaging))
+          : null;
+      const orderCost = materialUsageCost !== null ? materialUsageCost : manualCost;
+      if (orderCost === null) return;
+      totalCost += orderCost;
+      totalCards += quantity;
+      sampleCount += 1;
+    });
+    if (totalCards > 0) {
+      return {
+        perCard: roundMoney(totalCost / totalCards),
+        perOrder: Math.max(0, asNumber(settings.packaging)),
+        averageCardsPerOrder: roundMoney(totalCards / sampleCount),
+        sampleCount,
+        source: 'actual'
+      };
+    }
+    const expectedCardsPerOrder = Math.max(1, asNumber(settings.expectedCardsPerOrder) || 3);
+    return {
+      perCard: roundMoney(Math.max(0, asNumber(settings.packaging)) / expectedCardsPerOrder),
+      perOrder: Math.max(0, asNumber(settings.packaging)),
+      averageCardsPerOrder: expectedCardsPerOrder,
+      sampleCount: 0,
+      source: 'fallback'
+    };
+  }
+
   function calculateAutomaticPriceTargets(prices = {}, settings = {}) {
     const low = optionalNumber(prices.low ?? prices.currentBuy);
     const trend = optionalNumber(prices.trend);
@@ -145,21 +189,22 @@
     const safeSell = floorMoney(recommendedSell * (1 - safety));
     const feeAmount = safeSell * feeRate;
     const netBeforeBuy = safeSell - feeAmount - packaging;
-    const minProfit = Math.max(0, asNumber(settings.minProfit));
-    const minRoi = Math.max(0, asNumber(settings.minRoi)) / 100;
-    const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy - minProfit) : 0;
+    const minProfit = 0;
+    const minRoi = Math.max(0, asNumber(settings.minRoi ?? 25)) / 100;
+    const targetRoi = Math.max(minRoi, asNumber(settings.targetRoi ?? 30) / 100);
+    const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy) : 0;
     const maxByRoi = netBeforeBuy > 0 ? floorMoney(minRoi > 0 ? netBeforeBuy / (1 + minRoi) : netBeforeBuy) : 0;
-    const maxBuy = recommendedSell > 0 ? floorMoney(Math.min(maxByProfit, maxByRoi)) : 0;
+    const maxBuy = recommendedSell > 0 ? maxByRoi : 0;
     const ownedCost = Math.max(0, asNumber(prices.cost ?? prices.ownBuyAverage));
-    const minimumByProfit = feeRate < 1
-      ? (ownedCost + packaging + minProfit) / Math.max(0.01, 1 - feeRate)
+    const breakEvenPrice = feeRate < 1
+      ? (ownedCost + packaging) / Math.max(0.01, 1 - feeRate)
       : 0;
-    const minimumByRoi = feeRate < 1
-      ? (ownedCost * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate)
+    const targetRoiPrice = feeRate < 1
+      ? (ownedCost * (1 + targetRoi) + packaging) / Math.max(0.01, 1 - feeRate)
       : 0;
-    const priceFloor = ownedCost > 0 ? Math.ceil(Math.max(minimumByProfit, minimumByRoi) * 100) / 100 : 0;
+    const priceFloor = ownedCost > 0 ? Math.ceil(targetRoiPrice * 100) / 100 : 0;
     const quickSell = recommendedSell > 0
-      ? Math.ceil(Math.max(low || 0, priceFloor, recommendedSell * (1 - safety)) * 100) / 100
+      ? Math.ceil(Math.max(low || 0, recommendedSell * (1 - safety)) * 100) / 100
       : 0;
     const confidenceScore = Math.min(100,
       pricePointCount * 10 +
@@ -170,14 +215,15 @@
     return {
       low, trend, avg1, avg7, avg30, pricePointCount,
       recommendedSell, safeSell, feeRate, packaging, feeAmount, netBeforeBuy,
-      minProfit, minRoi, maxByProfit, maxByRoi, maxBuy,
-      ownedCost, priceFloor, quickSell, confidenceScore, confidenceLevel
+      minProfit, minRoi, targetRoi, maxByProfit, maxByRoi, maxBuy,
+      ownedCost, breakEvenPrice: roundMoney(breakEvenPrice), targetRoiPrice: priceFloor,
+      priceFloor, quickSell, confidenceScore, confidenceLevel
     };
   }
 
   function calculateOwnedCardPriceTargets(prices = {}, settings = {}) {
     const base = calculateAutomaticPriceTargets(prices, settings);
-    const suggestedSell = Math.ceil(Math.max(base.recommendedSell, base.priceFloor) * 100) / 100;
+    const suggestedSell = base.recommendedSell > 0 ? base.recommendedSell : base.priceFloor;
     const feeAmountAtSuggestion = suggestedSell * base.feeRate;
     const expectedProfit = suggestedSell > 0
       ? roundMoney(suggestedSell - feeAmountAtSuggestion - base.packaging - base.ownedCost)
@@ -190,6 +236,8 @@
       feeAmountAtSuggestion: roundMoney(feeAmountAtSuggestion),
       expectedProfit,
       expectedRoi,
+      profitableAtMarket: base.ownedCost > 0 ? suggestedSell > 0 && expectedProfit >= 0 && expectedRoi >= base.minRoi * 100 : null,
+      meetsTargetRoi: base.ownedCost > 0 ? suggestedSell > 0 && expectedProfit >= 0 && expectedRoi >= base.targetRoi * 100 : null,
       costFloorAboveMarket: base.priceFloor > 0 && base.recommendedSell > 0 && base.priceFloor > base.recommendedSell
     };
   }
@@ -745,11 +793,11 @@
 
   function buildDataQualityIssues(state = {}, now = new Date()) {
     const issues = [];
-    const push = (severity, category, title, details, target = '', action = '', recordId = '') => issues.push({ severity, category, title, details, target, action, recordId });
+    const push = (severity, category, title, details, target = '', action = '', recordId = '', searchTerm = '') => issues.push({ severity, category, title, details, target, action, recordId, searchTerm });
     const duplicateOrders = (rows, label) => {
       const counts = new Map();
       rows.forEach(row => { const key = String(row.orderNo || '').trim(); if (key) counts.set(key, (counts.get(key) || 0) + 1); });
-      [...counts].filter(([, count]) => count > 1).forEach(([orderNo, count]) => push('error', 'Duplikat', `${label} ${orderNo} ist ${count}× vorhanden`, 'Bestellnummern sollten eindeutig sein.', label === 'Einkauf' ? 'purchases' : 'sales'));
+      [...counts].filter(([, count]) => count > 1).forEach(([orderNo, count]) => push('error', 'Duplikat', `${label} ${orderNo} ist ${count}× vorhanden`, 'Bestellnummern sollten eindeutig sein.', label === 'Einkauf' ? 'purchases' : 'sales', '', '', orderNo));
     };
     duplicateOrders(state.purchases || [], 'Einkauf');
     duplicateOrders(state.sales || [], 'Verkauf');
@@ -773,12 +821,12 @@
     (state.sales || []).forEach(sale => {
       const historicalResolution = ['confirmed', 'unknown', 'linked'].includes(String(sale.historicalCostStatus || '').toLowerCase());
       if (realizedSale(sale) && String(sale.status || '') !== 'Rückgabe eingetroffen' && asNumber(sale.quantity) > 0 && asNumber(sale.cost) <= 0 && !historicalResolution) push('warning', 'Kalkulation', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne Wareneinsatz`, 'Wareneinsatz nachtragen oder ausdrücklich als unbekannt bestätigen.', 'sales', 'repairSaleCost', String(sale.id || ''));
-      if (['Versendet', 'Abgeschlossen'].includes(sale.status) && asNumber(sale.postage) <= 0) push('info', 'Versand', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne tatsächliches Porto`, 'Falls Porto angefallen ist, bitte den wirklich bezahlten Betrag ergänzen.', 'sales');
-      if (asNumber(sale.shippingPaid) > asNumber(sale.revenue)) push('error', 'Kalkulation', `Versandbetrag bei ${sale.orderNo || 'Verkauf'} ist höher als die Einnahme`, 'Einnahme und Käufer-Versand prüfen.', 'sales');
+      if (['Versendet', 'Abgeschlossen'].includes(sale.status) && asNumber(sale.postage) <= 0) push('info', 'Versand', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne tatsächliches Porto`, 'Falls Porto angefallen ist, bitte den wirklich bezahlten Betrag ergänzen.', 'sales', '', '', sale.orderNo || sale.customer || '');
+      if (asNumber(sale.shippingPaid) > asNumber(sale.revenue)) push('error', 'Kalkulation', `Versandbetrag bei ${sale.orderNo || 'Verkauf'} ist höher als die Einnahme`, 'Einnahme und Käufer-Versand prüfen.', 'sales', '', '', sale.orderNo || sale.customer || '');
       const detailedItems = sale.items || [];
       const requested = detailedItems.length ? detailedItems.reduce((sum, item) => sum + wholeQuantity(item.quantity), 0) : wholeQuantity(sale.quantity);
       const linked = new Set(sale.itemIds || []).size;
-      if (realizedSale(sale) && requested > 0 && !detailedItems.length) push('warning', 'Verkaufspositionen', `Verkauf ${sale.orderNo || 'ohne Nummer'} enthält nur einen Sammeltext`, 'Karten einzeln ergänzen, damit Druckvariante, VK und Wareneinsatz lernfähig werden.', 'sales');
+      if (realizedSale(sale) && requested > 0 && !detailedItems.length) push('warning', 'Verkaufspositionen', `Verkauf ${sale.orderNo || 'ohne Nummer'} enthält nur einen Sammeltext`, 'Karten einzeln ergänzen, damit Druckvariante, VK und Wareneinsatz lernfähig werden.', 'sales', '', '', sale.orderNo || sale.customer || '');
       if (requested > linked && String(sale.status || '') !== 'Rückgabe eingetroffen' && !historicalResolution) push('warning', 'Bestandszuordnung', `Verkauf ${sale.orderNo || 'ohne Nummer'}: ${requested - linked} Karte(n) ohne Einkaufslos`, 'Einkaufsexemplare zuordnen oder den historischen Wareneinsatz bestätigen.', 'sales', 'repairSaleCost', String(sale.id || ''));
     });
 
@@ -793,19 +841,31 @@
     const alerts = [];
     const threshold = Math.max(1, asNumber(state.settings?.priceAgeDays) || 7);
     const nowTime = new Date(now).getTime();
+    const inventoryGroups = new Map();
     (state.inventory || []).filter(item => !['Verkauft', 'Storniert'].includes(item.status)).forEach(item => {
-      if (item.listed && asNumber(item.listingPrice) > 0 && asNumber(item.listingPrice) < asNumber(item.cost)) {
-        alerts.push({ severity: 'error', type: 'Verlustpreis', title: item.name || 'Unbekannte Karte', details: `Inserat ${asNumber(item.listingPrice).toFixed(2)} € liegt unter EK ${asNumber(item.cost).toFixed(2)} €.`, target: 'inventory' });
+      const key = String(item.productId || `${item.name || ''}|${item.set || item.setName || ''}|${item.rarity || ''}`);
+      if (!inventoryGroups.has(key)) inventoryGroups.set(key, []);
+      inventoryGroups.get(key).push(item);
+    });
+    inventoryGroups.forEach(items => {
+      const first = items[0] || {};
+      const belowCost = items.filter(item => item.listed && asNumber(item.listingPrice) > 0 && asNumber(item.listingPrice) < asNumber(item.cost));
+      if (belowCost.length) {
+        const lowestListing = Math.min(...belowCost.map(item => asNumber(item.listingPrice)));
+        const highestCost = Math.max(...belowCost.map(item => asNumber(item.cost)));
+        alerts.push({ severity: 'error', type: 'Verlustpreis', title: first.name || 'Unbekannte Karte', details: `${belowCost.length} Exemplar(e): Inserat ab ${lowestListing.toFixed(2)} € liegt unter EK bis ${highestCost.toFixed(2)} €.`, target: 'inventory', searchTerm: first.productId || first.name || '' });
       }
-      const purchaseTime = new Date(item.purchaseDate || now).getTime();
-      const days = Number.isFinite(purchaseTime) ? Math.floor((nowTime - purchaseTime) / 86400000) : 0;
-      if (days > threshold * 4 && item.listed === false) alerts.push({ severity: 'warning', type: 'Lageralter', title: item.name || 'Unbekannte Karte', details: `${days} Tage im Bestand und nicht inseriert.`, target: 'inventory' });
+      const oldUnlisted = items.map(item => {
+        const purchaseTime = new Date(item.purchaseDate || now).getTime();
+        return { item, days: Number.isFinite(purchaseTime) ? Math.floor((nowTime - purchaseTime) / 86400000) : 0 };
+      }).filter(row => row.days > threshold * 4 && row.item.listed === false);
+      if (oldUnlisted.length) alerts.push({ severity: 'warning', type: 'Lageralter', title: first.name || 'Unbekannte Karte', details: `${oldUnlisted.length} Exemplar(e) bis zu ${Math.max(...oldUnlisted.map(row => row.days))} Tage im Bestand und nicht inseriert.`, target: 'inventory', searchTerm: first.productId || first.name || '' });
     });
     (state.watchlist || []).filter(item => !item.archived).forEach(item => {
       const trend = asNumber(item.trend);
       const avg30 = asNumber(item.avg30);
-      if (trend > 0 && avg30 > 0 && trend < avg30 * 0.88) alerts.push({ severity: 'warning', type: 'Preisrückgang', title: item.name || 'Watchlist-Karte', details: `Trend liegt ${Math.round((1 - trend / avg30) * 100)} % unter dem 30-Tage-Schnitt.`, target: 'watchlist' });
-      if (trend > 0 && avg30 > 0 && trend > avg30 * 1.15) alerts.push({ severity: 'info', type: 'Preisanstieg', title: item.name || 'Watchlist-Karte', details: `Trend liegt ${Math.round((trend / avg30 - 1) * 100)} % über dem 30-Tage-Schnitt.`, target: 'watchlist' });
+      if (trend > 0 && avg30 > 0 && trend < avg30 * 0.88) alerts.push({ severity: 'warning', type: 'Preisrückgang', title: item.name || 'Watchlist-Karte', details: `Trend liegt ${Math.round((1 - trend / avg30) * 100)} % unter dem 30-Tage-Schnitt.`, target: 'watchlist', searchTerm: item.productId || item.name || '' });
+      if (trend > 0 && avg30 > 0 && trend > avg30 * 1.15) alerts.push({ severity: 'info', type: 'Preisanstieg', title: item.name || 'Watchlist-Karte', details: `Trend liegt ${Math.round((trend / avg30 - 1) * 100)} % über dem 30-Tage-Schnitt.`, target: 'watchlist', searchTerm: item.productId || item.name || '' });
     });
     return alerts;
   }
@@ -889,6 +949,7 @@
     buildFinancialSummary,
     calculateAutomaticPriceTargets,
     calculateOwnedCardPriceTargets,
+    estimatePackagingPerCard,
     stockSnapshotIdentity,
     purchaseLineKey,
     normalizePurchaseReceiptLine,

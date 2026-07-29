@@ -1,0 +1,22 @@
+QA-Bericht TCG Business Manager 6.0.5
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Renderer-, Datenbank-, Scanner- und Analyse-Dateien: bestanden.
+- 48 automatisierte Tests: bestanden.
+- SQLite-Migration und Sicherung: bestanden.
+- Cardmarket-API-Adapter bleibt standardmäßig deaktiviert: bestanden.
+- Windows-x64-Paketierung und NSIS-Installer: bestanden.
+- Starttest der gepackten Anwendung mit leerem, vollständig getrenntem Testdatenordner: bestanden.
+
+Zusätzliche Regressionstests 6.0.5
+- Günstige Karte mit 0,34 € EK wird nicht mehr durch 0,75 € Mindestgewinn auf 1,28 € angehoben: bestanden.
+- Markt-VK, ROI-Zielpreis und Rentabilitätswarnung werden getrennt ausgewiesen: bestanden.
+- Verpackung wird aus echten Bestellungen je Karte gelernt oder ersatzweise je Bestellung verteilt: bestanden.
+- Fehlende Verpackungsdaten werden im realisierten Verkauf nur einmal pro Bestellung geschätzt: bestanden.
+- Warnungen tragen Produkt-ID oder Bestellnummer für den direkten Zielfilter: bestanden.
+- Neue ROI- und Verpackungseinstellungen sind im grauen Dunkelmodus lesbar: bestanden.
+
+Installer
+- Datei: TCG Business Manager-Setup-6.0.5.exe
+- Größe: 126.185.008 Bytes (ca. 120,3 MB)
+- SHA256: 94A7894340FE803D4D1EF12BFA92CEE5D474225D05713DAE13503AB9D608ECF8

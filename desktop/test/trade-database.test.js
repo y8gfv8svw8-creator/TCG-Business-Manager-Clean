@@ -58,15 +58,15 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
 
   database.upsertMarketPrices({
     snapshotDate:'2026-07-18',
-    rows:[{productId:'123456', date:'2026-07-18', low:13, trend:16, avg7:15.5, avg30:15}]
+    rows:[{productId:'123456', date:'2026-07-18', low:2, trend:2.2, avg7:2.1, avg30:2}]
   });
   database.upsertMarketPrices({
     snapshotDate:'2026-07-19',
-    rows:[{productId:'123456', date:'2026-07-19', low:14, trend:16.5, avg7:16, avg30:15.5}]
+    rows:[{productId:'123456', date:'2026-07-19', low:2.1, trend:2.3, avg7:2.2, avg30:2.1}]
   });
   database.upsertMarketPrices({
     snapshotDate:'2026-07-19', sourceId:'cardmarket_api',
-    rows:[{productId:'123456', date:'2026-07-19', sourceId:'cardmarket_api', sourceRecordKey:'offer-summary|123456|2026-07-19', low:13.8, trend:16.2}]
+    rows:[{productId:'123456', date:'2026-07-19', sourceId:'cardmarket_api', sourceRecordKey:'offer-summary|123456|2026-07-19', low:2, trend:2.2}]
   });
   assert.equal(database.getTradeDatabaseStatus().marketObservationCount, 3, 'Quellen am selben Tag bleiben getrennt');
 
@@ -76,7 +76,10 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.equal(recommendation.buySampleCount, 1, 'Nur tatsächlich in den Geschäftsbestand übernommene Exemplare zählen als eigener EK');
   assert.equal(recommendation.sellSampleCount, 1);
   assert.ok(recommendation.recommendedBuy > 0);
-  assert.ok(recommendation.recommendedSell > 0);
+  assert.equal(recommendation.recommendedSell, 2.2, 'SQLite nutzt dieselbe Cardmarket-Gewichtung wie Bestand und Datencenter');
+  assert.ok(recommendation.recommendedSell < recommendation.priceFloor, 'Der Markt-VK wird nicht auf den ROI-Zielpreis angehoben');
+  assert.equal(recommendation.profitableAtMarket, false);
+  assert.equal(recommendation.modelVersion, 'v3-market-roi');
 
   const changed = structuredClone(state);
   changed.purchases[0].shipping = 4;

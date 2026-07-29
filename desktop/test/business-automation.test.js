@@ -34,6 +34,7 @@ test('meldet Duplikate, fehlende Produkt-IDs und veraltete Marktpreise', () => {
   }, new Date('2026-07-22T12:00:00.000Z'));
 
   assert.ok(issues.some(issue => issue.category === 'Duplikat'));
+  assert.equal(issues.find(issue => issue.category === 'Duplikat').searchTerm, '42');
   assert.ok(issues.some(issue => issue.category === 'Kartenzuordnung'));
   assert.ok(issues.some(issue => issue.category === 'Marktdaten'));
 });
@@ -60,12 +61,18 @@ test('verteilt Gewinn aus detaillierten Verkäufen auf Karten und Sets', () => {
 test('warnt vor Inseraten unter Einstand und fallenden Watchlist-Preisen', () => {
   const alerts = automation.buildPriceAlerts({
     settings: { priceAgeDays: 7 },
-    inventory: [{ name: 'Verlustkarte', listed: true, listingPrice: 4, cost: 5, status: 'Im Bestand', purchaseDate: '2026-07-20' }],
-    watchlist: [{ name: 'Fallende Karte', trend: 8, avg30: 10 }]
+    inventory: [
+      { productId:'123', name: 'Verlustkarte', listed: true, listingPrice: 4, cost: 5, status: 'Im Bestand', purchaseDate: '2026-07-20' },
+      { productId:'123', name: 'Verlustkarte', listed: true, listingPrice: 4, cost: 5, status: 'Im Bestand', purchaseDate: '2026-07-20' }
+    ],
+    watchlist: [{ productId:'456', name: 'Fallende Karte', trend: 8, avg30: 10 }]
   }, new Date('2026-07-22'));
 
   assert.ok(alerts.some(alert => alert.type === 'Verlustpreis'));
   assert.ok(alerts.some(alert => alert.type === 'Preisrückgang'));
+  assert.equal(alerts.find(alert=>alert.type==='Verlustpreis').searchTerm,'123');
+  assert.equal(alerts.filter(alert=>alert.type==='Verlustpreis').length,1);
+  assert.equal(alerts.find(alert=>alert.type==='Preisrückgang').searchTerm,'456');
 });
 
 test('berechnet automatische Max-EK- und Ziel-VK-Werte mit einheitlicher Rundung', () => {
@@ -278,13 +285,39 @@ test('storniert manuelle Bestandsbewegungen nur mit freien Karten und immer als 
   assert.equal(automation.planInventoryMovementReversal(items,{id:'move-4',type:'Cardmarket-Bestandsabgleich',quantity:1}).valid,false);
 });
 
-test('VK-Vorschläge für eigene Karten unterschreiten weder Gewinn- noch ROI-Untergrenze', () => {
-  const settings={feePercent:5,packaging:0.20,minProfit:1,minRoi:25,safetyPercent:5};
+test('VK-Vorschläge bleiben am Markt und warnen, wenn der Ziel-ROI dort nicht erreichbar ist', () => {
+  const settings={feePercent:5,packaging:0.20,minRoi:25,targetRoi:30,safetyPercent:5};
   const result=automation.calculateOwnedCardPriceTargets({low:2,trend:2.2,avg7:2.1,avg30:2,cost:5},settings);
   assert.ok(result.priceFloor>result.marketSell);
-  assert.equal(result.suggestedSell,result.priceFloor);
-  assert.ok(result.expectedProfit>=1);
-  assert.ok(result.expectedRoi>=25);
+  assert.equal(result.suggestedSell,result.marketSell);
+  assert.equal(result.suggestedSell,2.13);
+  assert.equal(result.profitableAtMarket,false);
+  assert.ok(result.expectedProfit<0);
+});
+
+test('günstige Karten erhalten keinen künstlichen VK durch einen festen Mindestgewinn', () => {
+  const result=automation.calculateOwnedCardPriceTargets(
+    {low:0.02,trend:0.44,avg1:0.38,avg7:0.40,avg30:0.41,cost:0.337649},
+    {feePercent:5,packaging:0.04,minRoi:25,targetRoi:30,safetyPercent:5,minProfit:0.75}
+  );
+  assert.equal(result.suggestedSell,0.42);
+  assert.equal(result.targetRoiPrice,0.51);
+  assert.equal(result.profitableAtMarket,false);
+});
+
+test('verteilt Verpackung aus echten Bestellungen auf die tatsächlich verkauften Karten', () => {
+  const allocation=automation.estimatePackagingPerCard({sales:[
+    {status:'Abgeschlossen',quantity:4,materialUsage:[{quantity:1,unitCost:0.12}]},
+    {status:'Versendet',quantity:2,packaging:0.18}
+  ]},{packaging:0.12,expectedCardsPerOrder:3});
+  assert.equal(allocation.perCard,0.05);
+  assert.equal(allocation.averageCardsPerOrder,3);
+  assert.equal(allocation.source,'actual');
+});
+
+test('schätzt fehlendes Versandmaterial bei einem Verkauf einmal pro Bestellung', () => {
+  const result=automation.calculateSaleProfit({revenue:10,quantity:4,cost:2,historicalCostStatus:'confirmed'},{feePercent:5,packaging:0.12});
+  assert.equal(result.packaging,0.12);
 });
 
 test('Wareneingang übernimmt Inseratwunsch und verlangt dafür einen positiven Preis', () => {

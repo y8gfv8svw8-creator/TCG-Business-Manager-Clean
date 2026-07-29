@@ -1,0 +1,24 @@
+TCG Business Manager 6.0.5 – marktgerechte VK- und ROI-Berechnung
+
+Preislogik
+- Die feste Mindestgewinnhürde von 0,75 € wurde aus allen Preisvorschlägen entfernt.
+- Standardwerte sind jetzt 25 % Mindest-ROI und 30 % Ziel-ROI.
+- Der VK-Vorschlag orientiert sich am aktuellen Cardmarket-Marktwert und wird nicht künstlich über den Marktpreis angehoben.
+- Liegt der für den Ziel-ROI notwendige VK über dem Marktwert, zeigt der Manager „Zum Marktpreis nicht rentabel“.
+- Max-EK, Schnellverkauf und Datencenter verwenden dieselbe ROI-basierte Berechnung.
+- Bestand, Datencenter und SQLite-Handelsdatenbank gewichten denselben Price Guide jetzt identisch.
+
+Verpackungskosten
+- Der eingestellte Verpackungsbetrag gilt pro Bestellung, nicht pro einzelner Karte.
+- Für EK-/VK-Vorschläge wird der Betrag auf die durchschnittlichen Karten einer Bestellung verteilt.
+- Sobald echte Materialkosten aus Verkäufen vorliegen, lernt der Manager daraus die Verpackungskosten je Karte.
+- In abgeschlossenen Verkäufen haben weiterhin die tatsächlich verbrauchten Materialien Vorrang.
+
+Gezieltes Öffnen
+- Kartenwarnungen öffnen Bestand oder Marktbeobachtung direkt mit passender Produkt-ID bzw. passendem Kartennamen als Filter.
+- Bestellhinweise öffnen Einkäufe oder Verkäufe direkt mit der betreffenden Bestellnummer.
+- Gleichartige Kartenwarnungen werden je Druckvariante zusammengefasst statt mehrfach angezeigt.
+
+Sicherheit
+- Bestehende Einstellungen werden einmalig auf das neue Markt-/ROI-Modell migriert; Geschäfts- und Bestandsdaten bleiben unverändert.
+- Historische Einstands-, Markt- und Bewegungsdaten bleiben vollständig erhalten.

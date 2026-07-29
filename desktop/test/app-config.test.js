@@ -8,6 +8,8 @@ test('ergänzt neue Einstellungen verlustfrei bei alten Programmständen', () =>
   assert.equal(settings.minProfit, 1.25);
   assert.equal(settings.themeMode, 'system');
   assert.equal(settings.scannerEnabled, true);
+  assert.equal(settings.targetRoi, 30);
+  assert.equal(settings.expectedCardsPerOrder, 3);
   assert.equal(settings.customFutureValue, 'bleibt');
 });
 

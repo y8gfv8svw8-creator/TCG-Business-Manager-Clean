@@ -5,7 +5,7 @@ const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.0.4';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.0.5';
 let database = null;
 let dataRoot = '';
 let mainWindow = null;

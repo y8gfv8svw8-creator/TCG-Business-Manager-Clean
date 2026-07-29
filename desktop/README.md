@@ -1,4 +1,4 @@
-# TCG Business Manager – Analysecenter 6.0.4
+# TCG Business Manager – Analysecenter 6.0.5
 
 Diese Version aktiviert die dauerhafte lokale SQLite-Datenbank.
 
@@ -34,6 +34,8 @@ Cardmarket-Abrechnungen können als CSV über den Universal-Import eingelesen we
 - Statusverläufe für Zahlung, Lieferung, Versand und Abrechnung bleiben dauerhaft nachvollziehbar.
 - Materialverbrauch, Reichweite und Nachbestellvorschläge aus den tatsächlichen Bewegungen.
 - Historische Preisabfragen lesen direkt aus SQLite.
+- Marktbasierte VK-Vorschläge mit 25 % Mindest-ROI, 30 % Ziel-ROI und automatisch je Karte verteilten Verpackungskosten; unrentable Marktpreise werden gewarnt statt künstlich erhöht.
+- Warnungen öffnen Bestand, Einkäufe, Verkäufe oder Watchlist direkt mit dem passenden Karten- beziehungsweise Bestellfilter.
 - Marktübersicht mit echten 7-/30-/90-/180-/365-Tage-Vergleichen.
 - Top-Anstiege und Top-Rückgänge mit absoluter und prozentualer Veränderung.
 - Cardmarket-Sicherungen werden beim Wiederherstellen auch in SQLite übernommen.

@@ -998,16 +998,20 @@ class TcgDatabase {
     }
     if (!ids.length) return { calculatedAt: isoNow(), recommendations: [] };
 
+    let appState = {};
     let settings = {};
     try {
-      settings = JSON.parse(this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get()?.state_json || '{}').settings || {};
+      appState = JSON.parse(this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get()?.state_json || '{}');
+      settings = appState.settings || {};
     } catch {
+      appState = {};
       settings = {};
     }
     const feeRate = Math.max(0, numberValue(settings.feePercent)) / 100;
-    const packaging = Math.max(0, numberValue(settings.packaging));
-    const minProfit = Math.max(0, numberValue(settings.minProfit));
-    const minRoi = Math.max(0, numberValue(settings.minRoi)) / 100;
+    const packagingAllocation = businessAutomation.estimatePackagingPerCard(appState, settings);
+    const packaging = Math.max(0, numberValue(packagingAllocation.perCard));
+    const minRoi = Math.max(0, numberValue(settings.minRoi ?? 25)) / 100;
+    const targetRoi = Math.max(minRoi, numberValue(settings.targetRoi ?? 30) / 100);
     const safetyRate = Math.max(0, numberValue(settings.safetyPercent ?? 5)) / 100;
     const calculatedAt = isoNow();
     const lineQuery = this.db.prepare(`
@@ -1089,10 +1093,13 @@ class TcgDatabase {
       const marketSampleCount = new Set(marketRows.map(row => row.observed_date)).size;
       const latestMarket = marketRows[0] || {};
       const referenceFor = row => {
-        const parts = [[row.trend_price, 0.35], [row.avg_7, 0.30], [row.avg_30, 0.25], [row.low_price, 0.10]]
-          .filter(([value]) => numberValue(value) > 0);
-        const total = parts.reduce((sum, part) => sum + part[1], 0);
-        return total ? parts.reduce((sum, [value, weight]) => sum + numberValue(value) * weight, 0) / total : 0;
+        return businessAutomation.calculateAutomaticPriceTargets({
+          low: row.low_price,
+          trend: row.trend_price,
+          avg1: row.avg_1,
+          avg7: row.avg_7,
+          avg30: row.avg_30
+        }, {...settings, packaging, minProfit:0}).recommendedSell;
       };
       const marketReference = referenceFor(latestMarket);
       const dailyReferences = [];
@@ -1109,32 +1116,28 @@ class TcgDatabase {
         : 0;
 
       let recommendedSell = marketReference;
-      if (ownSellAverage > 0 && marketReference > 0) {
-        const ownWeight = Math.min(0.65, sellSampleCount / (sellSampleCount + 5));
-        recommendedSell = ownSellAverage * ownWeight + marketReference * (1 - ownWeight);
-      } else if (ownSellAverage > 0) {
+      if (recommendedSell <= 0 && ownSellAverage > 0) {
         recommendedSell = ownSellAverage;
       }
       if (recommendedSell <= 0 && ownBuyAverage > 0 && feeRate < 1) {
-        const profitSell = (ownBuyAverage + packaging + minProfit) / Math.max(0.01, 1 - feeRate);
-        const roiSell = (ownBuyAverage * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate);
-        recommendedSell = Math.max(profitSell, roiSell);
+        recommendedSell = (ownBuyAverage * (1 + targetRoi) + packaging) / Math.max(0.01, 1 - feeRate);
       }
       const dynamicSafetyRate = Math.min(0.30, safetyRate + Math.min(0.12, volatility / 200));
       const safeSell = recommendedSell * Math.max(0, 1 - dynamicSafetyRate);
       const availableBeforeBuy = safeSell * Math.max(0, 1 - feeRate) - packaging;
-      const byProfit = availableBeforeBuy - minProfit;
       const byRoi = availableBeforeBuy / Math.max(1, 1 + minRoi);
-      const recommendedBuy = recommendedSell > 0 ? Math.max(0, Math.min(byProfit, byRoi)) : 0;
+      const recommendedBuy = recommendedSell > 0 ? Math.max(0, byRoi) : 0;
       const priceFloor = ownBuyAverage > 0 && feeRate < 1
-        ? Math.max(
-          (ownBuyAverage + packaging + minProfit) / Math.max(0.01, 1 - feeRate),
-          (ownBuyAverage * (1 + minRoi) + packaging) / Math.max(0.01, 1 - feeRate)
-        )
+        ? (ownBuyAverage * (1 + targetRoi) + packaging) / Math.max(0.01, 1 - feeRate)
         : 0;
       const quickSell = recommendedSell > 0
-        ? Math.max(numberValue(latestMarket.low_price), priceFloor, recommendedSell * (1 - Math.min(0.15, dynamicSafetyRate)))
+        ? Math.max(numberValue(latestMarket.low_price), recommendedSell * (1 - Math.min(0.15, dynamicSafetyRate)))
         : 0;
+      const expectedProfit = ownBuyAverage > 0 && recommendedSell > 0
+        ? recommendedSell * Math.max(0, 1 - feeRate) - packaging - ownBuyAverage
+        : 0;
+      const expectedRoi = ownBuyAverage > 0 ? expectedProfit / ownBuyAverage : 0;
+      const profitableAtMarket = ownBuyAverage <= 0 || (expectedProfit >= 0 && expectedRoi >= minRoi);
       const productInfo = productQuery.get(productId) || {};
       const exactVariant = Boolean(String(productInfo.set_name || '').trim() &&
         String(productInfo.collector_number || productInfo.set_code || '').includes('-') &&
@@ -1150,9 +1153,11 @@ class TcgDatabase {
       if (!exactVariant) explanation.push('Druckvariante ist noch nicht vollstaendig belegt');
       if (volatility > 0) explanation.push(`Marktschwankung ${volatility.toFixed(1)} % wurde als Risikopuffer beruecksichtigt`);
       if (marketReference > 0) explanation.push(`Cardmarket-Marktwert aus ${marketSampleCount} Quellen-/Tagesständen`);
+      explanation.push(`Verpackung ${packaging.toFixed(2)} € je Karte (${packagingAllocation.source === 'actual' ? 'aus echten Bestellungen' : `auf ${packagingAllocation.averageCardsPerOrder} Karten verteilt`})`);
       if (buySampleCount) explanation.push(`${buySampleCount} eigene Einkaufseinheit(en) berücksichtigt`);
       if (sellSampleCount) explanation.push(`${sellSampleCount} realisierte Verkaufseinheit(en) berücksichtigt`);
       if (!sellSampleCount) explanation.push('Noch keine eigenen abgeschlossenen Verkäufe für diese Druckvariante');
+      if (!profitableAtMarket) explanation.unshift(`Aktueller Marktwert erreicht ${Math.round(minRoi * 100)} % Mindest-ROI nicht; VK wurde nicht künstlich erhöht`);
       const product = productQuery.get(productId) || {};
       const tradeIdentity = sales[0] || purchases[0] || {};
       const result = {
@@ -1169,7 +1174,9 @@ class TcgDatabase {
         ownSellAverage: roundedMoney(ownSellAverage),
         marketReference: roundedMoney(marketReference),
         buySampleCount, sellSampleCount, marketSampleCount,
-        confidenceScore, confidenceLevel, volatility: roundedMoney(volatility), modelVersion: 'v2', explanation,
+        expectedProfit: roundedMoney(expectedProfit), expectedRoi: Math.round(expectedRoi * 1000) / 10,
+        profitableAtMarket,
+        confidenceScore, confidenceLevel, volatility: roundedMoney(volatility), modelVersion: 'v3-market-roi', explanation,
         calculatedAt
       };
       cache.run(

@@ -223,7 +223,7 @@
   }
 
   // Geldgrenzen werden bewusst centgenau und konservativ berechnet.
-  // Ein Max-EK darf niemals aufgerundet werden, da sonst Mindestgewinn/ROI unterschritten werden können.
+  // Ein Max-EK darf niemals aufgerundet werden, da sonst der Mindest-ROI unterschritten werden kann.
   function cmFloorMoney(value) {
     const number = Number(value);
     if (!Number.isFinite(number) || number <= 0) return 0;
@@ -874,6 +874,11 @@
     return {hasGermanName,hasSet,hasPrintCode,hasVariant,exactVariant,label};
   }
 
+  function cmPricingSettings(){
+    const allocation=window.TcgBusinessAutomation.estimatePackagingPerCard(state,state.settings);
+    return {...state.settings,minProfit:0,packaging:Number(allocation.perCard||0)};
+  }
+
   function cmMarketCalculation(product, own={}, trendSignals={}) {
     const low = cmNumber(product.low);
     const trend = cmNumber(product.trend);
@@ -897,8 +902,8 @@
     // Datencenter, Watchlist und Bestandserfassung verwenden exakt dieselbe
     // Preisformel. So werden automatisch gesetzte Grenzen nicht anschließend
     // von einer zweiten Berechnung mit leicht anderen Rundungen überschrieben.
-    const automaticTargets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(product,state.settings);
-    const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,maxByProfit,maxByRoi,maxBuy}=automaticTargets;
+    const automaticTargets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(product,cmPricingSettings());
+    const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,targetRoi,maxByProfit,maxByRoi,maxBuy}=automaticTargets;
     const isCostCovering = netBeforeBuy > 0;
     const costShortfall = isCostCovering ? 0 : Math.abs(netBeforeBuy);
     const profitAtMarket = marketBuy > 0 ? netBeforeBuy-marketBuy : 0;
@@ -919,7 +924,7 @@
     const quality = cmProductQuality(product);
     const realTrendCount = [dailyChange,change7,change30].filter(value => value !== null).length;
     const stockFull = Number(state.settings.targetStock || 0) > 0 && Number(own.available || 0) >= Number(state.settings.targetStock || 0);
-    const meetsProfit = marketBuy > 0 && profitAtMarket >= minProfit;
+    const meetsProfit = marketBuy > 0 && profitAtMarket >= 0;
     const meetsRoi = marketBuy > 0 && roiAtMarket >= minRoi*100;
     const eligible = maxBuy > 0 && marketBuy > 0 && marketBuy <= maxBuy && meetsProfit && meetsRoi;
 
@@ -933,10 +938,7 @@
         const buyFit = cmClamp((maxBuy/marketBuy - 0.70) / 0.55, 0, 1);
         score += buyFit * 38;
         const roiFit = cmClamp((roiAtMarket - minRoi*100) / 80 + 0.35, 0, 1);
-        score += roiFit * 12;
-        const profitBase = Math.max(minProfit,0.10);
-        const profitFit = cmClamp((profitAtMarket-minProfit)/(profitBase*2)+0.35,0,1);
-        score += profitFit * 10;
+        score += roiFit * 22;
       } else {
         scoreReasons.push("Kein positiver Max-EK mit den aktuellen Regeln");
       }
@@ -996,20 +998,20 @@
         recommendationReason = "Mehrere echte Preiszeiträume zeigen eine fallende Entwicklung.";
       } else if (maxBuy <= 0) {
         recommendation = "MINDESTZIEL VERFEHLT";
-        recommendationReason = `Der erwartete Nettoerlös reicht nicht für ${money(minProfit)} Mindestgewinn und ${Number(state.settings.minRoi||0)} % Mindest-ROI.`;
+        recommendationReason = `Der erwartete Nettoerlös reicht nicht für ${Number(state.settings.minRoi||25)} % Mindest-ROI.`;
       } else if (eligible && marketBuy <= maxBuy*0.85) {
         recommendation = "TOP DEAL";
-        recommendationReason = "Markt-Low liegt deutlich unter dem berechneten Max-EK und erfüllt Gewinn sowie ROI.";
+        recommendationReason = "Markt-Low liegt deutlich unter dem berechneten Max-EK und erfüllt den Mindest-ROI.";
       } else if (eligible) {
         recommendation = "KAUFEN";
-        recommendationReason = "Markt-Low liegt innerhalb des berechneten Max-EK und erfüllt Gewinn sowie ROI.";
+        recommendationReason = "Markt-Low liegt innerhalb des berechneten Max-EK und erfüllt den Mindest-ROI.";
       } else if (marketBuy <= maxBuy*1.08) {
         recommendation = "BEOBACHTEN";
         recommendationReason = "Der Marktpreis liegt knapp über dem berechneten Einkaufslimit.";
       } else {
         recommendation = "NICHT KAUFEN";
         recommendationReason = !meetsProfit
-          ? `Der mögliche Gewinn ${money(profitAtMarket)} liegt unter dem Mindestgewinn ${money(minProfit)}.`
+          ? `Der mögliche Verkauf wäre mit ${money(profitAtMarket)} nicht kostendeckend.`
           : !meetsRoi
             ? `Der mögliche ROI ${pct(roiAtMarket)} liegt unter dem Mindest-ROI ${Number(state.settings.minRoi||0)} %.`
             : "Der Marktpreis liegt über dem berechneten Einkaufslimit.";
@@ -1023,7 +1025,7 @@
       dailyChange, change7, change30, reference7, reference30,
       dailyPct, change7Pct, change30Pct,
       score, scoreConfidence, scoreReasons, recommendation, recommendationReason,
-      quality, eligible, meetsProfit, meetsRoi, minProfit, minRoi,
+      quality, eligible, meetsProfit, meetsRoi, minProfit, minRoi, targetRoi, packaging,
       low, trend, avg1, avg7, avg30
     };
   }
@@ -1155,9 +1157,9 @@
     const own=cmBuildOwnStats().get(String(product.productId||""))||{};
     const calculated=cmMarketCalculation(product,own);
     const learned=product.learnedPricing||{};
-    const ownedTargets=window.TcgBusinessAutomation.calculateOwnedCardPriceTargets(product,state.settings);
+    const ownedTargets=window.TcgBusinessAutomation.calculateOwnedCardPriceTargets(product,cmPricingSettings());
     const learnedSell=Number(learned.recommendedSell||0);
-    const recommendedSell=Math.ceil(Math.max(learnedSell,ownedTargets.suggestedSell,ownedTargets.priceFloor)*100)/100;
+    const recommendedSell=learnedSell||Number(ownedTargets.suggestedSell||0);
     return {
       recommendedSell,
       recommendedBuy:Number(learned.recommendedBuy||calculated.maxBuy||0),
@@ -1166,6 +1168,7 @@
       quickSell:Number(ownedTargets.quickSell||learned.quickSell||0),
       marketLow:Number(calculated.marketBuy||0),
       expectedProfit:Number(ownedTargets.expectedProfit||0),
+      profitableAtMarket:learned.profitableAtMarket!==false&&ownedTargets.profitableAtMarket!==false,
       priceDate:String(product.priceDate||product.date||state.cardmarket?.priceDate||""),
       priceSource:"Cardmarket Price Guide",
       confidence:learned.confidenceLevel||calculated.scoreConfidence||"low"
@@ -1342,7 +1345,7 @@
       output.innerHTML = `<div class="empty">Zuerst Produktkatalog und Price Guide importieren.</div>`;
       return;
     }
-    const key = [state.cardmarket.priceDate,state.cardmarket.priceImportedAt,state.settings.feePercent,state.settings.packaging,state.settings.minProfit,state.settings.minRoi,state.settings.safetyPercent,state.inventory.length].join("|");
+    const key = [state.cardmarket.priceDate,state.cardmarket.priceImportedAt,state.settings.feePercent,state.settings.packaging,state.settings.expectedCardsPerOrder,state.settings.minRoi,state.settings.targetRoi,state.settings.safetyPercent,state.inventory.length,state.sales.length].join("|");
     if (cmOpportunityCache.key !== key) {
       output.innerHTML = `<div class="empty">Marktchancen werden berechnet …</div>`;
       const all = await cmLoadMergedCache();
@@ -2547,7 +2550,7 @@
         const learned=product.learnedPricing||{};
         const learnedConfidence={high:"hoch",medium:"mittel",low:"niedrig"}[learned.confidenceLevel]||"niedrig";
         const maxBuyNote=calc.maxBuy>0
-          ? `Der strengere Wert aus Mindestgewinn (${money(calc.maxByProfit)}) und Mindest-ROI (${money(calc.maxByRoi)}) wird verwendet.`
+          ? `${money(calc.maxByRoi)} ist die maximale Einkaufsgrenze für ${Number(state.settings.minRoi||25)} % Mindest-ROI.`
           : (calc.recommendedSell>0?calc.recommendationReason:"Keine ausreichenden Verkaufsreferenzen.");
         const deltaMetric=(label,info)=>`<div class="cm-result-metric"><span>${label}</span><strong>${info.value===null?"–":cmSignedMoney(info.value)}</strong><small>${info.sourceDate?`gegen ${fmtDate(info.sourceDate)}`:escapeHtml(info.reason||"Kein Vergleichswert")}</small></div>`;
         const englishName=cmEnglishName(product);
@@ -2572,9 +2575,9 @@
             <div class="cm-result-metric"><span>Berechnungs-EK</span><strong>${calc.marketBuy>0?money(calc.marketBuy):"–"}</strong><small>Quelle: ${escapeHtml(calc.marketBuySource)}</small></div>
             <div class="cm-result-metric"><span>Empfohlener VK</span><strong>${cmAnalysisMoney(calc.recommendedSell)}</strong><small>Gewichtet aus Trend, Ø 7 und Ø 30</small></div>
             <div class="cm-result-metric"><span>Sicherheits-VK</span><strong>${cmAnalysisMoney(calc.safeSell)}</strong><small>${Number(state.settings.safetyPercent||0)} % Sicherheitsabschlag</small></div>
-            <div class="cm-result-metric"><span>Gebühren + Verpackung</span><strong>${cmAnalysisMoney(calc.feeAmount+Number(state.settings.packaging||0))}</strong><small>${Number(state.settings.feePercent||0)} % Gebühr · ${money(Number(state.settings.packaging||0))} Verpackung</small></div>
+            <div class="cm-result-metric"><span>Gebühren + Verpackung</span><strong>${cmAnalysisMoney(calc.feeAmount+calc.packaging)}</strong><small>${Number(state.settings.feePercent||0)} % Gebühr · ${money(calc.packaging)} anteilige Verpackung</small></div>
             <div class="cm-result-metric ${calc.isCostCovering?"":"cm-metric-critical"}"><span>Break-even-EK</span><strong class="${calc.isCostCovering?"":"money-negative"}">${calc.isCostCovering?cmAnalysisMoney(cmFloorMoney(calc.netBeforeBuy)):"Nicht kostendeckend"}</strong><small>${calc.isCostCovering?"Maximaler EK ohne Gewinn":"Fehlbetrag vor Karteneinkauf: "+money(calc.costShortfall)}</small></div>
-            <div class="cm-result-metric"><span>Max-EK nach Mindestgewinn</span><strong>${cmAnalysisMoney(calc.maxByProfit)}</strong><small>${money(calc.minProfit)} Mindestgewinn</small></div>
+            <div class="cm-result-metric"><span>Max-EK ohne Gewinn</span><strong>${cmAnalysisMoney(calc.maxByProfit)}</strong><small>Reine Kostendeckung</small></div>
             <div class="cm-result-metric"><span>Max-EK nach Mindest-ROI</span><strong>${cmAnalysisMoney(calc.maxByRoi)}</strong><small>${Number(state.settings.minRoi||0)} % Mindest-ROI</small></div>
             <div class="cm-result-metric" title="${escapeHtml(maxBuyNote)}"><span>Empfohlener Max-EK</span><strong>${cmAnalysisMoney(calc.maxBuy)}</strong><small>${watch?.maxBuy?`Eigene Grenze ${money(watch.maxBuy)}`:escapeHtml(maxBuyNote)}</small></div>
             <div class="cm-result-metric"><span>Gewinn bei Cardmarket Low</span><strong class="${calc.profitAtMarket>=0?"money-positive":"money-negative"}">${calc.marketBuy>0?money(calc.profitAtMarket):"–"}</strong><small>${calc.marketBuy>0?`${pct(calc.roiAtMarket)} ROI · ${pct(calc.marginOnSell)} Marge auf Sicherheits-VK`:"Keine EK-Referenz"}</small></div>

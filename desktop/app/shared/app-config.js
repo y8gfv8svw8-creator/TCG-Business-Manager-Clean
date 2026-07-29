@@ -6,8 +6,11 @@
   const DEFAULT_SETTINGS = Object.freeze({
     feePercent: 5,
     packaging: 0.12,
-    minProfit: 0.75,
-    minRoi: 20,
+    minProfit: 0,
+    minRoi: 25,
+    targetRoi: 30,
+    expectedCardsPerOrder: 3,
+    pricingModelVersion: 'market-roi-v1',
     priceAgeDays: 7,
     condition: 'NM',
     languages: 'DE/EN',
@@ -59,6 +62,9 @@
     normalized.packaging = number(source.packaging, DEFAULT_SETTINGS.packaging);
     normalized.minProfit = number(source.minProfit, DEFAULT_SETTINGS.minProfit);
     normalized.minRoi = number(source.minRoi, DEFAULT_SETTINGS.minRoi);
+    normalized.targetRoi = Math.max(normalized.minRoi, number(source.targetRoi, DEFAULT_SETTINGS.targetRoi, 0, 10000));
+    normalized.expectedCardsPerOrder = number(source.expectedCardsPerOrder, DEFAULT_SETTINGS.expectedCardsPerOrder, 1, 10000);
+    normalized.pricingModelVersion = String(source.pricingModelVersion || DEFAULT_SETTINGS.pricingModelVersion);
     normalized.priceAgeDays = Math.round(number(source.priceAgeDays, DEFAULT_SETTINGS.priceAgeDays, 1, 365));
     normalized.targetStock = Math.round(number(source.targetStock, DEFAULT_SETTINGS.targetStock, 0, 100000));
     normalized.safetyPercent = number(source.safetyPercent, DEFAULT_SETTINGS.safetyPercent, 0, 50);

@@ -32,8 +32,10 @@ Die Handelsdatenbank berechnet je Cardmarket-Druckvariante:
 - den eigenen durchschnittlichen realisierten Verkaufspreis,
 - eine Marktpreisreferenz aus den gespeicherten Ständen,
 - einen empfohlenen Verkaufspreis,
-- einen maximalen Einkaufspreis unter Beachtung von Gebühr, Verpackung,
-  Sicherheitsabschlag, Mindestgewinn und Mindest-ROI,
+- einen maximalen Einkaufspreis unter Beachtung von Gebühr, anteiliger
+  Verpackung, Sicherheitsabschlag und Mindest-ROI,
+- einen marktgerechten VK sowie eine getrennte Warnung, wenn der Marktwert den
+  eingestellten Ziel-ROI nicht erreicht,
 - eine sichtbare Sicherheitseinstufung anhand der verfügbaren Datenmenge.
 
 Die Werte erscheinen unter **Berichte → Handelsdatenbank** und zusätzlich in der

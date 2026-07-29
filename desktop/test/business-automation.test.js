@@ -243,3 +243,34 @@ test('storniert manuelle Bestandsbewegungen nur mit freien Karten und immer als 
   assert.match(blocked.reason,/Reservierte oder verkaufte Karten/);
   assert.equal(automation.planInventoryMovementReversal(items,{id:'move-4',type:'Cardmarket-Bestandsabgleich',quantity:1}).valid,false);
 });
+
+test('VK-Vorschläge für eigene Karten unterschreiten weder Gewinn- noch ROI-Untergrenze', () => {
+  const settings={feePercent:5,packaging:0.20,minProfit:1,minRoi:25,safetyPercent:5};
+  const result=automation.calculateOwnedCardPriceTargets({low:2,trend:2.2,avg7:2.1,avg30:2,cost:5},settings);
+  assert.ok(result.priceFloor>result.marketSell);
+  assert.equal(result.suggestedSell,result.priceFloor);
+  assert.ok(result.expectedProfit>=1);
+  assert.ok(result.expectedRoi>=25);
+});
+
+test('Wareneingang übernimmt Inseratwunsch und verlangt dafür einen positiven Preis', () => {
+  const purchase={cardValue:4,shipping:1,pendingItems:[{receiptLineKey:'line',name:'Testkarte',quantity:2,unitPrice:2}]};
+  const valid=automation.planPurchaseReceipt(purchase,[{key:'line',business:2,listBusiness:true,listingPrice:4.5,suggestedSell:4.5}]);
+  assert.equal(valid.valid,true);
+  assert.equal(valid.lines[0].listBusiness,true);
+  assert.equal(valid.lines[0].listingPrice,4.5);
+  const invalid=automation.planPurchaseReceipt(purchase,[{key:'line',business:2,listBusiness:true,listingPrice:0}]);
+  assert.equal(invalid.valid,false);
+  assert.match(invalid.errors.join(' '),/Inseratspreis/);
+});
+
+test('Cardmarket-Snapshot-Identität bleibt bei einer Preisänderung stabil', () => {
+  const first=automation.stockSnapshotIdentity({articleId:'12345',productId:'999',language:'DE',condition:'NM',listingPrice:1});
+  const changed=automation.stockSnapshotIdentity({articleId:'12345',productId:'999',language:'DE',condition:'NM',listingPrice:9});
+  assert.equal(first,'article:12345');
+  assert.equal(changed,first);
+  assert.equal(
+    automation.stockSnapshotIdentity({productId:'999',language:'DE',condition:'NM',edition:'1st'}),
+    'variant-v2:999|DE|NM|1ST'
+  );
+});

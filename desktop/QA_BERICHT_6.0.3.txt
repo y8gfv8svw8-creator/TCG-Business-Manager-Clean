@@ -1,0 +1,25 @@
+QA-Bericht TCG Business Manager 6.0.3
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Renderer-, Datenbank-, Scanner- und Analyse-Dateien: bestanden.
+- 42 automatisierte Tests: bestanden.
+- SQLite-Migration und Sicherung: bestanden.
+- Cardmarket-API-Adapter bleibt standardmäßig deaktiviert: bestanden.
+- Windows-x64-Paketierung und NSIS-Installer: bestanden.
+- Starttest der gepackten Anwendung mit leerem, getrenntem Testdatenordner: bestanden.
+
+Zusätzliche Regressionstests 6.0.3
+- Kostenbewusster VK hält Mindestgewinn und Mindest-ROI ein: bestanden.
+- Direkte Inserierung beim Wareneingang verlangt einen positiven Preis: bestanden.
+- Cardmarket-Snapshot-Identität bleibt bei Preisänderungen gleich: bestanden.
+- Reservierte und verkaufte Exemplare bleiben durch Snapshots geschützt: bestanden.
+
+Hinweis zur Preisprüfung
+- Die gespeicherten Werte stammen aus dem offiziellen Cardmarket Price Guide.
+- Der Live-Angebotspreis „ab“ auf Cardmarket ist gefiltert und kann ohne Cardmarket-API nicht identisch nachgebildet werden.
+- Diese Unterscheidung wird in Version 6.0.3 sichtbar in der Oberfläche erklärt.
+
+Installer
+- Datei: TCG Business Manager-Setup-6.0.3.exe
+- Größe: 120,3 MB
+- SHA256: C7DF6125AFC5283C8AD839812B9345438D217F2DB58F43306D0B93AFCA48046A

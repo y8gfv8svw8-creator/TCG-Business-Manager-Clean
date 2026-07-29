@@ -515,3 +515,20 @@ html[data-theme="dark"] .cm-result-metric.cm-metric-critical{background:#47292b;
 html[data-theme="dark"] .cm-result-metric.cm-metric-critical span,html[data-theme="dark"] .cm-result-metric.cm-metric-critical small{color:#ffb8bc}
 html[data-theme="dark"] .cm-decision-box{background:#2c3b49;border-color:#526b80}
 html[data-theme="dark"] .cm-import-status.success{background:#254133;color:#bfe8cc;border-color:#47785a}html[data-theme="dark"] .cm-import-status.error{background:#45292b;color:#ffbfc3;border-color:#7c4a4d}
+
+/* Version 6.0.3 – sichere Dialoge, Wareneingang und Preisprüfung */
+.danger-button{background:#b52f36!important;border-color:#b52f36!important;color:#fff!important}
+.danger-button:hover{background:#99262c!important;border-color:#99262c!important}
+.inventory-price-review-up>td{background:#edf8f0;border-color:#d1ead7}
+.inventory-price-review-down>td{background:#fff0f0;border-color:#efd1d1}
+.inventory-price-review-up:hover>td,.inventory-price-review-down:hover>td{filter:brightness(.985)}
+.receipt-table{min-width:1420px}
+.receipt-listing-price{width:105px;min-width:105px;margin-bottom:7px}
+.receipt-list-check{display:flex;align-items:flex-start;gap:7px;max-width:210px;font-size:12px;line-height:1.35;color:var(--muted)}
+.receipt-list-check input{width:auto;min-width:auto;margin-top:2px}
+.cm-price-source-note{display:flex;flex-direction:column;gap:4px;margin:14px 0;padding:11px 13px;border:1px solid #abc7dc;border-radius:10px;background:#f0f7fc;color:#294b67}
+.cm-price-source-note span{font-size:12px;line-height:1.45;color:#526a7d}
+html[data-theme="dark"] .inventory-price-review-up>td{background:#254133;border-color:#365b44;color:#dff5e5}
+html[data-theme="dark"] .inventory-price-review-down>td{background:#45292b;border-color:#6c3f42;color:#ffe4e6}
+html[data-theme="dark"] .cm-price-source-note{background:#2c3b49;border-color:#526b80;color:#d9ecfb}
+html[data-theme="dark"] .cm-price-source-note span{color:#c0d3e2}

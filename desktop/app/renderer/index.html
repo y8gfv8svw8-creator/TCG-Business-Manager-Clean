@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.0.2</title>
+  <title>TCG Business Manager 6.0.3</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.0.2 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.0.3 · SQLite</div>
         </div>
       </div>
 
@@ -148,7 +148,7 @@
           <label>Sprache<select id="inventoryLanguageFilter"><option value="">Alle Sprachen</option></select></label>
           <label>Zustand<select id="inventoryConditionFilter"><option value="">Alle Zustände</option></select></label>
           <label>Lagerdauer<select id="inventoryAgeFilter"><option value="">Jedes Alter</option><option value="0-30">0–30 Tage</option><option value="31-60">31–60 Tage</option><option value="61-90">61–90 Tage</option><option value="91+">Über 90 Tage</option></select></label>
-          <label>Datenqualität<select id="inventoryQualityFilter"><option value="">Alle Daten</option><option value="complete">Vollständig</option><option value="incomplete">Druckdaten fehlen</option><option value="unpriced">Ohne Inseratspreis</option></select></label>
+          <label>Datenqualität<select id="inventoryQualityFilter"><option value="">Alle Daten</option><option value="complete">Vollständig</option><option value="incomplete">Druckdaten fehlen</option><option value="unpriced">Ohne Inseratspreis</option><option value="reprice">Preis prüfen</option></select></label>
           <label>Sortierung<select id="inventorySort"><option value="name">Kartenname</option><option value="set">Set</option><option value="age-desc">Älteste zuerst</option><option value="age-asc">Neueste zuerst</option><option value="value-desc">Höchster VK zuerst</option><option value="quantity-desc">Höchster Bestand zuerst</option></select></label>
           <button type="button" class="secondary filter-reset" id="inventoryFilterReset">Filter zurücksetzen</button>
         </div>
@@ -156,7 +156,7 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Karte</th><th>Set</th><th>Seltenheit</th><th>Menge</th><th>Inseratspreis</th><th>Status</th><th>Lagerdauer</th><th></th>
+              <th>Karte</th><th>Set</th><th>Seltenheit</th><th>Menge</th><th>Ø EK</th><th>Inseratspreis</th><th>VK-Vorschlag</th><th>Marktänderung</th><th>Status</th><th>Lagerdauer</th><th></th>
             </tr></thead>
             <tbody id="inventoryTable"></tbody>
           </table>
@@ -729,7 +729,7 @@
       <div id="modalFields" class="form-grid"></div>
       <div class="modal-actions">
         <button type="button" id="modalCancel" class="secondary">Abbrechen</button>
-        <button type="submit" class="primary">Speichern</button>
+        <button type="submit" id="modalSubmit" class="primary">Speichern</button>
       </div>
     </form>
   </dialog>

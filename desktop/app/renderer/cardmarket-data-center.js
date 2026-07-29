@@ -644,18 +644,22 @@
       let latestRecord = null;
       if (!previous || String(snapshotDate) >= String(previous.date || "")) {
         let previousTrend = null;
+        let previousLow = null;
         let previousDate = "";
         if (previous && previous.date === snapshotDate) {
           previousTrend = cmNumber(previous.previousTrend);
+          previousLow = cmNumber(previous.previousLow);
           previousDate = String(previous.previousDate || "");
         } else if (previous) {
           previousTrend = cmNumber(previous.trend);
+          previousLow = cmNumber(previous.low);
           previousDate = String(previous.date || "");
         }
         const currentTrend = cmNumber(price.trend);
         const dailyChange = currentTrend !== null && previousTrend !== null ? currentTrend - previousTrend : null;
         latestRecord = {
           ...price,
+          previousLow,
           previousTrend,
           previousDate,
           dailyChange,
@@ -715,7 +719,10 @@
       state.productCatalog[price.productId] = {
         ...state.productCatalog[price.productId],
         low:price.low ?? "", trend:price.trend ?? "", avg1:price.avg1 ?? "",
-        avg7:price.avg7 ?? "", avg30:price.avg30 ?? "", priceDate:snapshotDate
+        avg7:price.avg7 ?? "", avg30:price.avg30 ?? "", priceDate:snapshotDate,
+        previousLow:price.previousLow ?? null, previousTrend:price.previousTrend ?? null,
+        previousDate:price.previousDate || "", dailyChange:price.dailyChange ?? null,
+        priceSource:"cardmarket_price_guide", priceScope:"official_unfiltered_reference"
       };
     });
 
@@ -1148,12 +1155,19 @@
     const own=cmBuildOwnStats().get(String(product.productId||""))||{};
     const calculated=cmMarketCalculation(product,own);
     const learned=product.learnedPricing||{};
+    const ownedTargets=window.TcgBusinessAutomation.calculateOwnedCardPriceTargets(product,state.settings);
+    const learnedSell=Number(learned.recommendedSell||0);
+    const recommendedSell=Math.ceil(Math.max(learnedSell,ownedTargets.suggestedSell,ownedTargets.priceFloor)*100)/100;
     return {
-      recommendedSell:Number(learned.recommendedSell||calculated.recommendedSell||0),
+      recommendedSell,
       recommendedBuy:Number(learned.recommendedBuy||calculated.maxBuy||0),
-      priceFloor:Number(learned.priceFloor||0),
-      quickSell:Number(learned.quickSell||0),
+      marketSell:Number(ownedTargets.marketSell||calculated.recommendedSell||0),
+      priceFloor:Number(ownedTargets.priceFloor||learned.priceFloor||0),
+      quickSell:Number(ownedTargets.quickSell||learned.quickSell||0),
       marketLow:Number(calculated.marketBuy||0),
+      expectedProfit:Number(ownedTargets.expectedProfit||0),
+      priceDate:String(product.priceDate||product.date||state.cardmarket?.priceDate||""),
+      priceSource:"Cardmarket Price Guide",
       confidence:learned.confidenceLevel||calculated.scoreConfidence||"low"
     };
   };
@@ -1275,17 +1289,18 @@
       const calc = cmMarketCalculation(merged, own, {delta1:delta1.value,delta7:delta7.value,delta30:delta30.value});
       const rows = [...history].reverse().slice(0,40).map(row => `<tr><td>${fmtDate(row.date)}</td><td>${row.low !== null ? money(row.low) : "-"}</td><td>${row.trend !== null ? money(row.trend) : "-"}</td><td>${row.avg1 !== null ? money(row.avg1) : "-"}</td><td>${row.avg7 !== null ? money(row.avg7) : "-"}</td><td>${row.avg30 !== null ? money(row.avg30) : "-"}</td></tr>`).join("");
       panel.innerHTML = `<div class="panel-head"><div><h2>${escapeHtml(cmDisplayName(product))}</h2>${cmEnglishName(product) && cmNormalize(cmEnglishName(product)) !== cmNormalize(cmDisplayName(product)) ? `<p class="cm-english-name">Englisch: ${escapeHtml(cmEnglishName(product))}</p>` : ""}<p class="muted">${cmProductSubtitle(product)}</p>${cmDataQualityBadges(product,calc)}</div><div class="row-actions"><a class="secondary button-link" href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer">Cardmarket öffnen ↗</a><button class="primary" data-cm-add-watch="${escapeHtml(productId)}">Zur Watchlist</button></div></div>
+        <div class="cm-price-source-note"><strong>Offizieller Cardmarket Price Guide vom ${fmtDate(merged.date||state.cardmarket?.priceDate)||"unbekannten Datum"}</strong><span>Dies sind tägliche, ungefilterte Referenzwerte. Der live auf Cardmarket angezeigte Angebotspreis „ab“ kann durch Sprache, Zustand, Standort und aktuelle Angebote abweichen.</span></div>
         <div class="cm-detail-metrics">
-          <div><span>Cardmarket Low</span><strong>${calc.low !== null ? money(calc.low) : "-"}</strong></div>
-          <div><span>Cardmarket Trend</span><strong>${calc.trend !== null ? money(calc.trend) : "-"}</strong></div>
+          <div><span>Price Guide Low</span><strong>${calc.low !== null ? money(calc.low) : "-"}</strong></div>
+          <div><span>Price Guide Trend</span><strong>${calc.trend !== null ? money(calc.trend) : "-"}</strong></div>
           <div><span>Δ 1 Tag</span><strong>${delta1.value===null?"–":cmSignedMoney(delta1.value)}</strong><small>${delta1.sourceDate?`gegen ${fmtDate(delta1.sourceDate)}`:escapeHtml(delta1.reason||"")}</small></div>
           <div><span>Δ 7 Tage</span><strong>${delta7.value===null?"–":cmSignedMoney(delta7.value)}</strong><small>${delta7.sourceDate?`gegen ${fmtDate(delta7.sourceDate)}`:escapeHtml(delta7.reason||"")}</small></div>
           <div><span>Δ 30 Tage</span><strong>${delta30.value===null?"–":cmSignedMoney(delta30.value)}</strong><small>${delta30.sourceDate?`gegen ${fmtDate(delta30.sourceDate)}`:escapeHtml(delta30.reason||"")}</small></div>
           <div><span>Δ 90 Tage</span><strong>${delta90.value===null?"–":cmSignedMoney(delta90.value)}</strong><small>${delta90.sourceDate?`gegen ${fmtDate(delta90.sourceDate)}`:escapeHtml(delta90.reason||"")}</small></div>
           <div><span>Empfohlener VK</span><strong>${calc.recommendedSell ? money(calc.recommendedSell) : "-"}</strong></div>
           <div><span>Empfohlener Max-EK</span><strong>${cmAnalysisMoney(calc.maxBuy)}</strong></div>
-          <div><span>Gewinn bei Cardmarket Low</span><strong class="${calc.profitAtMarket>=0?"money-positive":"money-negative"}">${calc.marketBuy ? money(calc.profitAtMarket) : "-"}</strong></div>
-          <div><span>ROI bei Cardmarket Low</span><strong>${calc.marketBuy ? pct(calc.roiAtMarket) : "-"}</strong></div>
+          <div><span>Gewinn bei Price Guide Low</span><strong class="${calc.profitAtMarket>=0?"money-positive":"money-negative"}">${calc.marketBuy ? money(calc.profitAtMarket) : "-"}</strong></div>
+          <div><span>ROI bei Price Guide Low</span><strong>${calc.marketBuy ? pct(calc.roiAtMarket) : "-"}</strong></div>
           <div><span>Eigener Ø EK</span><strong>${own.avgBuy ? money(own.avgBuy) : "-"}</strong></div>
           <div><span>Eigener Ø VK</span><strong>${own.avgSell ? money(own.avgSell) : "-"}</strong></div>
           <div><span>Bestand / reserviert</span><strong>${Number(own.inventory||0)} / ${Number(own.reserved||0)}</strong></div>

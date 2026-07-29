@@ -60,6 +60,7 @@ let scannerSessionActive = false;
 let scannerReviewActive = false;
 let scannerSubmissionQueue = [];
 let scannerSubmissionProcessing = false;
+let scannerDialogSuspended = false;
 
 const views = {
   private: ["Privatsammlung", "Private Karten getrennt vom Geschaeftsbestand verwalten."],
@@ -977,7 +978,7 @@ function openMonthlyFinanceDetails(type){
       <tbody>${rows||`<tr><td colspan="4" class="empty">Für diesen Monat sind noch keine ${isIncome?"Einnahmen":"Ausgaben"} vorhanden.</td></tr>`}</tbody>
       <tfoot><tr><td colspan="3"><strong>Summe laut Monatsübersicht</strong></td><td class="finance-detail-amount"><strong>${money(data.total)}</strong></td></tr></tfoot>
     </table></div>`;
-  dialog.showModal();
+  showDialogSafely(dialog);
 }
 function renderDashboard() {
   const activeInv = state.inventory.filter(i=>["Im Bestand","Inseriert"].includes(i.status) || (i.status==="Im Bestand" && i.listed));
@@ -1209,7 +1210,7 @@ function openInventoryDetails(groupKey){
     <div class="table-wrap"><table class="movement-table"><thead><tr><th>Datum</th><th>Bewegung</th><th>Menge</th><th>Referenz</th><th>Info</th><th>Aktion</th></tr></thead><tbody>${rows.length?rows.map(m=>`<tr class="${movementRowClass(m)}"><td>${fmtDate(m.timestamp)}</td><td>${escapeHtml(m.type||"Bewegung")}${m.cancelledAt?`<br><small>Storniert: ${escapeHtml(m.cancelReason||"Gegenbuchung erstellt")}</small>`:""}</td><td class="${Number(m.quantity||0)>0?"money-positive":Number(m.quantity||0)<0?"money-negative":""}"><strong>${Number(m.quantity||0)>0?"+":""}${Number(m.quantity||0)}</strong></td><td>${escapeHtml(m.reference||"-")}</td><td>${escapeHtml(m.note||"")}</td><td>${canCancelInventoryMovement(m)?`<button type="button" class="secondary compact-button" data-cancel-movement="${escapeHtml(m.id)}">Stornieren</button>`:"–"}</td></tr>`).join(""):`<tr><td colspan="6" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
   dialog.dataset.saleId="";
   if(dialog.open) dialog.close();
-  try { dialog.showModal(); } catch(error) { dialog.setAttribute("open",""); }
+  showDialogSafely(dialog);
 }
 
 function moveBusinessInventoryToPrivate(groupKey){
@@ -1221,6 +1222,19 @@ function moveBusinessInventoryToPrivate(groupKey){
   state.privateCollection.push({...item,ownership:"private",status:"Privatsammlung",listed:false,listingPrice:0});
   addMovement({type:"Geschäftsbestand → Privat",quantity:-1,productId:cleanProductId(item.productId),reference:"Eigentumswechsel",note:item.name||"Karte"});
   saveState();renderAll();document.getElementById("orderDetailDialog")?.close();
+}
+
+function deletePrivateCard(itemId){
+  const item=state.privateCollection.find(row=>row.id===itemId);if(!item)return;
+  openModal(`Private Karte löschen – ${item.name||"Karte"}`,[
+    {name:"reason",label:"Grund der Korrektur",required:true,full:true}
+  ],{reason:"Fehlerhafte Erfassung"},data=>{
+    const current=state.privateCollection.find(row=>row.id===itemId);if(!current)return true;
+    adjustPurchaseOwnershipForAsset(current,"private",null);
+    state.privateCollection=state.privateCollection.filter(row=>row.id!==itemId);
+    addMovement({type:"Privatkorrektur",quantity:-1,productId:cleanProductId(current.productId),reference:"Privatsammlung",note:String(data.reason||"Fehlerhafte Erfassung").trim()});
+    return true;
+  },{submitLabel:"Karte löschen",destructive:true});
 }
 
 function inventoryDisplayStatus(item) {
@@ -1289,6 +1303,28 @@ function inventoryPrintComplete(item={}) {
   return Boolean(cleanProductId(item.productId)&&String(item.setName||item.set||"").trim()&&String(item.collectorNumber||"").trim()&&String(item.rarity||"").trim());
 }
 
+function inventoryGroupPricing(group){
+  const stats=inventoryGroupStats(group);
+  const items=stats.currentItems||[];
+  const averageCost=items.length?items.reduce((sum,item)=>sum+Number(item.cost||0),0)/items.length:0;
+  const productId=cleanProductId(group.first?.productId);
+  const catalog=state.productCatalog?.[productId]||{};
+  const prices={...catalog,...group.first,cost:averageCost};
+  const calculated=window.TcgBusinessAutomation?.calculateOwnedCardPriceTargets?.(prices,state.settings)||{suggestedSell:0,marketSell:0,priceFloor:0,expectedProfit:0};
+  const listed=items.filter(item=>item.listed&&Number(item.listingPrice||0)>0);
+  const listingPrice=listed.length?listed.reduce((sum,item)=>sum+Number(item.listingPrice||0),0)/listed.length:0;
+  const suggestedSell=Number(calculated.suggestedSell||0);
+  const difference=suggestedSell&&listingPrice?suggestedSell-listingPrice:0;
+  const threshold=listingPrice?Math.max(0.05,listingPrice*0.05):0.05;
+  const explicitDailyChange=catalog.dailyChange===null||catalog.dailyChange===undefined||catalog.dailyChange===""?Number.NaN:Number(catalog.dailyChange);
+  const dailyChange=Number.isFinite(explicitDailyChange)
+    ? explicitDailyChange
+    : Number(catalog.trend||0)-Number(catalog.previousTrend??catalog.trend??0);
+  const trendBase=Number(catalog.previousTrend||0);
+  const changePercent=trendBase?dailyChange/trendBase*100:0;
+  return {averageCost,listingPrice,listedCount:listed.length,itemCount:items.length,suggestedSell,difference,needsReprice:Boolean(listed.length&&suggestedSell&&Math.abs(difference)>=threshold),dailyChange:Number.isFinite(dailyChange)?dailyChange:0,changePercent:Number.isFinite(changePercent)?changePercent:0,priceDate:catalog.priceDate||"",marketLow:Number(catalog.low||0),marketTrend:Number(catalog.trend||0),calculated};
+}
+
 function inventoryAgeMatches(days, filter) {
   if(!filter)return true;
   if(filter==="0-30")return days<=30;
@@ -1301,6 +1337,7 @@ function renderInventory() {
   const q = document.getElementById("inventorySearch").value;
   const f = document.getElementById("inventoryStatusFilter").value;
   const groups=getInventoryGroups();
+  groups.forEach(group=>group.pricing=inventoryGroupPricing(group));
   syncFilterOptions("inventorySetFilter",groups.map(group=>group.first.setName||group.first.set),"Alle Sets");
   syncFilterOptions("inventoryRarityFilter",groups.map(group=>group.first.rarity),"Alle Seltenheiten");
   syncFilterOptions("inventoryLanguageFilter",groups.map(group=>group.first.language),"Alle Sprachen");
@@ -1317,7 +1354,7 @@ function renderInventory() {
     const stats=inventoryGroupStats(group);
     const displayStatus = inventoryGroupDisplayStatus(group);
     const complete=inventoryPrintComplete(i);
-    const qualityMatches=!qualityFilter||(qualityFilter==="complete"&&complete)||(qualityFilter==="incomplete"&&!complete)||(qualityFilter==="unpriced"&&!stats.currentItems.some(item=>item.listed&&Number(item.listingPrice||0)>0));
+    const qualityMatches=!qualityFilter||(qualityFilter==="complete"&&complete)||(qualityFilter==="incomplete"&&!complete)||(qualityFilter==="unpriced"&&!stats.currentItems.some(item=>item.listed&&Number(item.listingPrice||0)>0))||(qualityFilter==="reprice"&&group.pricing.needsReprice);
     return cardRecordMatchesSearch({...i, status:displayStatus, quantity:group.quantity}, q)
       && (!f || displayStatus === f || stats.currentItems.some(item=>item.status===f))
       && (!setFilter||String(i.setName||i.set||"")===setFilter)
@@ -1348,31 +1385,37 @@ function renderInventory() {
     const i = group.first;
     const names = cardDisplayNames(i);
     const displayStatus = inventoryGroupDisplayStatus(group);
-    const price = i.listed && Number(i.listingPrice || 0) > 0
-      ? money(i.listingPrice)
-      : '<span class="muted">Nicht inseriert</span>';
     const url = cardmarketUrl(i);
     const exactLink = /^https?:\/\//i.test(String(i.productUrl || state.productCatalog?.[cleanProductId(i.productId)]?.productUrl || ""));
-    return `<tr>
+    const pricing=group.pricing||inventoryGroupPricing(group);
+    const price=pricing.listedCount&&pricing.listingPrice
+      ? `${money(pricing.listingPrice)}${pricing.listedCount!==pricing.itemCount?`<br><small>${pricing.listedCount} Exemplar${pricing.listedCount===1?"":"e"} inseriert</small>`:""}`
+      : '<span class="muted">Nicht inseriert</span>';
+    const changeClass=pricing.dailyChange>0?"money-positive":pricing.dailyChange<0?"money-negative":"muted";
+    const rowClass=pricing.needsReprice?(pricing.difference>0?"inventory-price-review-up":"inventory-price-review-down"):"";
+    return `<tr class="${rowClass}">
       <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
       <td>${escapeHtml(i.setName||i.set||"-")}${i.setName&&i.set?`<br><small>${escapeHtml(i.set)}</small>`:""}${i.collectorNumber?`<br><small>${escapeHtml(i.collectorNumber)}</small>`:""}</td>
       <td>${escapeHtml(i.rarity || "-")}</td>
       <td><button class="stock-detail-button" data-inventory-details="${escapeHtml(group.key)}"><strong>${group.quantity}</strong><span>Details</span></button></td>
+      <td>${pricing.averageCost?money(pricing.averageCost):'<span class="muted">fehlt</span>'}</td>
       <td>${price}</td>
+      <td>${pricing.suggestedSell?`<strong>${money(pricing.suggestedSell)}</strong><br><small>${pricing.calculated.priceFloor?`Kostenuntergrenze ${money(pricing.calculated.priceFloor)}`:"Marktberechnung"}</small><br><button type="button" class="link-button compact-button" data-apply-group-price="${escapeHtml(group.key)}">Übernehmen</button>`:'<span class="muted">Keine Preisdaten</span>'}</td>
+      <td>${pricing.priceDate?`<span class="${changeClass}"><strong>${pricing.dailyChange>0?"+":""}${money(pricing.dailyChange)}</strong></span><br><small>${pricing.changePercent?`${pricing.changePercent>0?"+":""}${pricing.changePercent.toFixed(1)} % · `:""}Price Guide ${fmtDate(pricing.priceDate)}</small>${pricing.needsReprice?'<br><span class="badge yellow">Preis prüfen</span>':""}`:'<span class="muted">Kein Preisstand</span>'}</td>
       <td>${statusBadge(displayStatus)}</td>
       <td>${daysBetween(group.oldestDate)} Tage</td>
       <td><div class="row-actions"><button class="icon-button" data-edit-inventory-group="${escapeHtml(group.key)}">Bearbeiten</button><button class="icon-button" data-delete-inventory-group="${escapeHtml(group.key)}">Löschen</button></div></td>
     </tr>`;
-  }).join("") : `<tr><td colspan="8" class="empty">Keine Karten gefunden</td></tr>`;
+  }).join("") : `<tr><td colspan="11" class="empty">Keine Karten gefunden</td></tr>`;
 }
 
-function editInventoryGroup(groupKey) {
+function editInventoryGroup(groupKey, suggestedPrice=0) {
   const group = getInventoryGroups().find(g => g.key === groupKey);
   if (!group) return;
   const first = group.first;
   const initial = {
-    listingStatus: first.listed ? "Inseriert" : "Nicht inseriert",
-    listingPrice: Number(first.listingPrice || 0),
+    listingStatus: suggestedPrice>0||first.listed ? "Inseriert" : "Nicht inseriert",
+    listingPrice: Number(suggestedPrice||first.listingPrice||0),
     status: "Unverändert",
     location: first.location || "",
     note: first.note || ""
@@ -1592,7 +1635,7 @@ function showMaterialHistory(materialId){
   dialog.dataset.saleId="";
   document.getElementById("orderDetailTitle").textContent=`Materialverlauf · ${material.name}`;
   document.getElementById("orderDetailContent").innerHTML=`<div class="order-summary-grid"><div><small>Aktueller Bestand</small><strong>${Number(material.stock||0)} ${escapeHtml(material.unit||"Stück")}</strong></div><div><small>Stückkosten</small><strong>${money(material.unitCost)}</strong></div><div><small>Buchungen</small><strong>${movements.length}</strong></div><div><small>Zugänge im Verlauf</small><strong>+${incoming}</strong></div><div><small>Verbrauch im Verlauf</small><strong>−${outgoing}</strong></div></div><div class="table-wrap material-history-table"><table class="movement-table"><thead><tr><th>Zeitpunkt</th><th>Bewegung</th><th>Menge</th><th>Wofür</th><th>Information</th></tr></thead><tbody>${movements.length?movements.map(row=>`<tr class="${movementRowClass(row)}"><td>${row.timestamp?new Date(row.timestamp).toLocaleString("de-DE"):fmtDate(row.date)}</td><td>${escapeHtml(row.type||"Bewegung")}</td><td class="${Number(row.quantity||0)>=0?"money-positive":"money-negative"}"><strong>${Number(row.quantity||0)>0?"+":""}${Number(row.quantity||0)}</strong></td><td>${row.saleId&&state.sales.some(sale=>sale.id===row.saleId)?`<button class="link-button" type="button" data-show-sale="${escapeHtml(row.saleId)}">${escapeHtml(row.reference||"Bestellung öffnen")}</button>`:escapeHtml(row.reference||"–")}</td><td>${escapeHtml(row.note||"")}</td></tr>`).join(""):`<tr><td colspan="5" class="empty">Noch keine Bewegungen protokolliert.</td></tr>`}</tbody></table></div>`;
-  dialog.showModal();
+  showDialogSafely(dialog);
 }
 function renderExpenses(){
   const table=document.getElementById("expenseTable"); if(!table) return;
@@ -1925,7 +1968,7 @@ function openOrderDetails(kind,id) {
     ${orderWorkflowHistory(order,isPurchase)}
     ${order.note?`<div class="order-note"><strong>Notiz</strong><p>${escapeHtml(order.note)}</p></div>`:""}`;
   dialog.dataset.saleId=sale?.id||"";dialog.dataset.purchaseId=purchase?.id||"";
-  dialog.showModal();
+  showDialogSafely(dialog);
 }
 
 function renderPartners() {
@@ -2195,7 +2238,27 @@ function renderSettings() {
   }
 }
 
-function openModal(title, fields, initial={}, onSave) {
+function configureModalAction({submitLabel="Speichern",destructive=false}={}) {
+  const submit=document.getElementById("modalSubmit");
+  if(!submit)return;
+  submit.textContent=submitLabel;
+  submit.className=destructive?"danger-button":"primary";
+}
+
+function showDialogSafely(dialog) {
+  if(!dialog)return;
+  document.querySelectorAll("dialog[open]").forEach(openDialog=>{
+    if(openDialog!==dialog)openDialog.close();
+  });
+  if(dialog.open)dialog.close();
+  try{dialog.showModal();}catch(error){dialog.setAttribute("open","");}
+  requestAnimationFrame(()=>{
+    const field=dialog.querySelector('input:not([type="hidden"]):not([readonly]):not([disabled]), select:not([disabled]), textarea:not([disabled])');
+    field?.focus({preventScroll:true});
+  });
+}
+
+function openModal(title, fields, initial={}, onSave, options={}) {
   document.getElementById("modalTitle").textContent = title;
   const wrap = document.getElementById("modalFields");
   inventoryCardSearchSequence++;
@@ -2211,7 +2274,8 @@ function openModal(title, fields, initial={}, onSave) {
       }
     </label>`).join("");
   modalHandler = onSave;
-  document.getElementById("modal").showModal();
+  configureModalAction(options);
+  showDialogSafely(document.getElementById("modal"));
 }
 
 document.getElementById("modalForm").addEventListener("submit", e=>{
@@ -2273,7 +2337,8 @@ async function openIphoneScanner(mode="business",targetId=""){
   const dialog=document.getElementById("scannerDialog"),content=document.getElementById("scannerContent");
   document.getElementById("scannerSubtitle").textContent={private:"Foto für die Privatsammlung aufnehmen.",purchase:"Karte zu diesem Einkauf ergänzen.",sale:"Karte zu diesem Verkauf ergänzen.",business:"Foto für den Geschäftsbestand aufnehmen."}[scannerSessionMode];
   content.innerHTML='<div class="scanner-loading">Sichere Verbindung wird vorbereitet …</div>';
-  try{if(!dialog.open)dialog.showModal();}catch{dialog.setAttribute("open","");}
+  scannerDialogSuspended=false;
+  showDialogSafely(dialog);
   try{
     const info=await window.desktopApp.startScanner({mode:scannerSessionMode,targetId});
     scannerSessionActive=true;
@@ -2283,6 +2348,7 @@ async function openIphoneScanner(mode="business",targetId=""){
 
 async function closeIphoneScanner(){
   scannerSessionActive=false;scannerReviewActive=false;scannerSubmissionProcessing=false;scannerSubmissionQueue=[];
+  scannerDialogSuspended=false;
   document.getElementById("scannerDialog")?.close();
   try{await window.desktopApp?.stopScanner?.();}catch(error){console.error("Scanner konnte nicht beendet werden:",error);}
 }
@@ -2381,6 +2447,8 @@ async function acceptScannerSubmission(submission){
   scannerReviewActive=true;
   const detected=scan.recognizedProduct?`Erkannt: ${inventoryVariantName(scan.recognizedProduct)}`:scan.recognitionMatch?.products?.length?`${scan.recognitionMatch.products.length} passende Druckvarianten gefunden`:'Keine eindeutige Zuordnung – bitte manuell auswählen';
   updateScannerSeriesStatus(`${detected}. Weitere Fotos können bereits aufgenommen werden.`);
+  const scannerDialog=document.getElementById("scannerDialog");
+  if(scannerDialog?.open){scannerDialogSuspended=true;scannerDialog.close();}
   if(submission.mode==="purchase"&&submission.targetId){addPurchaseLine(submission.targetId,scan);return;}
   if(submission.mode==="sale"&&submission.targetId){addSaleLine(submission.targetId,scan);return;}
   addInventory(scan.recognizedProduct||{},submission.mode==="private"?"private":"business",scan);
@@ -2412,6 +2480,7 @@ function finishScannerCardReview(){
   if(!scannerReviewActive)return;
   scannerReviewActive=false;
   if(!scannerSessionActive)return;
+  if(scannerDialogSuspended){scannerDialogSuspended=false;showDialogSafely(document.getElementById("scannerDialog"));}
   updateScannerSeriesStatus(scannerSubmissionQueue.length?`${scannerSubmissionQueue.length} weitere${scannerSubmissionQueue.length===1?" Karte wird":" Karten werden"} jetzt geöffnet …`:'Bereit für die nächste Karte …');
   setTimeout(processScannerSubmissionQueue,0);
 }
@@ -2583,7 +2652,8 @@ function addInventory(initial={}, collection="business", scan=null) {
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
   inventoryModalVariants=new Map();
-  document.getElementById("modal").showModal();
+  configureModalAction();
+  showDialogSafely(document.getElementById("modal"));
   if(scan)applyScannerModalRecognition(scan);
   else if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
   else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
@@ -2623,7 +2693,7 @@ function addPurchaseLine(purchaseId,scan=null){
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
-  inventoryModalVariants=new Map();document.getElementById("modal").showModal();
+  inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
@@ -2656,7 +2726,7 @@ function addSaleLine(saleId,scan=null){
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
-  inventoryModalVariants=new Map();document.getElementById("modal").showModal();
+  inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
@@ -2742,11 +2812,13 @@ function applyPurchaseReceiptPlan(purchase,plan,note=""){
     const item=row.item;
     item.receiptLineKey=row.receipt.key;
     item.receivedBusiness=row.business;item.receivedPrivate=row.private;item.receivedDamaged=row.damaged;item.cancelledQuantity=row.cancelled;
+    item.listBusiness=Boolean(row.listBusiness);item.receiptListingPrice=Number(row.listingPrice||0);item.suggestedSell=Number(row.suggestedSell||0);
     const linkKey=`${purchase.id}:${row.receipt.key}`;
     [...state.inventory,...(state.privateCollection||[])].filter(asset=>asset.purchaseLineKey===linkKey).forEach(asset=>asset.cost=Number(row.unitCost||0));
+    state.inventory.filter(asset=>asset.purchaseLineKey===linkKey&&!['Verkauft','Storniert'].includes(asset.status)).forEach(asset=>{asset.listed=Boolean(row.listBusiness&&row.listingPrice>0);asset.listingPrice=asset.listed?Number(row.listingPrice):0;asset.suggestedSell=Number(row.suggestedSell||0);});
     const base=purchaseLineAssetBase(purchase,row);
     for(let index=0;index<row.addBusiness;index++){
-      state.inventory.push({...base,id:uid(),status:"Im Bestand",listed:false,listingPrice:0,ownership:"business"});created++;
+      state.inventory.push({...base,id:uid(),status:"Im Bestand",listed:Boolean(row.listBusiness&&row.listingPrice>0),listingPrice:row.listBusiness?Number(row.listingPrice||0):0,suggestedSell:Number(row.suggestedSell||0),ownership:"business"});created++;
     }
     for(let index=0;index<row.addPrivate;index++){
       state.privateCollection.push({...base,id:uid(),status:"Privatsammlung",listed:false,listingPrice:0,ownership:"private"});created++;
@@ -2778,13 +2850,19 @@ function renderPurchaseReceipt(purchase){
   const rows=purchaseReceiptRows(purchase);
   const body=rows.map(row=>{
     const r=row.receipt,names=cardDisplayNames(row.item);
+    const productId=cleanProductId(row.item.productId),catalog=state.productCatalog?.[productId]||{};
+    const pricing=TcgBusinessAutomation.calculateOwnedCardPriceTargets({...catalog,...row.item,cost:Number(row.unitCost||0)},state.settings);
+    const suggested=Number(row.item.suggestedSell||pricing.suggestedSell||0),listingPrice=Number(row.item.receiptListingPrice||suggested||0);
+    const complete=inventoryPrintComplete(row.item);
     return `<tr data-receipt-row data-receipt-key="${escapeHtml(r.key)}" data-ordered="${r.quantity}" data-min-business="${r.materializedBusiness}" data-min-private="${r.materializedPrivate}" data-min-damaged="${r.materializedDamaged}">
-      <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<small>${escapeHtml([row.item.setName||row.item.set,row.item.collectorNumber,row.item.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")}</small></td>
+      <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<small>${escapeHtml([row.item.setName||row.item.set,row.item.collectorNumber,row.item.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")}</small>${complete?'<span class="badge green">Druck eindeutig</span>':'<span class="badge yellow">Druckdaten prüfen</span>'}</td>
       <td><strong>${r.quantity}</strong></td>
       ${["business","private","damaged","cancelled"].map(key=>`<td><input class="receipt-quantity" data-receipt-value="${key}" type="number" min="${key==="business"?r.materializedBusiness:key==="private"?r.materializedPrivate:key==="damaged"?r.materializedDamaged:0}" max="${r.quantity}" step="1" value="${r[key]||0}"></td>`).join("")}
-      <td data-receipt-open><strong>${r.open}</strong></td><td>${money(row.unitCost)}</td></tr>`;
+      <td data-receipt-open><strong>${r.open}</strong></td><td><strong>${money(row.unitCost)}</strong><small>Karte, Versand und Zusatzkosten</small></td>
+      <td>${suggested?`<strong>${money(suggested)}</strong><small>${pricing.priceFloor?`Kostenuntergrenze ${money(pricing.priceFloor)}`:"Offizieller Price Guide"}</small>${pricing.costFloorAboveMarket?'<small class="money-negative">Kosten liegen über Markt-Vorschlag</small>':""}`:'<span class="muted">Noch keine Preisdaten</span>'}</td>
+      <td><input class="receipt-listing-price" data-receipt-listing-price type="number" min="0" step="0.01" value="${listingPrice?listingPrice.toFixed(2):""}"><label class="receipt-list-check"><input data-receipt-list type="checkbox" ${row.item.listBusiness?"checked":""}> Im Manager direkt als inseriert markieren</label><input data-receipt-suggested type="hidden" value="${suggested}"></td></tr>`;
   }).join("");
-  target.innerHTML=rows.length?`<div class="table-wrap"><table class="receipt-table"><thead><tr><th>Karte / Druck</th><th>Bestellt</th><th>Geschäft</th><th>Privat</th><th>Beschädigt</th><th>Storniert</th><th>Offen</th><th>EK inkl. Kosten</th></tr></thead><tbody>${body}</tbody></table></div><div id="purchaseReceiptValidation" class="receipt-validation"></div>`:`<div class="warning">Für diesen Einkauf sind keine einzelnen Kartenpositionen vorhanden. Bitte zuerst Karten hinzufügen.</div>`;
+  target.innerHTML=rows.length?`<div class="table-wrap"><table class="receipt-table"><thead><tr><th>Karte / Druck</th><th>Bestellt</th><th>Geschäft</th><th>Privat</th><th>Beschädigt</th><th>Storniert</th><th>Offen</th><th>Genauer EK</th><th>Berechneter VK</th><th>Direkt inserieren</th></tr></thead><tbody>${body}</tbody></table></div><div class="info">„Direkt inserieren“ speichert Preis und Inseratstatus im Manager. Eine Veröffentlichung bei Cardmarket selbst ist erst mit einem künftigen API-Zugang möglich.</div><div id="purchaseReceiptValidation" class="receipt-validation"></div>`:`<div class="warning">Für diesen Einkauf sind keine einzelnen Kartenpositionen vorhanden. Bitte zuerst Karten hinzufügen.</div>`;
 }
 
 function updateReceiptOpenValues(){
@@ -2802,13 +2880,16 @@ function openPurchaseReceipt(purchaseId){
   document.getElementById("purchaseCostAllocation").value=purchase.costAllocationMethod||"value";
   document.getElementById("purchaseReceiptNote").value="";
   renderPurchaseReceipt(purchase);
-  if(dialog.open)dialog.close();dialog.showModal();
+  showDialogSafely(dialog);
 }
 
 function readPurchaseReceiptRequest(){
   return [...document.querySelectorAll("#purchaseReceiptContent [data-receipt-row]")].map(row=>({
     key:row.dataset.receiptKey,
-    ...Object.fromEntries([...row.querySelectorAll("[data-receipt-value]")].map(input=>[input.dataset.receiptValue,Math.max(0,Math.round(Number(input.value||0))) ]))
+    ...Object.fromEntries([...row.querySelectorAll("[data-receipt-value]")].map(input=>[input.dataset.receiptValue,Math.max(0,Math.round(Number(input.value||0))) ])),
+    listBusiness:Boolean(row.querySelector("[data-receipt-list]")?.checked),
+    listingPrice:Math.max(0,Number(row.querySelector("[data-receipt-listing-price]")?.value||0)),
+    suggestedSell:Math.max(0,Number(row.querySelector("[data-receipt-suggested]")?.value||0))
   }));
 }
 
@@ -2937,7 +3018,7 @@ function openSaleAllocation(saleId){
     });
     document.getElementById('saleAllocationContent').innerHTML=`<div class="table-wrap"><table class="receipt-table"><thead><tr><th>Verkaufsposition</th><th>Exemplar</th><th>Einkaufslos / tatsächlicher EK</th></tr></thead><tbody>${rows.join('')}</tbody></table></div><div class="info">FIFO (ältester passender Einkauf zuerst) ist vorausgewählt. Du kannst jedes Exemplar bewusst ändern.</div>`;
   }
-  if(dialog.open)dialog.close();dialog.showModal();
+  showDialogSafely(dialog);
 }
 
 function saveSaleAllocation(){
@@ -3138,10 +3219,11 @@ function updateCatalogFromRows(rows) {
 }
 
 function stockInventoryIdentity(item={}) {
-  const articleId=cleanProductId(item.articleId||item.idArticle||"");
-  if(articleId)return `article:${articleId}`;
-  const price=Number(item.listingPrice??item.offerPrice??0);
-  return `variant:${inventoryVariantKey(item)}|${Number.isFinite(price)?price.toFixed(4):"0.0000"}`;
+  return window.TcgBusinessAutomation?.stockSnapshotIdentity?.(item)||`variant-v2:${inventoryVariantKey(item)}|${String(item.edition||"").trim().toUpperCase()}`;
+}
+
+function stockVariantIdentity(item={}) {
+  return stockInventoryIdentity({...item,articleId:"",idArticle:""});
 }
 
 function stockSnapshotManaged(item={}) {
@@ -3236,6 +3318,7 @@ async function importStock(file) {
   // erst nach Status „Eingetroffen“ durch createInventoryFromPurchase angelegt.
   const pendingOpen = pendingOpenPurchaseQuantities(state.purchases);
   let cards=0, unknown=0, skippedOpenOrders=0;
+  const soldHistoryPreserved=state.inventory.filter(item=>["Verkauft","Storniert"].includes(item.status)).length;
   const snapshotRows=new Map();
   rows.forEach((r,idx)=>{
     const p=stockRowMetadata(r);
@@ -3264,14 +3347,31 @@ async function importStock(file) {
   const createdIds=[],removedItems=[],updatedFieldsBefore=[];
   const movementDeltas=[];
   const existingByIdentity=new Map();
+  const listedByVariant=new Map();
   state.inventory.forEach(item=>{
-    const identity=item.stockIdentity||stockInventoryIdentity(item);
-    if(!existingByIdentity.has(identity))existingByIdentity.set(identity,[]);
-    existingByIdentity.get(identity).push(item);
+    const identity=stockInventoryIdentity(item);
+    const managed=stockSnapshotManaged(item);
+    if(managed)item.stockIdentity=identity;
+    if(managed||item.listed){
+      if(!existingByIdentity.has(identity))existingByIdentity.set(identity,[]);
+      existingByIdentity.get(identity).push(item);
+    }
+    if(!managed&&item.listed&&!['Verkauft','Storniert','Reserviert','Beschädigt','Rückgabe unterwegs'].includes(item.status)){
+      const variantIdentity=stockVariantIdentity(item);
+      if(!listedByVariant.has(variantIdentity))listedByVariant.set(variantIdentity,[]);
+      listedByVariant.get(variantIdentity).push(item);
+    }
   });
 
+  const claimedListedIds=new Set();
   snapshotRows.forEach(row=>{
-    const existing=[...(existingByIdentity.get(row.identity)||[])].sort((a,b)=>Number(stockSnapshotManaged(b))-Number(stockSnapshotManaged(a)) || new Date(b.purchaseDate||0)-new Date(a.purchaseDate||0));
+    const exact=[...(existingByIdentity.get(row.identity)||[])];
+    const exactAvailable=TcgBusinessAutomation.calculateInventoryBuckets(exact).available;
+    const fallbackNeeded=Math.max(0,row.quantity-exactAvailable);
+    const exactIds=new Set(exact.map(item=>item.id));
+    const listedFallback=(listedByVariant.get(stockVariantIdentity(row.p))||[]).filter(item=>!exactIds.has(item.id)&&!claimedListedIds.has(item.id)).slice(0,fallbackNeeded);
+    listedFallback.forEach(item=>claimedListedIds.add(item.id));
+    const existing=[...exact,...listedFallback].sort((a,b)=>Number(stockSnapshotManaged(b))-Number(stockSnapshotManaged(a)) || new Date(b.purchaseDate||0)-new Date(a.purchaseDate||0));
     const plan=window.TcgBusinessAutomation?.planAvailableInventorySnapshot?.(existing,row.quantity)||{addCount:Math.max(0,row.quantity-existing.filter(item=>item.status!=="Reserviert"&&item.status!=="Verkauft").length),removeIds:[]};
     const removeIds=new Set(plan.removeIds||[]);
     const removed=existing.filter(item=>removeIds.has(item.id));
@@ -3297,7 +3397,7 @@ async function importStock(file) {
   const knownIdentities=new Set(snapshotRows.keys());
   const missingGroups=new Map();
   state.inventory.filter(item=>stockSnapshotManaged(item)&&!["Verkauft","Storniert","Reserviert","Beschädigt"].includes(item.status)).forEach(item=>{
-    const identity=item.stockIdentity||stockInventoryIdentity(item);
+    const identity=stockInventoryIdentity(item);
     if(knownIdentities.has(identity))return;
     if(!missingGroups.has(identity))missingGroups.set(identity,[]);
     missingGroups.get(identity).push(item);
@@ -3313,12 +3413,15 @@ async function importStock(file) {
   movementDeltas.forEach(change=>addMovement({type:"Cardmarket-Bestandsabgleich",quantity:change.delta,productId:cleanProductId(change.productId),inventoryGroupKey:change.groupKey,reference:file.name,note:change.delta>0?"Neue verfügbare Exemplare aus Bestandssnapshot":"Nicht mehr verfügbare Exemplare aus Bestandssnapshot"}));
   state.imports.push({
     id:uid(),type:"inventory",key,file:file.name,date:new Date().toISOString(),
-    rows:rows.length,cards,unknown,skippedOpenOrders,snapshotSync:true,createdIds,removedItems,updatedFieldsBefore,
+    rows:rows.length,cards,unknown,skippedOpenOrders,soldHistoryPreserved,snapshotSync:true,createdIds,removedItems,updatedFieldsBefore,
     added:createdIds.length,removed:removedItems.length
   });
   await window.tcgBackfillBusinessPrintMetadata?.([...snapshotRows.values()].map(row=>row.p.productId));
   saveState();renderAll();
-  return {rows:rows.length,cards,unknown,skippedOpenOrders,added:createdIds.length,removed:removedItems.length};
+  return {
+    rows:rows.length,cards,unknown,skippedOpenOrders,added:createdIds.length,removed:removedItems.length,soldHistoryPreserved,
+    warning:`Vollständiger Bestandsabgleich: ${removedItems.length} nicht mehr angebotene Exemplare aus dem aktuellen Bestand entfernt. ${soldHistoryPreserved} verkaufte/stornierte Exemplare bleiben für Historie und Auswertung gespeichert.`
+  };
 }
 
 function purchaseShipmentKey(file,rows=[]){
@@ -3861,6 +3964,7 @@ async function analyzeImportFile(file,metadata={}) {
         if(duplicateOrders.length){analysis.duplicate=true;analysis.blocked=true;analysis.warnings.push(`Bestellnummer bereits vorhanden: ${[...new Set(duplicateOrders)].slice(0,5).join(", ")}`);}
       }
       if(analysis.type==="unknown")analysis.warnings.push("Dateityp konnte nicht sicher erkannt werden. Bitte den richtigen Typ auswählen.");
+      if(analysis.type==="inventory")analysis.warnings.push("Vollständiger Abgleich: Neue Positionen werden ergänzt, nicht mehr angebotene Cardmarket-Positionen aus dem aktuellen Bestand entfernt. Verkaufs- und Stornohistorie sowie manuelle/private Bestände bleiben erhalten.");
     }
     analysis.duplicate=analysis.duplicate||importDuplicateFor(analysis.type,analysis.key,file.name);
     if(analysis.duplicate&&analysis.type==="purchase"){
@@ -3882,7 +3986,7 @@ function renderImportPreviewDialog() {
 function showImportPreview() {
   renderImportPreviewDialog();
   const dialog=document.getElementById("importPreviewDialog");
-  if(dialog.open)dialog.close();dialog.showModal();
+  showDialogSafely(dialog);
 }
 
 async function runUniversalImport(files,metadata=[]) {
@@ -4047,8 +4151,6 @@ async function listSyncFiles(handle,path=""){
   for await (const [name,entry] of handle.entries()){
     if(entry.kind==="file"){
       if(isAutomaticImportCandidate(name)) files.push({entry,path:path+name});
-    }else if(entry.kind==="directory"){
-      files.push(...await listSyncFiles(entry,path+name+"/"));
     }
   }
   return files;
@@ -4140,7 +4242,7 @@ document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
 
 document.body.addEventListener("click",e=>{
-  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-toggle-expense], [data-edit-expense], [data-remove-usage]");
+  const actionTarget=e.target.closest("[data-edit-inventory], [data-edit-private], [data-private-to-business], [data-business-to-private], [data-delete-private], [data-edit-inventory-group], [data-apply-group-price], [data-inventory-details], [data-correct-inventory], [data-cancel-movement], [data-edit-purchase], [data-receive-purchase], [data-edit-sale], [data-edit-watch], [data-edit-seller], [data-edit-customer], [data-show-seller], [data-show-customer], [data-show-purchase], [data-show-sale], [data-show-material], [data-delete-inventory], [data-delete-inventory-group], [data-delete-purchase], [data-delete-sale], [data-delete-watch], [data-delete-seller], [data-delete-customer], [data-delete-material], [data-edit-material], [data-buy-material], [data-delete-template], [data-edit-template], [data-toggle-expense], [data-edit-expense], [data-remove-usage]");
   const d=(actionTarget||e.target).dataset;
   if(d.editInventory) addInventory(state.inventory.find(x=>x.id===d.editInventory));
   if(d.editPrivate) addInventory(state.privateCollection.find(x=>x.id===d.editPrivate),"private");
@@ -4154,8 +4256,9 @@ document.body.addEventListener("click",e=>{
     }
   }
   if(d.businessToPrivate)moveBusinessInventoryToPrivate(d.businessToPrivate);
-  if(d.deletePrivate){const item=state.privateCollection.find(x=>x.id===d.deletePrivate);if(item&&confirm("Private Karte wirklich als fehlerhafte Erfassung löschen? Für eine echte Abgabe bitte stattdessen den Status „Abgegeben“ verwenden.")){const reason=prompt("Grund der Korrektur:","Fehlerhafte Erfassung");if(reason!==null){adjustPurchaseOwnershipForAsset(item,"private",null);state.privateCollection=state.privateCollection.filter(x=>x.id!==d.deletePrivate);addMovement({type:"Privatkorrektur",quantity:-1,productId:cleanProductId(item.productId),reference:"Privatsammlung",note:reason});saveState();renderAll();}}}
+  if(d.deletePrivate)deletePrivateCard(d.deletePrivate);
   if(d.editInventoryGroup) editInventoryGroup(d.editInventoryGroup);
+  if(d.applyGroupPrice){const group=getInventoryGroups().find(row=>row.key===d.applyGroupPrice);if(group)editInventoryGroup(group.key,inventoryGroupPricing(group).suggestedSell);}
   if(d.inventoryDetails) openInventoryDetails(d.inventoryDetails);
   if(d.correctInventory) correctInventoryGroup(d.correctInventory);
   if(d.cancelMovement) cancelInventoryMovement(d.cancelMovement);
@@ -4298,6 +4401,8 @@ document.getElementById("purchaseReceiptForm").addEventListener("submit",event=>
   const plan=TcgBusinessAutomation.planPurchaseReceipt(purchase,readPurchaseReceiptRequest(),method);
   const validation=document.getElementById("purchaseReceiptValidation");
   if(!plan.valid){validation.innerHTML=`<div class="error">${plan.errors.map(escapeHtml).join("<br>")}</div>`;return;}
+  const incompleteListed=plan.lines.filter(row=>row.listBusiness&&row.business>0&&!inventoryPrintComplete(row.item));
+  if(incompleteListed.length){validation.innerHTML=`<div class="error">${incompleteListed.length} direkt zu inserierende Druckvariante(n) sind noch nicht eindeutig. Bitte zuerst Set, Setnummer und Seltenheit über die Einkaufsposition korrigieren.</div>`;return;}
   const incomplete=plan.lines.filter(row=>(row.addBusiness+row.addPrivate+row.addDamaged)>0&&(!String(row.item.setName||row.item.set||"").trim()||!String(row.item.collectorNumber||"").trim()||!String(row.item.rarity||"").trim()));
   if(incomplete.length&&!confirm(`${incomplete.length} Druckvariante(n) haben noch unvollständige Set- oder Seltenheitsdaten. Trotzdem übernehmen?`))return;
   applyPurchaseReceiptPlan(purchase,plan,document.getElementById("purchaseReceiptNote").value);

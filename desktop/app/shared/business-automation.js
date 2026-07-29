@@ -162,6 +162,35 @@
     };
   }
 
+  function calculateOwnedCardPriceTargets(prices = {}, settings = {}) {
+    const base = calculateAutomaticPriceTargets(prices, settings);
+    const suggestedSell = Math.ceil(Math.max(base.recommendedSell, base.priceFloor) * 100) / 100;
+    const feeAmountAtSuggestion = suggestedSell * base.feeRate;
+    const expectedProfit = suggestedSell > 0
+      ? roundMoney(suggestedSell - feeAmountAtSuggestion - base.packaging - base.ownedCost)
+      : 0;
+    const expectedRoi = base.ownedCost > 0 ? expectedProfit / base.ownedCost * 100 : 0;
+    return {
+      ...base,
+      marketSell: base.recommendedSell,
+      suggestedSell,
+      feeAmountAtSuggestion: roundMoney(feeAmountAtSuggestion),
+      expectedProfit,
+      expectedRoi,
+      costFloorAboveMarket: base.priceFloor > 0 && base.recommendedSell > 0 && base.priceFloor > base.recommendedSell
+    };
+  }
+
+  function stockSnapshotIdentity(item = {}) {
+    const articleId = String(item.articleId || item.idArticle || '').replace(/\D/g, '');
+    if (articleId) return `article:${articleId}`;
+    const productId = String(item.productId || '').replace(/\D/g, '');
+    const language = String(item.language || '').trim().toUpperCase();
+    const condition = String(item.condition || '').trim().toUpperCase();
+    const edition = String(item.edition || '').trim().toUpperCase();
+    return `variant-v2:${productId}|${language}|${condition}|${edition}`;
+  }
+
   const wholeQuantity = value => Math.max(0, Math.round(asNumber(value)));
 
   function purchaseLineKey(item = {}, index = 0) {
@@ -243,12 +272,18 @@
         business: wholeQuantity(request.business ?? current.business),
         private: wholeQuantity(request.private ?? current.private),
         damaged: wholeQuantity(request.damaged ?? current.damaged),
-        cancelled: wholeQuantity(request.cancelled ?? current.cancelled)
+        cancelled: wholeQuantity(request.cancelled ?? current.cancelled),
+        listBusiness: Boolean(request.listBusiness ?? costRow.item.listBusiness),
+        listingPrice: Math.max(0, asNumber(request.listingPrice ?? costRow.item.receiptListingPrice)),
+        suggestedSell: Math.max(0, asNumber(request.suggestedSell ?? costRow.item.suggestedSell))
       };
       const assigned = next.business + next.private + next.damaged + next.cancelled;
       if (assigned > current.quantity) errors.push(`${costRow.item.name || 'Karte'}: Aufteilung ${assigned} ist groesser als Bestellmenge ${current.quantity}.`);
       if (next.business < current.materializedBusiness || next.private < current.materializedPrivate || next.damaged < current.materializedDamaged) {
         errors.push(`${costRow.item.name || 'Karte'}: Bereits uebernommene Exemplare koennen nur ueber eine Bestandskorrektur reduziert werden.`);
+      }
+      if (next.listBusiness && next.business > 0 && next.listingPrice <= 0) {
+        errors.push(`${costRow.item.name || 'Karte'}: Fuer die direkte Inserierung fehlt ein positiver Inseratspreis.`);
       }
       lines.push({
         ...costRow,
@@ -836,6 +871,8 @@
     buildFinancialLedger,
     buildFinancialSummary,
     calculateAutomaticPriceTargets,
+    calculateOwnedCardPriceTargets,
+    stockSnapshotIdentity,
     purchaseLineKey,
     normalizePurchaseReceiptLine,
     allocatePurchaseCosts,

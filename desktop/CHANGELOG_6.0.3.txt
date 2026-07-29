@@ -1,0 +1,25 @@
+TCG Business Manager 6.0.3 – Bestand, Preise und sichere Dialoge
+
+Behoben
+- Private Karten werden über einen appinternen Korrekturdialog mit Pflichtgrund gelöscht.
+- Es wird immer nur ein Dialog gleichzeitig geöffnet. Texteingaben bleiben dadurch zuverlässig anklickbar.
+- Der überwachte Importordner prüft nur Dateien in „Neue Importe“ und durchsucht keine Archiv-Unterordner mehr.
+- Cardmarket-Bestandssnapshots bleiben bei reinen Preisänderungen stabil und behalten Verkaufs-/Stornohistorie.
+
+Neu
+- Wareneingänge zeigen den genauen Stück-EK einschließlich anteiliger Versand- und Zusatzkosten.
+- Für geschäftliche Karten wird ein kostenbewusster VK vorgeschlagen.
+- Karten können beim Wareneingang direkt im Manager als inseriert markiert werden.
+- Der Bestand zeigt Ø EK, aktuellen Inseratspreis, VK-Vorschlag und Marktänderung.
+- Inserierte Karten mit relevanter Preisabweichung werden farblich markiert und sind über „Preis prüfen“ filterbar.
+- VK-Vorschläge unterschreiten weder Mindestgewinn noch Mindest-ROI.
+
+Cardmarket-Preise
+- Die Oberfläche bezeichnet Low und Trend eindeutig als offiziellen täglichen Price Guide.
+- Ein Hinweis erklärt die Abweichung zum live gefilterten Cardmarket-Angebotspreis „ab“.
+- Preisquelle, Preisdatum und Tagesänderung werden dauerhaft am Produktdatensatz geführt.
+
+Sicherheit
+- Bestehende Käufe, private Karten, Reservierungen, Verkäufe und Stornos werden bei einem Bestandssnapshot nicht gelöscht.
+- Ein Importergebnis nennt ausdrücklich, wie viele aktuelle Angebote entfernt und wie viele historische Verkäufe erhalten wurden.
+

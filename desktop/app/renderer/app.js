@@ -355,7 +355,8 @@ function customerStats(customer) {
   const cards = orders.reduce((sum,s)=>sum+Number(s.quantity||0),0);
   const realized=orders.filter(s=>["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(s.status));
   const revenue = realized.reduce((sum,s)=>sum+Math.max(0,Number(s.revenue||0)-Number(s.refund||0)),0);
-  const profit = realized.reduce((sum,s)=>sum+calculateSaleProfit(s).profit,0);
+  const knownProfitSales=realized.map(s=>calculateSaleProfit(s)).filter(result=>result.profitKnown!==false);
+  const profit = knownProfitSales.reduce((sum,result)=>sum+result.profit,0);
   const dates = orders.map(s=>s.date).filter(Boolean).sort();
   return {orders,cards,revenue,profit,avgOrder:realized.length?revenue/realized.length:0,first:dates[0]||"",last:dates.at(-1)||""};
 }
@@ -1040,7 +1041,7 @@ function renderDashboard() {
   document.getElementById("ageSummary").innerHTML = `<div class="list">${age.map(x=>`<div><div class="list-row"><span>${x.label}</span><strong>${x.count}</strong></div><div class="bar"><span style="width:${x.count/maxAge*100}%"></span></div></div>`).join("")}</div>`;
 
   const recent = [...state.sales].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
-  document.getElementById("recentSales").innerHTML = recent.length ? `<div class="list">${recent.map(s=>{const p=calculateSaleProfit(s).profit; return `<div class="list-row"><div><strong>${escapeHtml(s.orderNo)}</strong><br><small>${fmtDate(s.date)} · ${escapeHtml(s.customer||"")}</small></div><span class="${p>=0?"money-positive":"money-negative"}">${money(p)}</span></div>`}).join("")}</div>` : `<div class="empty">Noch keine Verkäufe</div>`;
+  document.getElementById("recentSales").innerHTML = recent.length ? `<div class="list">${recent.map(s=>{const calc=calculateSaleProfit(s); return `<div class="list-row"><div><strong>${escapeHtml(s.orderNo)}</strong><br><small>${fmtDate(s.date)} · ${escapeHtml(s.customer||"")}</small></div>${calc.profitKnown===false?'<span class="badge yellow">EK klären</span>':`<span class="${calc.profit>=0?"money-positive":"money-negative"}">${money(calc.profit)}</span>`}</div>`}).join("")}</div>` : `<div class="empty">Noch keine Verkäufe</div>`;
   renderAutomationOverview();
 }
 
@@ -1060,7 +1061,13 @@ function renderAutomationOverview() {
   ];
   target.innerHTML=`
     <div class="automation-status-grid">${workflowCards.map(([label,value,view])=>`<button type="button" data-view-jump="${view}"><span>${escapeHtml(label)}</span><strong>${Number(value)}</strong></button>`).join("")}</div>
-    <div class="automation-alert-list">${important.length?important.map(row=>`<button type="button" class="business-issue ${escapeHtml(row.severity)}" data-view-jump="${escapeHtml(row.target||"reports")}"><span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.details||row.type||"")}</small></span><span>Öffnen →</span></button>`).join(""):`<div class="success"><strong>Alles in Ordnung</strong><br>Keine dringenden Daten- oder Preiswarnungen gefunden.</div>`}</div>`;
+    <div class="automation-alert-list">${important.length?important.map(row=>businessIssueButton(row,false)).join(""):`<div class="success"><strong>Alles in Ordnung</strong><br>Keine dringenden Daten- oder Preiswarnungen gefunden.</div>`}</div>`;
+}
+
+function businessIssueButton(row,showCategory=true){
+  const action=row.action?`data-repair-action="${escapeHtml(row.action)}" data-record-id="${escapeHtml(row.recordId||"")}"`:`data-view-jump="${escapeHtml(row.target||"reports")}"`;
+  const title=showCategory?`${row.category||row.type||"Hinweis"}: ${row.title}`:row.title;
+  return `<button type="button" class="business-issue ${escapeHtml(row.severity)}" ${action}><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(row.details||row.type||"")}</small></span><span>${row.action?"Reparieren":"Öffnen"} →</span></button>`;
 }
 
 function repairWorkflowConsistency(showResult=true) {
@@ -1078,6 +1085,99 @@ function repairWorkflowConsistency(showResult=true) {
   }
   if(showResult)alert(pendingReceipts.length||synchronized?`${pendingReceipts.length} Wareneingang/-eingänge müssen noch auf Geschäft und Privat aufgeteilt werden. ${synchronized} Verkaufszuordnung(en) wurden berichtigt.`:"Alle Einkaufs-, Bestands- und Verkaufsabläufe sind bereits stimmig.");
   return {pendingReceipts:pendingReceipts.length,synchronized};
+}
+
+function distributeHistoricalSaleCost(sale,totalCost){
+  const items=Array.isArray(sale.items)?sale.items:[];
+  if(!items.length)return;
+  const weights=items.map(item=>Math.max(1,Number(item.quantity||1))*Math.max(0,Number(item.unitPrice||0)));
+  const fallbackWeights=items.map(item=>Math.max(1,Number(item.quantity||1)));
+  const totalWeight=weights.reduce((sum,value)=>sum+value,0);
+  const selectedWeights=totalWeight>0?weights:fallbackWeights;
+  const divisor=selectedWeights.reduce((sum,value)=>sum+value,0)||1;
+  let allocated=0;
+  items.forEach((item,index)=>{
+    const quantity=Math.max(1,Number(item.quantity||1));
+    const lineCost=index===items.length-1?Math.max(0,totalCost-allocated):Math.round(totalCost*selectedWeights[index]/divisor*100)/100;
+    allocated+=lineCost;
+    item.cost=Math.round(lineCost/quantity*10000)/10000;
+    item.allocatedCost=Math.round(lineCost*100)/100;
+    item.costSource="historical_manual";
+    delete item.costUnknown;
+  });
+}
+
+function openHistoricalCostRepair(saleId){
+  const sale=state.sales.find(row=>row.id===saleId);if(!sale)return;
+  const currentStatus=String(sale.historicalCostStatus||"").toLowerCase();
+  openModal(`Wareneinsatz reparieren – Verkauf #${sale.orderNo||"-"}`,[
+    {name:"resolution",label:"Wie soll der alte Einstand behandelt werden?",type:"select",full:true,options:[
+      {value:"confirmed",label:"Tatsächlichen Gesamt-Wareneinsatz nachtragen"},
+      {value:"unknown",label:"Einstand ist nicht mehr zuverlässig ermittelbar"}
+    ]},
+    {name:"totalCost",label:"Gesamter Einstand der verkauften Karten (€)",type:"number",step:"0.01",full:true},
+    {name:"note",label:"Nachweis / Grund der Korrektur",required:true,full:true}
+  ],{
+    resolution:currentStatus==="unknown"?"unknown":"confirmed",
+    totalCost:currentStatus==="confirmed"||Number(sale.cost||0)>0?Number(sale.cost||0):"",
+    note:sale.historicalCostNote||""
+  },data=>{
+    const note=String(data.note||"").trim();
+    if(!note){alert("Bitte einen kurzen Nachweis oder Grund für die Korrektur eintragen.");return false;}
+    if(data.resolution==="confirmed"){
+      if(data.totalCost===""||!Number.isFinite(Number(data.totalCost))||Number(data.totalCost)<0){alert("Bitte den tatsächlichen Gesamt-Wareneinsatz als Betrag ab 0,00 € eintragen.");return false;}
+      sale.cost=Math.round(Number(data.totalCost)*100)/100;
+      sale.historicalCostStatus="confirmed";
+      sale.costSource="historical_manual";
+      sale.excludeCostFromLearning=false;
+      distributeHistoricalSaleCost(sale,sale.cost);
+    }else{
+      sale.cost=0;
+      sale.historicalCostStatus="unknown";
+      sale.costSource="unknown_confirmed";
+      sale.excludeCostFromLearning=true;
+      (sale.items||[]).forEach(item=>{delete item.cost;delete item.allocatedCost;item.costUnknown=true;item.costSource="unknown_confirmed";});
+    }
+    sale.historicalCostNote=note;
+    sale.historicalCostConfirmedAt=new Date().toISOString();
+    addMovement({type:"Historischer Wareneinsatz",quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:data.resolution==="confirmed"?`Wareneinsatz ${money(sale.cost)} manuell bestätigt · ${note}`:`Einstand als unbekannt bestätigt · ${note}`});
+    return true;
+  });
+}
+
+function dataRepairRecords(){
+  const missingInventory=(state.inventory||[]).filter(item=>!String(item.productId||"").match(/\d/));
+  const purchaseRows=[];
+  (state.purchases||[]).forEach(purchase=>(purchase.pendingItems||[]).forEach((item,index)=>{
+    const missingId=!String(item.productId||"").match(/\d/);
+    const incomplete=String(item.productId||"").match(/\d/)&&(!String(item.set||item.setName||"").trim()||!String(item.collectorNumber||"").trim()||!String(item.rarity||"").trim());
+    if(missingId||incomplete)purchaseRows.push({purchase,item,index,missingId,incomplete});
+  }));
+  const sales=(state.sales||[]).filter(sale=>{
+    const calc=calculateSaleProfit(sale);
+    const requested=(sale.items||[]).length?(sale.items||[]).reduce((sum,item)=>sum+Math.max(1,Number(item.quantity||1)),0):Math.max(0,Number(sale.quantity||0));
+    const historicalResolution=["confirmed","unknown","linked"].includes(String(sale.historicalCostStatus||"").toLowerCase());
+    const missingLots=requested>new Set(sale.itemIds||[]).size;
+    return sale.status!=="Storniert"&&sale.status!=="Rückgabe eingetroffen"&&requested>0&&!historicalResolution&&(!calc.costKnown||missingLots);
+  });
+  return {missingInventory,purchaseRows,sales};
+}
+
+function renderDataRepairCenter(){
+  const target=document.getElementById("dataRepairContent");if(!target)return;
+  const records=dataRepairRecords();
+  const unknownConfirmed=(state.sales||[]).filter(sale=>sale.historicalCostStatus==="unknown").length;
+  const section=(title,count,body)=>`<section class="repair-section"><div class="repair-section-head"><div><h3>${escapeHtml(title)}</h3><small>${count} offen</small></div></div>${body}</section>`;
+  const inventoryBody=records.missingInventory.length?`<div class="repair-list">${records.missingInventory.slice(0,50).map(item=>`<div class="repair-row"><div><strong>${escapeHtml(item.name||"Unbekannte Karte")}</strong><small>${escapeHtml([item.setName||item.set,item.collectorNumber,item.rarity].filter(Boolean).join(" · ")||"Druckvariante noch nicht zugeordnet")}</small></div><button type="button" class="secondary" data-repair-inventory-id="${escapeHtml(item.id)}">Karte zuordnen</button></div>`).join("")}</div>`:`<div class="success">Alle Bestandskarten besitzen eine Cardmarket-ID.</div>`;
+  const purchaseBody=records.purchaseRows.length?`<div class="repair-toolbar"><button type="button" class="secondary" id="repairMetadataBtn">Bekannte Kartendaten automatisch ergänzen</button><small>Nur eindeutige Treffer werden übernommen.</small></div><div class="repair-list">${records.purchaseRows.slice(0,75).map(row=>`<div class="repair-row"><div><strong>Einkauf #${escapeHtml(row.purchase.orderNo||"-")} · ${escapeHtml(row.item.name||"Karte")}</strong><small>${row.missingId?"Cardmarket-ID fehlt":"Set, Setnummer oder Seltenheit unvollständig"}</small></div><button type="button" class="secondary" data-repair-purchase-id="${escapeHtml(row.purchase.id)}" data-repair-purchase-line="${row.index}">Korrigieren</button></div>`).join("")}</div>`:`<div class="success">Alle Einkaufspositionen sind eindeutig zugeordnet.</div>`;
+  const salesBody=records.sales.length?`<div class="repair-list">${records.sales.map(sale=>`<div class="repair-row"><div><strong>Verkauf #${escapeHtml(sale.orderNo||"-")}</strong><small>${Number(sale.quantity||0)} Karte(n) · der bisher angezeigte Gewinn ist nicht belastbar</small></div><div class="row-actions"><button type="button" class="secondary" data-repair-sale-allocation="${escapeHtml(sale.id)}">Lose suchen</button><button type="button" class="primary" data-repair-sale-cost="${escapeHtml(sale.id)}">Wareneinsatz klären</button></div></div>`).join("")}</div>`:`<div class="success">Alle abgeschlossenen Verkäufe besitzen einen bestätigten Wareneinsatz.</div>`;
+  target.innerHTML=`<div class="repair-summary"><div><small>Bestand ohne ID</small><strong>${records.missingInventory.length}</strong></div><div><small>Einkaufsdaten offen</small><strong>${records.purchaseRows.length}</strong></div><div><small>Verkäufe zu klären</small><strong>${records.sales.length}</strong></div><div><small>Bewusst unbekannt</small><strong>${unknownConfirmed}</strong></div></div><div class="info repair-safety-note"><strong>Sicherheitsregel:</strong> Korrekturen ändern vorhandene Datensätze. Es werden keine Karten neu in den Bestand eingebucht. Bewusst unbekannte Einstandspreise fließen nicht in Gewinn- oder Preislernwerte ein.</div>${section("Bestandskarten zuordnen",records.missingInventory.length,inventoryBody)}${section("Einkaufs- und Druckdaten vervollständigen",records.purchaseRows.length,purchaseBody)}${section("Historischen Wareneinsatz klären",records.sales.length,salesBody)}`;
+}
+
+function openDataRepairCenter(){
+  repairWorkflowConsistency(false);
+  renderDataRepairCenter();
+  showDialogSafely(document.getElementById("dataRepairDialog"));
 }
 
 
@@ -1392,7 +1492,7 @@ function renderInventory() {
       ? `${money(pricing.listingPrice)}${pricing.listedCount!==pricing.itemCount?`<br><small>${pricing.listedCount} Exemplar${pricing.listedCount===1?"":"e"} inseriert</small>`:""}`
       : '<span class="muted">Nicht inseriert</span>';
     const changeClass=pricing.dailyChange>0?"money-positive":pricing.dailyChange<0?"money-negative":"muted";
-    const rowClass=pricing.needsReprice?(pricing.difference>0?"inventory-price-review-up":"inventory-price-review-down"):"";
+    const rowClass=pricing.needsReprice?"inventory-price-review":"";
     return `<tr class="${rowClass}">
       <td><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${exactLink ? "Genaue Kartenvariante auf Cardmarket öffnen" : "Cardmarket-Suche für diese Variante öffnen"}"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>CM ${escapeHtml(i.productId||"-")}</small></td>
       <td>${escapeHtml(i.setName||i.set||"-")}${i.setName&&i.set?`<br><small>${escapeHtml(i.set)}</small>`:""}${i.collectorNumber?`<br><small>${escapeHtml(i.collectorNumber)}</small>`:""}</td>
@@ -1560,16 +1660,18 @@ function renderSales() {
   const paymentState=s=>s.status==="Storniert"?"Storniert":s.status==="Erstattet"||Number(s.refund||0)>=Number(s.revenue||0)&&Number(s.refund||0)>0?"Erstattet":s.paymentStatus||(["Offen"].includes(s.status)?"Offen":"Bezahlt");
   const rows = state.sales.filter(s=>{
     const calc=calculateSaleProfit(s);
-    const profitMatches=!profitFilter||(profitFilter==="profit"&&calc.profit>=0)||(profitFilter==="loss"&&calc.profit<0)||(profitFilter==="incomplete"&&calc.quality==="incomplete");
+    const profitMatches=!profitFilter||(profitFilter==="profit"&&calc.profitKnown!==false&&calc.profit>=0)||(profitFilter==="loss"&&calc.profitKnown!==false&&calc.profit<0)||(profitFilter==="incomplete"&&["incomplete","unknown"].includes(calc.quality));
     return cardRecordMatchesSearch(s,q)&&(!f||s.status===f)&&(!customerFilter||s.customer===customerFilter)&&(!paymentFilter||paymentState(s)===paymentFilter)&&profitMatches;
   });
   const realized=rows.filter(row=>["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen"].includes(row.status));
+  const knownRealized=realized.map(row=>calculateSaleProfit(row)).filter(calc=>calc.profitKnown!==false);
+  const knownRealizedProfit=knownRealized.reduce((sum,calc)=>sum+calc.profit,0);
   const salesSummary=document.getElementById("salesSummary");
-  if(salesSummary)salesSummary.innerHTML=`<div><small>Angezeigte Verkäufe</small><strong>${rows.length}</strong></div><div><small>Offene Vorgänge</small><strong>${rows.filter(row=>!["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen","Storniert"].includes(row.status)).length}</strong></div><div><small>Realisierter Gewinn</small><strong class="${realized.reduce((sum,row)=>sum+calculateSaleProfit(row).profit,0)>=0?"money-positive":"money-negative"}">${money(realized.reduce((sum,row)=>sum+calculateSaleProfit(row).profit,0))}</strong></div><div><small>Unvollständige Kalkulation</small><strong class="${rows.some(row=>calculateSaleProfit(row).quality==="incomplete")?"money-negative":"money-positive"}">${rows.filter(row=>calculateSaleProfit(row).quality==="incomplete").length}</strong></div>`;
+  if(salesSummary)salesSummary.innerHTML=`<div><small>Angezeigte Verkäufe</small><strong>${rows.length}</strong></div><div><small>Offene Vorgänge</small><strong>${rows.filter(row=>!["Abgeschlossen","Abgerechnet","Erstattet","Rückgabe eingetroffen","Storniert"].includes(row.status)).length}</strong></div><div><small>Bekannter realisierter Gewinn</small><strong class="${knownRealizedProfit>=0?"money-positive":"money-negative"}">${money(knownRealizedProfit)}</strong></div><div><small>Einstand zu klären</small><strong class="${rows.some(row=>calculateSaleProfit(row).profitKnown===false)?"money-negative":"money-positive"}">${rows.filter(row=>calculateSaleProfit(row).profitKnown===false).length}</strong></div>`;
   document.getElementById("salesTable").innerHTML = rows.length ? rows.map(s=>{const calc=calculateSaleProfit(s); return `
     <tr><td><strong>${escapeHtml(s.orderNo)}</strong></td><td>${fmtDate(s.date)}</td><td>${escapeHtml(s.customer||"")}</td>
     <td>${Number(s.quantity||0)}</td><td>${money(s.revenue)}</td><td>${money(calc.fee)}</td>
-    <td class="${calc.profit>=0?"money-positive":"money-negative"}" title="Datenqualität: ${escapeHtml(calc.quality||"unbekannt")}">${money(calc.profit)}</td><td>${statusBadge(paymentState(s))}</td><td>${statusBadge(s.status)}</td>
+    <td class="${calc.profitKnown===false?"muted":calc.profit>=0?"money-positive":"money-negative"}" title="Datenqualität: ${escapeHtml(calc.quality||"unbekannt")}">${calc.profitKnown===false?'<span class="badge yellow">EK unbekannt</span>':money(calc.profit)}</td><td>${statusBadge(paymentState(s))}</td><td>${statusBadge(s.status)}</td>
     <td><div class="row-actions"><button class="icon-button" data-show-sale="${s.id}">Packen</button><button class="icon-button" data-edit-sale="${s.id}">Bearbeiten</button><button class="icon-button" data-delete-sale="${s.id}">Löschen</button></div></td></tr>`}).join("") : `<tr><td colspan="10" class="empty">Keine Verkäufe gefunden</td></tr>`;
   renderShippingWorkbench();
 }
@@ -1959,9 +2061,9 @@ function openOrderDetails(kind,id) {
       <div><small>Kartenwert</small><strong>${money(subtotal)}</strong></div>
       <div><small>Versand vom Käufer / Versand</small><strong>${money(shipping)}</strong></div>
       <div><small>${isPurchase?"Trustee/Zusatz":"Cardmarket-Gebühr"}</small><strong>${money(extra)}</strong></div>
-      ${isPurchase?`<div><small>Gutschrift</small><strong>${money(order.refund||0)}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(total)}</strong></div><div><small>Geschäftlicher Einstand</small><strong>${money(Number(ownership.business||0)+Number(ownership.damaged||0))}</strong></div><div><small>Privater Einstand</small><strong>${money(ownership.private||0)}</strong></div><div><small>Noch nicht aufgeteilt</small><strong>${money(ownership.open||0)}</strong></div>`:`<div><small>Einstand</small><strong>${money(order.cost)}</strong></div><div><small>Erstattung</small><strong>${money(order.refund||0)}</strong></div><div><small>Porto</small><strong>${money(calc.postage)}</strong></div><div><small>Material</small><strong>${money(calc.packaging)}</strong></div><div><small>Gewinn</small><strong class="${calc.profit>=0?'money-positive':'money-negative'}">${money(calc.profit)}</strong></div>`}
+      ${isPurchase?`<div><small>Gutschrift</small><strong>${money(order.refund||0)}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(total)}</strong></div><div><small>Geschäftlicher Einstand</small><strong>${money(Number(ownership.business||0)+Number(ownership.damaged||0))}</strong></div><div><small>Privater Einstand</small><strong>${money(ownership.private||0)}</strong></div><div><small>Noch nicht aufgeteilt</small><strong>${money(ownership.open||0)}</strong></div>`:`<div><small>Einstand</small><strong>${calc.costKnown?money(order.cost):"Nicht geklärt"}</strong>${order.historicalCostStatus==="unknown"?'<small>bewusst als unbekannt bestätigt</small>':order.historicalCostStatus==="confirmed"?'<small>historisch manuell bestätigt</small>':""}</div><div><small>Erstattung</small><strong>${money(order.refund||0)}</strong></div><div><small>Porto</small><strong>${money(calc.postage)}</strong></div><div><small>Material</small><strong>${money(calc.packaging)}</strong></div><div><small>Gewinn</small>${calc.profitKnown===false?'<strong class="muted">Nicht berechenbar</strong><small>Einstand fehlt oder ist unbekannt</small>':`<strong class="${calc.profit>=0?'money-positive':'money-negative'}">${money(calc.profit)}</strong>`}</div>`}
     </div>
-    <div class="order-detail-actions">${isPurchase?`<button type="button" class="primary" id="openPurchaseReceiptBtn">Wareneingang aufteilen</button><button type="button" class="secondary" id="addPurchaseLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanPurchaseLineBtn">Mit iPhone scannen</button>`:`<button type="button" class="secondary" id="openSaleAllocationBtn">Einkaufsexemplare zuordnen</button><button type="button" class="secondary" id="addSaleLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanSaleLineBtn">Mit iPhone scannen</button>`}</div>
+    <div class="order-detail-actions">${isPurchase?`<button type="button" class="primary" id="openPurchaseReceiptBtn">Wareneingang aufteilen</button><button type="button" class="secondary" id="addPurchaseLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanPurchaseLineBtn">Mit iPhone scannen</button>`:`<button type="button" class="secondary" id="openSaleAllocationBtn">Einkaufsexemplare zuordnen</button><button type="button" class="primary" id="repairSaleCostBtn">Wareneinsatz klären</button><button type="button" class="secondary" id="addSaleLineBtn">Karte hinzufügen</button><button type="button" class="secondary" id="scanSaleLineBtn">Mit iPhone scannen</button>`}</div>
     ${orderItemTable(items,kind)}
     ${isPurchase?purchaseReceiptHistory(purchase):""}
     ${!isPurchase?saleMaterialEditor(order):""}
@@ -2128,7 +2230,7 @@ function renderBusinessHealth(force=false) {
   const warnings=issues.filter(row=>row.severity==="warning").length;
   const status=businessHealthDatabaseStatus||{};
   summary.innerHTML=`<div><span>Kritische Hinweise</span><strong>${errors}</strong></div><div><span>Zu prüfen</span><strong>${warnings}</strong></div><div><span>Automatische Sicherungen</span><strong>${Number(status.backupCount||0)}</strong><small>${status.latestBackupAt?`zuletzt ${new Date(status.latestBackupAt).toLocaleString("de-DE")}`:"nach dem nächsten Speichern"}</small></div><div><span>SQLite</span><strong>${status.ready?"bereit":"wird geprüft"}</strong><small>${Number(status.eventCount||0).toLocaleString("de-DE")} protokollierte Änderungen</small></div>`;
-  target.innerHTML=issues.length?`<div class="business-health-list">${issues.slice(0,100).map(row=>`<button type="button" class="business-issue ${escapeHtml(row.severity)}" data-view-jump="${escapeHtml(row.target||"reports")}"><span><strong>${escapeHtml(row.category||row.type||"Hinweis")}: ${escapeHtml(row.title)}</strong><small>${escapeHtml(row.details||"")}</small></span><span>Öffnen →</span></button>`).join("")}</div>`:`<div class="success"><strong>Datenprüfung bestanden</strong><br>Keine auffälligen Duplikate, Kalkulationslücken oder Preisrisiken gefunden.</div>`;
+  target.innerHTML=issues.length?`<div class="business-health-list">${issues.slice(0,100).map(row=>businessIssueButton(row,true)).join("")}</div>`:`<div class="success"><strong>Datenprüfung bestanden</strong><br>Keine auffälligen Duplikate, Kalkulationslücken oder Preisrisiken gefunden.</div>`;
   if(window.desktopApp?.getTradeDatabaseStatus&&(force||!businessHealthDatabaseStatus)&&!businessHealthStatusPromise){
     businessHealthStatusPromise=window.desktopApp.getTradeDatabaseStatus().then(next=>{businessHealthDatabaseStatus=next;renderBusinessHealth(false);}).catch(error=>console.error("Sicherungsstatus konnte nicht gelesen werden:",error)).finally(()=>businessHealthStatusPromise=null);
   }
@@ -2643,7 +2745,23 @@ function addInventory(initial={}, collection="business", scan=null) {
     const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
     if(scan?.fingerprint){obj.scanFingerprint=scan.fingerprint;obj.scanSource="iPhone";if(state.settings.scannerKeepImages)obj.scanImageDataUrl=scan.imageDataUrl;}
     const target=isPrivate?state.privateCollection:state.inventory;
-    if(initial.id){const current=target.find(row=>row.id===initial.id);const before=current?structuredClone(current):null;const beforeBucket=!isPrivate&&current?purchaseBucketForAsset(current,"business"):null;Object.assign(current,obj);if(beforeBucket)adjustPurchaseOwnershipForAsset(current,beforeBucket,purchaseBucketForAsset(current,"business"));if(before){const fields=Object.keys(obj).filter(key=>JSON.stringify(before[key])!==JSON.stringify(current[key]));if(fields.length)addMovement({type:isPrivate?"Privatkorrektur":"Kartenkorrektur",quantity:0,productId:cleanProductId(current.productId),reference:isPrivate?"Privatsammlung":"Bestand",note:`Geändert: ${fields.join(", ")}`});}}
+    if(initial.id){
+      const current=target.find(row=>row.id===initial.id);const before=current?structuredClone(current):null;const beforeBucket=!isPrivate&&current?purchaseBucketForAsset(current,"business"):null;
+      Object.assign(current,obj);
+      if(beforeBucket)adjustPurchaseOwnershipForAsset(current,beforeBucket,purchaseBucketForAsset(current,"business"));
+      if(before){
+        const identityFields=["productId","metacardId","name","germanName","englishName","set","setName","collectorNumber","rarity","productUrl","cardPasscode"];
+        const identityChanged=identityFields.some(field=>JSON.stringify(before[field])!==JSON.stringify(current[field]));
+        if(identityChanged&&current.purchaseId&&current.purchaseLineKey){
+          const purchase=state.purchases.find(row=>row.id===current.purchaseId);
+          const line=(purchase?.pendingItems||[]).find((row,index)=>`${purchase.id}:${TcgBusinessAutomation.purchaseLineKey(row,index)}`===current.purchaseLineKey);
+          if(line){identityFields.forEach(field=>line[field]=current[field]||"");refreshPurchaseAssetCosts(purchase);}
+        }
+        if(identityChanged)(state.sales||[]).forEach(sale=>(sale.items||[]).forEach(item=>{if((item.matchedItemIds||[]).includes(current.id))identityFields.forEach(field=>item[field]=current[field]||"");}));
+        const fields=Object.keys(obj).filter(key=>JSON.stringify(before[key])!==JSON.stringify(current[key]));
+        if(fields.length)addMovement({type:isPrivate?"Privatkorrektur":"Kartenkorrektur",quantity:0,productId:cleanProductId(current.productId),reference:isPrivate?"Privatsammlung":"Bestand",note:`Geändert: ${fields.join(", ")}`});
+      }
+    }
     else {const created={...obj,id:uid(),movementRecorded:true};target.push(created);addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created),reference:scan?"iPhone-Scanner":isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte",addedIds:[created.id],inventorySnapshot:structuredClone(created)});}
     if(scan)rememberScannerChoice(scan,obj);
     return true;
@@ -2741,7 +2859,7 @@ function refreshPurchaseAssetCosts(purchase){
     const key=`${purchase.id}:${row.receipt.key}`;
     [...state.inventory,...state.privateCollection].filter(asset=>asset.purchaseLineKey===key).forEach(asset=>{
       asset.cost=Number(row.unitCost||0);
-      ["name","germanName","englishName","set","setName","collectorNumber","rarity","productUrl","cardPasscode","edition"].forEach(field=>{if(row.item[field]!==undefined)asset[field]=row.item[field];});
+      ["productId","metacardId","name","germanName","englishName","set","setName","collectorNumber","rarity","productUrl","cardPasscode","edition","language","condition"].forEach(field=>{if(row.item[field]!==undefined)asset[field]=row.item[field];});
     });
   });
 }
@@ -2766,6 +2884,40 @@ function editPurchaseLine(purchaseId,index){
     refreshPurchaseAssetCosts(purchase);
     addMovement({type:"Einkaufsposition korrigiert",quantity:0,productId,purchaseId:purchase.id,reference:`Einkauf ${purchase.orderNo||"-"}`,note:String(data.reason||"").trim()});return true;
   });
+}
+
+function repairPurchaseLineIdentity(purchaseId,index){
+  const purchase=state.purchases.find(row=>row.id===purchaseId),line=purchase?.pendingItems?.[index];if(!purchase||!line)return;
+  inventoryCardSearchSequence++;inventoryPriceSequence++;
+  document.getElementById("modalTitle").textContent=`Karte in Einkauf #${purchase.orderNo||"-"} zuordnen`;
+  const wrap=document.getElementById("modalFields");
+  wrap.innerHTML=`
+    <div class="info full-width"><strong>Vorhandene Einkaufsposition</strong><br>${escapeHtml(line.name||"Unbekannte Karte")} · ${Number(line.quantity||1)} Exemplar(e). Die Menge und der Wareneingang bleiben unverändert.</div>
+    <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(line.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
+    <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Bitte die richtige Druckvariante auswählen.</span></div>
+    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
+    <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
+    <label class="full-width">Grund der Zuordnung<input name="reason" value="Fehlende Cardmarket-ID und Druckvariante ergänzt" required></label>`;
+  wrap.dataset.inventorySelection="required";
+  modalHandler=data=>{
+    if(!data.productId||!data.name){alert("Bitte zuerst die richtige Druckvariante aus der Ergebnisliste auswählen.");return false;}
+    const beforeProductId=cleanProductId(line.productId);
+    ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>line[field]=data[field]||"");
+    const productId=cleanProductId(line.productId);
+    if(productId)state.productCatalog[productId]={...(state.productCatalog[productId]||{}),...line,productId};
+    refreshPurchaseAssetCosts(purchase);
+    (state.sales||[]).forEach(sale=>(sale.items||[]).filter(item=>beforeProductId&&cleanProductId(item.productId)===beforeProductId).forEach(item=>{
+      ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>item[field]=line[field]||"");
+    }));
+    addMovement({type:"Einkaufskarte zugeordnet",quantity:0,productId,purchaseId:purchase.id,reference:`Einkauf ${purchase.orderNo||"-"}`,note:String(data.reason||"").trim()});
+    return true;
+  };
+  let searchTimer;
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
+  if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function deletePurchaseLine(purchaseId,index){
@@ -3040,6 +3192,11 @@ function saveSaleAllocation(){
   sale.itemIds=ids;
   const assets=ids.map(id=>state.inventory.find(item=>item.id===id)).filter(Boolean);
   sale.cost=assets.reduce((sum,item)=>sum+Number(item.cost||0),0);
+  sale.historicalCostStatus="linked";
+  sale.costSource="inventory_lots";
+  sale.excludeCostFromLearning=false;
+  delete sale.historicalCostNote;
+  delete sale.historicalCostConfirmedAt;
   sale.quantity=ids.length;
   syncSaleInventoryStatus(sale);
   addMovement({type:'Bestandszuordnung',quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||'-'}`,note:`${ids.length} konkrete Einkaufsexemplare zugeordnet; Wareneinsatz ${money(sale.cost)}`});
@@ -3072,6 +3229,7 @@ function addSale(initial={}) {
     {name:"note",label:"Notiz",full:true}
   ], modalInitial, data=>{
     const obj={...data,quantity:Number(data.quantity||0),revenue:Number(data.revenue||0),cost:Number(data.cost||0),shippingPaid:Number(data.shippingPaid||0),postage:Number(data.postage||0),refund:Number(data.refund||0)};
+    if(obj.cost>0){obj.historicalCostStatus="confirmed";obj.costSource="manual_sale_entry";obj.excludeCostFromLearning=false;}
     if(obj.paymentStatus==="Bezahlt"&&!obj.paidDate)obj.paidDate=obj.date||todayISO();
     if(obj.settlementStatus==="Abgerechnet"&&!obj.settledDate)obj.settledDate=todayISO();
     let sale;
@@ -4423,6 +4581,7 @@ document.getElementById("orderDetailContent").addEventListener("click",e=>{
   const deleteLine=e.target.closest("[data-delete-purchase-line]");if(deleteLine&&purchase){deletePurchaseLine(purchase.id,Number(deleteLine.dataset.deletePurchaseLine));return;}
   const sale=state.sales.find(s=>s.id===dlg.dataset.saleId); if(!sale)return;
   if(e.target.id==="openSaleAllocationBtn"){dlg.close();openSaleAllocation(sale.id);return;}
+  if(e.target.id==="repairSaleCostBtn"){dlg.close();openHistoricalCostRepair(sale.id);return;}
   if(e.target.id==="addSaleLineBtn"){dlg.close();addSaleLine(sale.id);return;}
   if(e.target.id==="scanSaleLineBtn"){dlg.close();openIphoneScanner("sale",sale.id);return;}
   if(e.target.id==="addSaleMaterialBtn") {const options=state.materials.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} (${Number(m.stock||0)} verfügbar)</option>`).join("");document.getElementById("saleMaterialUsage").insertAdjacentHTML("beforeend",materialUsageRow({},Date.now(),options));}
@@ -4482,7 +4641,37 @@ if(priceButton) priceButton.onclick=()=>updateOfficialMarketPrices(true).catch((
 const priceToggle=document.getElementById("autoPriceToggle");
 if(priceToggle) priceToggle.onchange=e=>{state.sync.autoPrices=e.target.checked;saveState();updateAutomationUi();};
 
-document.getElementById("repairWorkflowsBtn").onclick=()=>repairWorkflowConsistency(true);
+document.getElementById("repairWorkflowsBtn").onclick=openDataRepairCenter;
+document.getElementById("openDataRepairBtn").onclick=openDataRepairCenter;
+document.getElementById("dataRepairClose").onclick=()=>document.getElementById("dataRepairDialog").close();
+document.getElementById("dataRepairCloseBottom").onclick=()=>document.getElementById("dataRepairDialog").close();
+document.getElementById("dataRepairContent").addEventListener("click",async event=>{
+  const inventoryButton=event.target.closest("[data-repair-inventory-id]");
+  if(inventoryButton){const item=state.inventory.find(row=>row.id===inventoryButton.dataset.repairInventoryId);if(item){document.getElementById("dataRepairDialog").close();addInventory(item,"business");}return;}
+  const purchaseButton=event.target.closest("[data-repair-purchase-id]");
+  if(purchaseButton){
+    const purchase=state.purchases.find(row=>row.id===purchaseButton.dataset.repairPurchaseId),line=purchase?.pendingItems?.[Number(purchaseButton.dataset.repairPurchaseLine)];
+    document.getElementById("dataRepairDialog").close();
+    if(line&&!String(line.productId||"").match(/\d/))repairPurchaseLineIdentity(purchase.id,Number(purchaseButton.dataset.repairPurchaseLine));
+    else editPurchaseLine(purchaseButton.dataset.repairPurchaseId,Number(purchaseButton.dataset.repairPurchaseLine));
+    return;
+  }
+  const allocationButton=event.target.closest("[data-repair-sale-allocation]");
+  if(allocationButton){document.getElementById("dataRepairDialog").close();openSaleAllocation(allocationButton.dataset.repairSaleAllocation);return;}
+  const costButton=event.target.closest("[data-repair-sale-cost]");
+  if(costButton){document.getElementById("dataRepairDialog").close();openHistoricalCostRepair(costButton.dataset.repairSaleCost);return;}
+  if(event.target.closest("#repairMetadataBtn")){
+    const button=event.target.closest("#repairMetadataBtn");button.disabled=true;button.textContent="Kartendaten werden geprüft …";
+    try{
+      const before=dataRepairRecords().purchaseRows.length;
+      await window.tcgBackfillBusinessPrintMetadata?.();
+      const changed=Math.max(0,before-dataRepairRecords().purchaseRows.length);
+      if(Number(changed||0)>0){addMovement({type:"Datenreparatur",quantity:0,reference:"Kartendatenbank",note:`${Number(changed)} eindeutige Namens- oder Druckdaten ergänzt`});saveState();renderAll();}
+      renderDataRepairCenter();
+      alert(Number(changed||0)>0?`${Number(changed)} eindeutige Kartendaten wurden ergänzt. Nicht eindeutige Varianten bleiben bewusst zur manuellen Prüfung offen.`:"Es wurden keine weiteren eindeutigen Kartendaten gefunden. Die verbleibenden Positionen müssen manuell geprüft werden.");
+    }catch(error){alert(`Kartendaten konnten nicht ergänzt werden: ${error.message}`);renderDataRepairCenter();}
+  }
+});
 document.getElementById("refreshBusinessHealthBtn").onclick=()=>{businessHealthDatabaseStatus=null;renderBusinessHealth(true);};
 document.getElementById("reportDateFrom").onchange=renderReports;
 document.getElementById("reportDateTo").onchange=renderReports;
@@ -4495,6 +4684,12 @@ globalSearchResults.onclick=event=>{const button=event.target.closest("[data-glo
 document.addEventListener("click",event=>{if(!event.target.closest(".global-search-wrap"))globalSearchResults.hidden=true;});
 document.addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();globalSearch.focus();globalSearch.select();}});
 document.addEventListener("click",event=>{
+  const repair=event.target.closest("[data-repair-action]");
+  if(repair){
+    const action=repair.dataset.repairAction,recordId=repair.dataset.recordId;
+    if(action==="repairSaleCost"&&recordId)openHistoricalCostRepair(recordId);else openDataRepairCenter();
+    return;
+  }
   const reportButton=event.target.closest("[data-performance-report]");
   if(reportButton){activePerformanceReport=reportButton.dataset.performanceReport;renderAdvancedPerformanceReport();return;}
   const jump=event.target.closest("[data-view-jump]");

@@ -205,6 +205,40 @@ test('trennt Cashflow, realisierten Verkaufsgewinn und allgemeine Betriebsausgab
   assert.equal(summary.operatingResult,-46.7);
 });
 
+test('behandelt historisch unbekannten Wareneinsatz ehrlich und schließt ihn aus Lern- und Gewinnwerten aus', () => {
+  const unknownSale = {
+    id:'sale-unknown',orderNo:'OLD-1',date:'2026-07-01',completedDate:'2026-07-02',status:'Abgeschlossen',
+    revenue:10,cardValue:10,quantity:1,cost:0,fee:0.5,postage:1,packaging:0.1,
+    historicalCostStatus:'unknown',historicalCostNote:'Alter Beleg nicht mehr vorhanden',
+    items:[{productId:'42',name:'Testkarte',set:'SET',quantity:1,unitPrice:10}]
+  };
+  const calculation=automation.calculateSaleProfit(unknownSale,{});
+  assert.equal(calculation.costKnown,false);
+  assert.equal(calculation.profitKnown,false);
+  assert.equal(calculation.quality,'unknown');
+
+  const state={settings:{},purchases:[],inventory:[],expenses:[],sales:[unknownSale],sync:{lastPriceUpdate:'2026-07-02'},reconciliations:[]};
+  const summary=automation.buildFinancialSummary(state);
+  assert.equal(summary.cashIn,10,'der tatsächliche Geldeingang bleibt erhalten');
+  assert.equal(summary.realizedProfit,0,'ein unbekannter EK erzeugt keinen erfundenen Gewinn');
+  assert.equal(summary.entries.find(row=>row.category==='realized_sale').excludedFromProfit,true);
+  assert.equal(automation.buildPerformanceReport(state).cards.length,0,'unbekannte Kosten trainieren keine Kartenempfehlung');
+  assert.ok(!automation.buildDataQualityIssues(state,new Date('2026-07-02')).some(issue=>issue.recordId==='sale-unknown'),'bewusst bestätigte Unbekannt-Angabe gilt als bearbeitet');
+});
+
+test('akzeptiert manuell bestätigten historischen Wareneinsatz und liefert eine direkte Reparaturaktion', () => {
+  const unresolved={id:'sale-open',orderNo:'OLD-2',status:'Abgeschlossen',revenue:8,quantity:1,cost:0,items:[{productId:'77',name:'Karte',quantity:1,unitPrice:8}]};
+  const issues=automation.buildDataQualityIssues({sales:[unresolved],purchases:[],inventory:[],sync:{lastPriceUpdate:'2026-07-22'},reconciliations:[]},new Date('2026-07-22'));
+  assert.ok(issues.some(issue=>issue.action==='repairSaleCost'&&issue.recordId==='sale-open'));
+
+  const confirmed={...unresolved,cost:3,historicalCostStatus:'confirmed'};
+  const calculation=automation.calculateSaleProfit(confirmed,{feePercent:5,packaging:0});
+  assert.equal(calculation.costKnown,true);
+  assert.equal(calculation.profitKnown,true);
+  assert.equal(calculation.sourceQuality.cost,'manual');
+  assert.ok(!automation.buildDataQualityIssues({sales:[confirmed],purchases:[],inventory:[],sync:{lastPriceUpdate:'2026-07-22'},reconciliations:[]},new Date('2026-07-22')).some(issue=>issue.recordId==='sale-open'));
+});
+
 test('bereinigt addierte alte Cardmarket-Vollsnapshots, ohne geschützte oder manuelle Exemplare zu löschen', () => {
   const rows = [
     { id:'old', productId:'42', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },

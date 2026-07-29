@@ -99,6 +99,32 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.equal(database.getTradeDatabaseStatus().orderCount, 1);
 });
 
+test('nimmt Verkäufe mit unbekanntem historischem Einstand nicht in SQLite-Preislernwerte auf', t => {
+  const {database}=temporaryDatabase(t);
+  database.upsertProducts([{productId:'123456',germanName:'Testkarte',setName:'Test Set',rarity:'Ultra Rare'}]);
+  const state=sampleState();
+  state.inventory=[];
+  state.sales=[{
+    id:'sale-unknown',orderNo:'OLD-UNKNOWN',date:'2026-07-10',customer:'Buyer',status:'Abgeschlossen',
+    revenue:30,cardValue:30,cost:0,historicalCostStatus:'unknown',excludeCostFromLearning:true,
+    items:[{productId:'123456',name:'Testkarte',quantity:1,unitPrice:30}]
+  }];
+  database.saveState(state);
+  const unknownOnly=database.getTradeRecommendations({productIds:['123456']}).recommendations[0];
+  assert.equal(unknownOnly.sellSampleCount,0);
+  assert.equal(unknownOnly.ownSellAverage,0);
+
+  state.sales.push({
+    id:'sale-confirmed',orderNo:'OLD-CONFIRMED',date:'2026-07-11',customer:'Buyer',status:'Abgeschlossen',
+    revenue:15,cardValue:15,cost:9,historicalCostStatus:'confirmed',
+    items:[{productId:'123456',name:'Testkarte',quantity:1,unitPrice:15,cost:9}]
+  });
+  database.saveState(state);
+  const withConfirmed=database.getTradeRecommendations({productIds:['123456']}).recommendations[0];
+  assert.equal(withConfirmed.sellSampleCount,1);
+  assert.equal(withConfirmed.ownSellAverage,15);
+});
+
 test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das aktuelle Schema', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-trade-migration-'));
   const databasePath = path.join(root, 'legacy.sqlite');

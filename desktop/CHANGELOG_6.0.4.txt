@@ -1,0 +1,21 @@
+TCG Business Manager 6.0.4 – sichere Reparatur alter Geschäftsdaten
+
+Neu
+- Dashboard und Auswertungen öffnen einen geführten Bereich „Daten reparieren“.
+- Fehlende Cardmarket-IDs im Bestand können über die bekannte Kartensuche und Druckvariantenauswahl ergänzt werden.
+- Einkaufspositionen ohne Produkt-ID erhalten eine geführte Zuordnung; Set, Setnummer und Seltenheit lassen sich weiterhin korrigieren.
+- Eindeutige vorhandene Kartendaten können gesammelt aus der lokalen Cardmarket-Datenbank ergänzt werden.
+- Alte Verkäufe können zuerst mit vorhandenen Einkaufsexemplaren verknüpft werden.
+- Wenn kein Einkaufslos mehr existiert, kann der tatsächliche Gesamt-Wareneinsatz mit Pflichtnotiz nachgetragen werden.
+- Ist der alte Einstand nicht mehr zuverlässig ermittelbar, kann er ausdrücklich als unbekannt bestätigt werden.
+
+Kalkulation und Datenqualität
+- Unbekannte Einstandspreise erzeugen keinen erfundenen Gewinn und fließen nicht in Karten-, Set-, Kunden- oder SQLite-Preislernwerte ein.
+- Der echte Geldeingang eines solchen Verkaufs bleibt in der Cashflow-Auswertung vollständig erhalten.
+- Warnungen verschwinden erst nach einer echten Korrektur, einer Einkaufslos-Zuordnung oder einer ausdrücklichen Bestätigung „unbekannt“.
+- Historische manuelle Kosten werden nachvollziehbar auf die Verkaufspositionen verteilt und als Bewegungsnotiz protokolliert.
+
+Sicherheit und Darstellung
+- Die Reparatur verändert vorhandene Datensätze und bucht keine Karten erneut in den Bestand ein.
+- Korrekturen verknüpfter Einkaufs- und Bestandsdaten werden auf bereits materialisierte Exemplare übertragen.
+- Preisprüfungen im Bestand sind neutral gelb markiert; Grün und Rot bleiben tatsächlichen positiven bzw. negativen Werten vorbehalten.

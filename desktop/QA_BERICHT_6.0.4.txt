@@ -1,0 +1,21 @@
+QA-Bericht TCG Business Manager 6.0.4
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Renderer-, Datenbank-, Scanner- und Analyse-Dateien: bestanden.
+- 45 automatisierte Tests: bestanden.
+- SQLite-Migration und Sicherung: bestanden.
+- Cardmarket-API-Adapter bleibt standardmäßig deaktiviert: bestanden.
+- Windows-x64-Paketierung und NSIS-Installer: bestanden.
+- Starttest der gepackten Anwendung mit leerem, getrenntem Testdatenordner: bestanden.
+
+Zusätzliche Regressionstests 6.0.4
+- Bewusst unbekannter historischer Einstand bleibt im Cashflow, aber nicht im Gewinn: bestanden.
+- Unbekannte Kosten werden aus Karten-, Set-, Kunden- und SQLite-Preislernwerten ausgeschlossen: bestanden.
+- Manuell bestätigter historischer Wareneinsatz wird als belastbare Kostenquelle verwendet: bestanden.
+- Warnungen liefern die konkrete Reparaturaktion und verschwinden nach Bestätigung: bestanden.
+- Bestehende Bestands-, Reservierungs-, Verkaufs- und Wareneingangstests: bestanden.
+
+Installer
+- Datei: TCG Business Manager-Setup-6.0.4.exe
+- Größe: 126.184.199 Bytes (ca. 120,3 MB)
+- SHA256: 121388E262A6B8146CCF4FE047B491CF734774C74D638B42EB440DC7C70E16E1

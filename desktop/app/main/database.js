@@ -685,7 +685,7 @@ class TcgDatabase {
         numberValue(values.unitPrice ?? item?.unitPrice),
         numberValue(values.allocatedShipping), numberValue(values.allocatedExtra),
         numberValue(values.unitCost), numberValue(values.unitNet), numberValue(values.allocatedRefund),
-        String(order.status || ''), String(order.date || ''), JSON.stringify(item || {}), updatedAt
+        String(order.status || ''), String(order.date || ''), JSON.stringify(values.rawJson ?? item ?? {}), updatedAt
       );
     };
 
@@ -807,7 +807,8 @@ class TcgDatabase {
           insertLine(order, item, index, {
             quantity, unitPrice, unitCost,
             unitNet: unitPrice + shippingPaidUnit - feeUnit - postageUnit - packagingUnit - refundUnit,
-            allocatedRefund: refundUnit
+            allocatedRefund: refundUnit,
+            rawJson: { ...item, historicalCostStatus: String(sale.historicalCostStatus || '') }
           });
         });
       } else {
@@ -816,7 +817,8 @@ class TcgDatabase {
         insertLine(order, { name: sale.cardNames || 'Sammelverkauf' }, 0, {
           quantity, unitPrice, unitCost: quantity ? cost / quantity : 0,
           unitNet: unitPrice + shippingPaidUnit - feeUnit - postageUnit - packagingUnit - refundUnit,
-          allocatedRefund: refundUnit
+          allocatedRefund: refundUnit,
+          rawJson: { name: sale.cardNames || 'Sammelverkauf', historicalCostStatus: String(sale.historicalCostStatus || '') }
         });
       }
     });
@@ -1010,7 +1012,7 @@ class TcgDatabase {
     const calculatedAt = isoNow();
     const lineQuery = this.db.prepare(`
       SELECT quantity, unit_price, unit_cost, unit_net, status, transaction_date,
-             card_name, set_name, rarity
+             card_name, set_name, rarity, raw_json
       FROM trade_lines
       WHERE product_id = ? AND trade_type = ? AND archived = 0
       ORDER BY transaction_date DESC
@@ -1073,7 +1075,12 @@ class TcgDatabase {
     const recommendations = [];
     for (const productId of ids) {
       const purchases = lineQuery.all(productId, 'purchase').filter(row => !isCancelledStatus(row.status));
-      const sales = lineQuery.all(productId, 'sale').filter(row => isRealizedSaleStatus(row.status));
+      const sales = lineQuery.all(productId, 'sale').filter(row => {
+        if (!isRealizedSaleStatus(row.status)) return false;
+        let historicalCostStatus = '';
+        try { historicalCostStatus = String(JSON.parse(row.raw_json || '{}').historicalCostStatus || '').toLowerCase(); } catch { historicalCostStatus = ''; }
+        return historicalCostStatus !== 'unknown' && (numberValue(row.unit_cost) > 0 || ['confirmed', 'linked'].includes(historicalCostStatus));
+      });
       const marketRows = marketQuery.all(productId);
       const ownBuyAverage = weightedAverage(purchases, 'unit_cost');
       const ownSellAverage = weightedAverage(sales, 'unit_price');

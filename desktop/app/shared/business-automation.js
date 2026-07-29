@@ -76,18 +76,31 @@
         ? asNumber(sale.material !== undefined && sale.material !== '' ? sale.material : sale.packaging)
         : Math.max(0, asNumber(sale.quantity)) * asNumber(settings.packaging);
     const postage = asNumber(sale.postage);
-    const cost = String(sale.status || '') === 'Rückgabe eingetroffen' ? 0 : asNumber(sale.cost);
+    const returnedToInventory = String(sale.status || '') === 'Rückgabe eingetroffen';
+    const historicalCostStatus = String(sale.historicalCostStatus || '').trim().toLowerCase();
+    const cost = returnedToInventory ? 0 : asNumber(sale.cost);
+    const costKnown = returnedToInventory || ['confirmed', 'linked'].includes(historicalCostStatus) || cost > 0;
     const netRevenue = gross - refund;
     const sourceQuality = {
       fee: sale.fee !== undefined && sale.fee !== '' ? 'exact' : 'estimated',
       packaging: materialUsageCost !== null ? 'exact' : hasManualPackaging ? 'manual' : 'estimated',
       postage: sale.postage !== undefined && sale.postage !== '' ? 'exact' : 'missing',
-      cost: cost > 0 || String(sale.status || '') === 'Rückgabe eingetroffen' ? 'exact' : 'missing'
+      cost: returnedToInventory ? 'exact'
+        : historicalCostStatus === 'unknown' ? 'unknown'
+        : historicalCostStatus === 'confirmed' ? 'manual'
+          : costKnown ? 'exact' : 'missing'
     };
-    const quality = Object.values(sourceQuality).includes('missing')
+    const quality = Object.values(sourceQuality).includes('unknown')
+      ? 'unknown'
+      : Object.values(sourceQuality).includes('missing')
       ? 'incomplete'
       : Object.values(sourceQuality).includes('estimated') ? 'estimated' : 'exact';
-    return { gross, refund, netRevenue, cardValue, fee, packaging, postage, cost, profit: netRevenue - fee - packaging - postage - cost, sourceQuality, quality };
+    return {
+      gross, refund, netRevenue, cardValue, fee, packaging, postage, cost,
+      profit: netRevenue - fee - packaging - postage - cost,
+      costKnown, profitKnown: returnedToInventory || (costKnown && historicalCostStatus !== 'unknown'),
+      historicalCostStatus, sourceQuality, quality
+    };
   }
 
   const optionalNumber = value => {
@@ -594,9 +607,11 @@
       if (realizedSale(sale)) push({
         id: `sale:${sale.id || sale.orderNo}:result`, sourceType: 'sale', sourceId: sale.id || '',
         category: 'realized_sale', date: entryDate(sale.completedDate, sale.settledDate, sale.date),
-        label: `Realisierter Verkauf ${sale.orderNo || ''}`.trim(), realizedRevenue: result.netRevenue,
-        directCost: result.fee + result.postage + result.packaging + result.cost,
-        realizedProfit: result.profit, quality: result.quality
+        label: `Realisierter Verkauf ${sale.orderNo || ''}`.trim(),
+        realizedRevenue: result.profitKnown ? result.netRevenue : 0,
+        directCost: result.profitKnown ? result.fee + result.postage + result.packaging + result.cost : 0,
+        realizedProfit: result.profitKnown ? result.profit : 0, quality: result.quality,
+        excludedFromProfit: !result.profitKnown
       });
     });
 
@@ -675,6 +690,7 @@
 
     (state.sales || []).filter(sale => realizedSale(sale) && inPeriod(sale.completedDate || sale.settledDate || sale.date)).forEach(sale => {
       const result = calculateSaleProfit(sale, settings);
+      if (!result.profitKnown) return;
       add(customerMap, sale.customer, { orders: 1, cards: sale.quantity, revenue: result.netRevenue, cost: result.cost, profit: result.profit });
       const items = Array.isArray(sale.items) && sale.items.length ? sale.items : [{
         name: sale.cardNames || 'Sammelverkauf', set: 'Ohne Set', quantity: Math.max(1, asNumber(sale.quantity)),
@@ -729,7 +745,7 @@
 
   function buildDataQualityIssues(state = {}, now = new Date()) {
     const issues = [];
-    const push = (severity, category, title, details, target = '') => issues.push({ severity, category, title, details, target });
+    const push = (severity, category, title, details, target = '', action = '', recordId = '') => issues.push({ severity, category, title, details, target, action, recordId });
     const duplicateOrders = (rows, label) => {
       const counts = new Map();
       rows.forEach(row => { const key = String(row.orderNo || '').trim(); if (key) counts.set(key, (counts.get(key) || 0) + 1); });
@@ -739,14 +755,14 @@
     duplicateOrders(state.sales || [], 'Verkauf');
 
     const missingInventoryIds = (state.inventory || []).filter(item => !String(item.productId || '').match(/\d/)).length;
-    if (missingInventoryIds) push('warning', 'Kartenzuordnung', `${missingInventoryIds} Bestandskarte(n) ohne Cardmarket-ID`, 'Marktpreise und Druckvarianten können dafür nicht sicher zugeordnet werden.', 'inventory');
+    if (missingInventoryIds) push('warning', 'Kartenzuordnung', `${missingInventoryIds} Bestandskarte(n) ohne Cardmarket-ID`, 'Marktpreise und Druckvarianten können dafür nicht sicher zugeordnet werden.', 'inventory', 'repairInventory');
     const missingPurchaseIds = (state.purchases || []).flatMap(row => row.pendingItems || []).filter(item => !String(item.productId || '').match(/\d/)).length;
-    if (missingPurchaseIds) push('warning', 'Kartenzuordnung', `${missingPurchaseIds} Einkaufsposition(en) ohne Cardmarket-ID`, 'Bitte die Quelldatei oder Zuordnung prüfen.', 'purchases');
+    if (missingPurchaseIds) push('warning', 'Kartenzuordnung', `${missingPurchaseIds} Einkaufsposition(en) ohne Cardmarket-ID`, 'Bitte die Quelldatei oder Zuordnung prüfen.', 'purchases', 'repairPurchases');
 
     const incompletePurchasePrints = (state.purchases || []).flatMap(row => row.pendingItems || []).filter(item =>
       String(item.productId || '').match(/\d/) && (!String(item.set || item.setName || '').trim() || !String(item.collectorNumber || '').trim() || !String(item.rarity || '').trim())
     ).length;
-    if (incompletePurchasePrints) push('warning', 'Druckvariante', `${incompletePurchasePrints} Einkaufsposition(en) mit unvollständigen Druckdaten`, 'Set, Setnummer und Seltenheit vor dem Wareneingang prüfen.', 'purchases');
+    if (incompletePurchasePrints) push('warning', 'Druckvariante', `${incompletePurchasePrints} Einkaufsposition(en) mit unvollständigen Druckdaten`, 'Set, Setnummer und Seltenheit vor dem Wareneingang prüfen.', 'purchases', 'repairPurchases');
     const unassignedPurchaseUnits = (state.purchases || []).flatMap(row => row.pendingItems || []).reduce((sum, item, index) =>
       sum + normalizePurchaseReceiptLine(item, index).open, 0
     );
@@ -755,14 +771,15 @@
     if (privateWithoutCost) push('info', 'Privatsammlung', `${privateWithoutCost} private Karte(n) ohne Einstand`, 'Der private Einstand beeinflusst keine Geschäftsauswertung.', 'private');
 
     (state.sales || []).forEach(sale => {
-      if (realizedSale(sale) && asNumber(sale.quantity) > 0 && asNumber(sale.cost) <= 0) push('warning', 'Kalkulation', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne Wareneinsatz`, 'Der ausgewiesene Gewinn kann zu hoch sein.', 'sales');
+      const historicalResolution = ['confirmed', 'unknown', 'linked'].includes(String(sale.historicalCostStatus || '').toLowerCase());
+      if (realizedSale(sale) && String(sale.status || '') !== 'Rückgabe eingetroffen' && asNumber(sale.quantity) > 0 && asNumber(sale.cost) <= 0 && !historicalResolution) push('warning', 'Kalkulation', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne Wareneinsatz`, 'Wareneinsatz nachtragen oder ausdrücklich als unbekannt bestätigen.', 'sales', 'repairSaleCost', String(sale.id || ''));
       if (['Versendet', 'Abgeschlossen'].includes(sale.status) && asNumber(sale.postage) <= 0) push('info', 'Versand', `Verkauf ${sale.orderNo || 'ohne Nummer'} ohne tatsächliches Porto`, 'Falls Porto angefallen ist, bitte den wirklich bezahlten Betrag ergänzen.', 'sales');
       if (asNumber(sale.shippingPaid) > asNumber(sale.revenue)) push('error', 'Kalkulation', `Versandbetrag bei ${sale.orderNo || 'Verkauf'} ist höher als die Einnahme`, 'Einnahme und Käufer-Versand prüfen.', 'sales');
       const detailedItems = sale.items || [];
       const requested = detailedItems.length ? detailedItems.reduce((sum, item) => sum + wholeQuantity(item.quantity), 0) : wholeQuantity(sale.quantity);
       const linked = new Set(sale.itemIds || []).size;
       if (realizedSale(sale) && requested > 0 && !detailedItems.length) push('warning', 'Verkaufspositionen', `Verkauf ${sale.orderNo || 'ohne Nummer'} enthält nur einen Sammeltext`, 'Karten einzeln ergänzen, damit Druckvariante, VK und Wareneinsatz lernfähig werden.', 'sales');
-      if (requested > linked) push('warning', 'Bestandszuordnung', `Verkauf ${sale.orderNo || 'ohne Nummer'}: ${requested - linked} Karte(n) ohne Einkaufslos`, 'Bestandszuordnung prüfen, damit Wareneinsatz und Gewinn stimmen.', 'sales');
+      if (requested > linked && String(sale.status || '') !== 'Rückgabe eingetroffen' && !historicalResolution) push('warning', 'Bestandszuordnung', `Verkauf ${sale.orderNo || 'ohne Nummer'}: ${requested - linked} Karte(n) ohne Einkaufslos`, 'Einkaufsexemplare zuordnen oder den historischen Wareneinsatz bestätigen.', 'sales', 'repairSaleCost', String(sale.id || ''));
     });
 
     const lastPrice = state.sync?.lastPriceUpdate || '';

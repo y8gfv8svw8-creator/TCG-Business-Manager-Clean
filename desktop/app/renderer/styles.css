@@ -519,16 +519,26 @@ html[data-theme="dark"] .cm-import-status.success{background:#254133;color:#bfe8
 /* Version 6.0.3 – sichere Dialoge, Wareneingang und Preisprüfung */
 .danger-button{background:#b52f36!important;border-color:#b52f36!important;color:#fff!important}
 .danger-button:hover{background:#99262c!important;border-color:#99262c!important}
-.inventory-price-review-up>td{background:#edf8f0;border-color:#d1ead7}
-.inventory-price-review-down>td{background:#fff0f0;border-color:#efd1d1}
-.inventory-price-review-up:hover>td,.inventory-price-review-down:hover>td{filter:brightness(.985)}
+.inventory-price-review>td{background:#fff8e8;border-color:#e6ce8a}
+.inventory-price-review:hover>td{filter:brightness(.985)}
 .receipt-table{min-width:1420px}
 .receipt-listing-price{width:105px;min-width:105px;margin-bottom:7px}
 .receipt-list-check{display:flex;align-items:flex-start;gap:7px;max-width:210px;font-size:12px;line-height:1.35;color:var(--muted)}
 .receipt-list-check input{width:auto;min-width:auto;margin-top:2px}
 .cm-price-source-note{display:flex;flex-direction:column;gap:4px;margin:14px 0;padding:11px 13px;border:1px solid #abc7dc;border-radius:10px;background:#f0f7fc;color:#294b67}
 .cm-price-source-note span{font-size:12px;line-height:1.45;color:#526a7d}
-html[data-theme="dark"] .inventory-price-review-up>td{background:#254133;border-color:#365b44;color:#dff5e5}
-html[data-theme="dark"] .inventory-price-review-down>td{background:#45292b;border-color:#6c3f42;color:#ffe4e6}
+html[data-theme="dark"] .inventory-price-review>td{background:#403822;border-color:#756331;color:#fff0bd}
 html[data-theme="dark"] .cm-price-source-note{background:#2c3b49;border-color:#526b80;color:#d9ecfb}
 html[data-theme="dark"] .cm-price-source-note span{color:#c0d3e2}
+
+/* Version 6.0.4 – geführte Datenreparatur */
+.data-repair-dialog{width:min(1120px,96vw)}
+.repair-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:14px 0}
+.repair-summary>div{padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.repair-summary small,.repair-summary strong{display:block}.repair-summary small{color:var(--muted);margin-bottom:5px}.repair-summary strong{font-size:20px}
+.repair-safety-note{margin-bottom:14px}.repair-section{margin-top:14px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.repair-section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.repair-section-head h3{margin:0}.repair-section-head small{color:var(--muted)}
+.repair-list{display:grid;gap:8px;max-height:300px;overflow:auto}.repair-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 11px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2)}
+.repair-row>div:first-child{display:flex;flex-direction:column;gap:4px}.repair-row small{color:var(--muted)}.repair-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.repair-toolbar small{color:var(--muted)}
+html[data-theme="dark"] .repair-section,html[data-theme="dark"] .repair-row{color:var(--text)}
+@media(max-width:700px){.repair-row{align-items:flex-start;flex-direction:column}.repair-row .row-actions,.repair-row button{width:100%}.repair-row .row-actions{display:grid}}

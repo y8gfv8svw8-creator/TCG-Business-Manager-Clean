@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.0.3</title>
+  <title>TCG Business Manager 6.0.4</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.0.3 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.0.4 · SQLite</div>
         </div>
       </div>
 
@@ -74,7 +74,7 @@
           <article class="panel panel-wide automation-overview-panel">
             <div class="panel-head">
               <div><h2>Automatik, Aufgaben &amp; Warnungen</h2><small>Prüft Bestandsabläufe, Preisrisiken und unvollständige Geschäftsdaten.</small></div>
-              <div class="panel-head-actions"><button id="repairWorkflowsBtn" class="secondary" type="button">Abläufe jetzt prüfen</button><button class="link-button" data-view-jump="reports">Alle Prüfungen</button></div>
+              <div class="panel-head-actions"><button id="repairWorkflowsBtn" class="secondary" type="button">Daten reparieren</button><button class="link-button" data-view-jump="reports">Alle Prüfungen</button></div>
             </div>
             <div id="automationOverview"></div>
           </article>
@@ -613,7 +613,7 @@
           <div id="advancedPerformanceReport" class="table-wrap"></div>
         </article>
         <article class="panel trade-database-panel">
-          <div class="panel-head"><div><h2>Datenqualität, Preiswarnungen &amp; Sicherungen</h2><small>Konkrete Hinweise, bevor falsche Werte in Entscheidungen einfließen.</small></div><button id="refreshBusinessHealthBtn" class="secondary" type="button">Neu prüfen</button></div>
+          <div class="panel-head"><div><h2>Datenqualität, Preiswarnungen &amp; Sicherungen</h2><small>Konkrete Hinweise, bevor falsche Werte in Entscheidungen einfließen.</small></div><div class="panel-head-actions"><button id="openDataRepairBtn" class="primary" type="button">Daten reparieren</button><button id="refreshBusinessHealthBtn" class="secondary" type="button">Neu prüfen</button></div></div>
           <div id="businessHealthSummary" class="trade-database-summary"></div>
           <div id="businessHealthIssues"></div>
         </article>
@@ -775,6 +775,15 @@
       <div id="saleAllocationContent"></div>
       <div class="modal-actions"><button type="button" id="saleAllocationCancel" class="secondary">Abbrechen</button><button type="submit" class="primary">Zuordnung speichern</button></div>
     </form>
+  </dialog>
+
+  <dialog id="dataRepairDialog" class="order-detail-dialog data-repair-dialog">
+    <div class="modal-head">
+      <div><h2>Daten sicher reparieren</h2><p class="muted">Alte Lücken korrigieren, ohne Bestand erneut einzubuchen oder Historie zu löschen.</p></div>
+      <button type="button" id="dataRepairClose" class="icon-button" aria-label="Schließen">×</button>
+    </div>
+    <div id="dataRepairContent"></div>
+    <div class="modal-actions"><button type="button" id="dataRepairCloseBottom" class="primary">Schließen</button></div>
   </dialog>
 
   <dialog id="importPreviewDialog" class="order-detail-dialog import-preview-dialog">

@@ -1,0 +1,16 @@
+QA-Bericht TCG Business Manager 6.3.1
+
+Geprüfte Punkte
+
+- Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Such-, Analyse- und Renderer-Dateien: BESTANDEN
+- Vollständige automatisierte Tests: BESTANDEN
+- Deduplizierung identischer Cardmarket-Artikel-IDs: BESTANDEN
+- Zwei unterschiedliche Artikel-IDs derselben Druckvariante bleiben erhalten: BESTANDEN
+- Erkennung eines vollständig doppelt gespeicherten Warenkorbblocks: BESTANDEN
+- Vorsichtiger und typischer Price-Guide-Wert werden getrennt berechnet: BESTANDEN
+- Unsichere Kaufentscheidung wird als "Marktpreis prüfen" gekennzeichnet: BESTANDEN
+- Fehlende Marktdaten bleiben ausdrücklich als fehlend gekennzeichnet: BESTANDEN
+
+Hinweis zur Aussagekraft
+
+Der Cardmarket Price Guide enthält keine live nach Sprache, Zustand, Verkäuferstandort und Versand gefilterte Angebotsliste. Deshalb ist die obere Spanne nur eine Orientierung und keine sichere Verkaufsgarantie. Sobald eine Cardmarket-API verfügbar ist, verwendet der Manager das echte Live-Angebotsniveau vorrangig.

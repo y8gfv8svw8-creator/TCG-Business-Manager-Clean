@@ -189,6 +189,12 @@
   const roundMoney = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
   const floorMoney = value => Math.max(0, Math.floor((Number(value) + Number.EPSILON) * 100) / 100);
   const clamp = (value, min, max) => Math.min(max, Math.max(min, asNumber(value)));
+  const median = values => {
+    const sorted = (values || []).filter(value => value !== null && Number.isFinite(Number(value)) && Number(value) > 0).map(Number).sort((a, b) => a - b);
+    if (!sorted.length) return 0;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
 
   function estimatePackagingPerCard(state = {}, settings = state.settings || {}) {
     const sales = Array.isArray(state.sales) ? state.sales : [];
@@ -289,6 +295,14 @@
       ? historicalValues[Math.floor((historicalValues.length - 1) / 2)]
       : 0;
     const recommendedSell = roundMoney(Math.max(0, marketReference));
+    // Ohne API kann der Price Guide keinen exakten, nach Sprache, Zustand und
+    // Standort gefilterten Angebotspreis liefern. Die vorsichtige Untergrenze
+    // bleibt deshalb erhalten. Daneben zeigt das typische Niveau aus den
+    // echten 1-/7-/30-Tageswerten, wann eine manuelle Marktpruefung sinnvoll ist.
+    const recentMedian = median([avg1, avg7, avg30]);
+    const typicalSell = roundMoney(liveOffer !== null
+      ? recommendedSell
+      : Math.max(recommendedSell, recentMedian || recommendedSell));
     const safety = clamp(settings.safetyPercent, 0, 50) / 100;
     const feeRate = clamp(settings.feePercent, 0, 100) / 100;
     const packaging = Math.max(0, asNumber(settings.packaging));
@@ -301,6 +315,12 @@
     const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy) : 0;
     const maxByRoi = netBeforeBuy > 0 ? floorMoney(minRoi > 0 ? netBeforeBuy / (1 + minRoi) : netBeforeBuy) : 0;
     const maxBuy = recommendedSell > 0 ? maxByRoi : 0;
+    const typicalSafeSell = floorMoney(typicalSell * (1 - safety));
+    const typicalFeeAmount = typicalSafeSell * feeRate;
+    const typicalNetBeforeBuy = typicalSafeSell - typicalFeeAmount - packaging;
+    const typicalMaxBuy = typicalSell > 0 && typicalNetBeforeBuy > 0
+      ? floorMoney(minRoi > 0 ? typicalNetBeforeBuy / (1 + minRoi) : typicalNetBeforeBuy)
+      : 0;
     const ownedCost = Math.max(0, asNumber(prices.cost ?? prices.ownBuyAverage));
     const breakEvenPrice = feeRate < 1
       ? (ownedCost + packaging) / Math.max(0.01, 1 - feeRate)
@@ -321,8 +341,9 @@
     return {
       liveOffer, low, trend, avg1, avg7, avg30, pricePointCount, lowOutlier,
       marketReference: recommendedSell, marketReferenceSource, historicalReference,
-      recommendedSell, safeSell, feeRate, packaging, feeAmount, netBeforeBuy,
+      recommendedSell, typicalSell, safeSell, typicalSafeSell, feeRate, packaging, feeAmount, typicalFeeAmount, netBeforeBuy, typicalNetBeforeBuy,
       minProfit, minRoi, targetRoi, maxByProfit, maxByRoi, maxBuy,
+      typicalMaxBuy,
       ownedCost, breakEvenPrice: roundMoney(breakEvenPrice), targetRoiPrice: priceFloor,
       priceFloor, quickSell, confidenceScore, confidenceLevel
     };
@@ -347,6 +368,27 @@
       meetsTargetRoi: base.ownedCost > 0 ? suggestedSell > 0 && expectedProfit >= 0 && expectedRoi >= base.targetRoi * 100 : null,
       costFloorAboveMarket: base.priceFloor > 0 && base.recommendedSell > 0 && base.priceFloor > base.recommendedSell
     };
+  }
+
+  function deduplicatePurchaseDraftRows(rows = []) {
+    const seenArticleIds = new Set();
+    const sourceRows = rows || [];
+    const filtered = sourceRows.filter(row => {
+      const articleId = String(row.sourceArticleId || row.articleId || '').replace(/\D/g, '');
+      if (!articleId) return true;
+      if (seenArticleIds.has(articleId)) return false;
+      seenArticleIds.add(articleId);
+      return true;
+    });
+    if (filtered.length !== sourceRows.length || filtered.length % 2) return filtered;
+    const fingerprint = row => [
+      row.productId, row.name, row.quantity, row.unitPrice,
+      row.language, row.condition, row.set, row.collectorNumber, row.rarity
+    ].map(value => String(value ?? '').trim().toLowerCase()).join('|');
+    const half = filtered.length / 2;
+    const isRepeatedBlock = half > 0 && filtered.slice(0, half).every((row, index) =>
+      fingerprint(row) === fingerprint(filtered[index + half]));
+    return isRepeatedBlock ? filtered.slice(0, half) : filtered;
   }
 
   function stockSnapshotIdentity(item = {}) {
@@ -553,6 +595,11 @@
       const pricing = hasMarket ? calculatedPricing : { ...calculatedPricing, suggestedSell: 0, marketSell: 0, expectedProfit: 0, expectedRoi: 0, profitableAtMarket: null, meetsTargetRoi: null };
       const expectedProfit = pricing.suggestedSell > 0 ? pricing.expectedProfit : 0;
       const expectedRoi = landedUnitCost > 0 ? expectedProfit / landedUnitCost * 100 : 0;
+      const typicalSell = Math.max(asNumber(pricing.suggestedSell), asNumber(pricing.typicalSell));
+      const typicalProfit = typicalSell > 0
+        ? roundMoney(typicalSell - typicalSell * pricing.feeRate - pricing.packaging - landedUnitCost)
+        : 0;
+      const typicalRoi = landedUnitCost > 0 ? typicalProfit / landedUnitCost * 100 : 0;
       let recommendation = 'Preisdaten fehlen';
       let decisionReason = 'Für diese Druckvariante ist noch kein kurzfristiger Marktwert gespeichert.';
       if (row.enabled === false || !row.businessQuantity) {
@@ -560,25 +607,30 @@
         decisionReason = 'Diese Position ist nicht für den Geschäftsbestand vorgesehen.';
       } else if (!pricing.suggestedSell) {
         recommendation = 'Preisdaten fehlen';
-      } else if (landedUnitCost > pricing.maxBuy) {
-        recommendation = 'Nicht kaufen';
-        decisionReason = `Der vollständige EK liegt über der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
       } else if (landedUnitCost <= pricing.maxBuy * 0.85) {
         recommendation = 'Sehr guter EK';
-        decisionReason = `Der vollständige EK liegt deutlich unter der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+        decisionReason = `Der vollständige EK liegt deutlich unter der vorsichtigen Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
       } else if (landedUnitCost <= pricing.maxBuy) {
         recommendation = 'Lohnt sich';
-        decisionReason = `Der vollständige EK liegt innerhalb der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+        decisionReason = `Der vollständige EK liegt innerhalb der vorsichtigen Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+      } else if (!pricing.liveOffer && pricing.typicalMaxBuy > pricing.maxBuy && landedUnitCost <= pricing.typicalMaxBuy) {
+        recommendation = 'Marktpreis prüfen';
+        decisionReason = `Der EK passt nur zum typischen 1-/7-/30-Tage-Niveau. Aktuelle NM-Angebote auf Cardmarket prüfen; die Spanne reicht von ${pricing.maxBuy.toFixed(2)} € bis ${pricing.typicalMaxBuy.toFixed(2)} €.`;
+      } else if (landedUnitCost > pricing.typicalMaxBuy) {
+        recommendation = 'Nicht kaufen';
+        decisionReason = `Der vollständige EK liegt sogar über der oberen Price-Guide-Orientierung von ${pricing.typicalMaxBuy.toFixed(2)} €.`;
       } else {
-        recommendation = 'Knapp prüfen';
+        recommendation = 'Marktpreis prüfen';
         decisionReason = 'Preis, Sprache, Zustand und Versand sollten vor dem Kauf noch einmal geprüft werden.';
       }
-      return { ...row, share, allocatedTotal: roundMoney(allocatedTotal), landedUnitCost: roundMoney(landedUnitCost), pricing, expectedProfit: roundMoney(expectedProfit), expectedRoi, recommendation, decisionReason };
+      return { ...row, share, allocatedTotal: roundMoney(allocatedTotal), landedUnitCost: roundMoney(landedUnitCost), pricing, expectedProfit: roundMoney(expectedProfit), expectedRoi, typicalProfit, typicalRoi, recommendation, decisionReason };
     });
     const businessLines = lines.filter(row => row.businessQuantity > 0 && row.enabled !== false);
     const businessCost = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.landedUnitCost, 0);
     const projectedRevenue = businessLines.reduce((sum, row) => sum + row.businessQuantity * asNumber(row.pricing.suggestedSell), 0);
     const projectedProfit = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.expectedProfit, 0);
+    const typicalProjectedRevenue = businessLines.reduce((sum, row) => sum + row.businessQuantity * asNumber(row.pricing.typicalSell), 0);
+    const typicalProjectedProfit = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.typicalProfit, 0);
     return {
       lines,
       totals: {
@@ -593,7 +645,10 @@
         businessCost: roundMoney(businessCost),
         projectedRevenue: roundMoney(projectedRevenue),
         projectedProfit: roundMoney(projectedProfit),
-        projectedRoi: businessCost > 0 ? projectedProfit / businessCost * 100 : 0
+        projectedRoi: businessCost > 0 ? projectedProfit / businessCost * 100 : 0,
+        typicalProjectedRevenue: roundMoney(typicalProjectedRevenue),
+        typicalProjectedProfit: roundMoney(typicalProjectedProfit),
+        typicalProjectedRoi: businessCost > 0 ? typicalProjectedProfit / businessCost * 100 : 0
       }
     };
   }
@@ -1371,6 +1426,7 @@
     buildFinancialSummary,
     calculateAutomaticPriceTargets,
     calculateOwnedCardPriceTargets,
+    deduplicatePurchaseDraftRows,
     estimatePackagingPerCard,
     stockSnapshotIdentity,
     purchaseLineKey,

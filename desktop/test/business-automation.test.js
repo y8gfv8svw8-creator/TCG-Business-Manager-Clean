@@ -509,5 +509,35 @@ test('Warenkorb liefert je Karte eine klare Kaufentscheidung', () => {
   ],{},{feePercent:5,packaging:0.03,safetyPercent:5,minRoi:25});
   assert.equal(analysis.lines[0].recommendation,'Sehr guter EK');
   assert.equal(analysis.lines[1].recommendation,'Nicht kaufen');
-  assert.match(analysis.lines[1].decisionReason,/sicheren Kaufgrenze/);
+  assert.match(analysis.lines[1].decisionReason,/Price-Guide-Orientierung/);
+});
+
+test('Cardmarket-Warenkorb entfernt doppelt gespeicherte HTML-Artikel, aber keine echten Mehrfachangebote', () => {
+  const rows=[
+    {id:'a',sourceArticleId:'100',productId:'1',name:'Karte A',quantity:1,unitPrice:2},
+    {id:'b',sourceArticleId:'200',productId:'1',name:'Karte A',quantity:1,unitPrice:2},
+    {id:'a-copy',sourceArticleId:'100',productId:'1',name:'Karte A',quantity:1,unitPrice:2}
+  ];
+  assert.deepEqual(automation.deduplicatePurchaseDraftRows(rows).map(row=>row.id),['a','b']);
+
+  const repeatedBlock=[
+    {id:'first-a',productId:'1',name:'Karte A',quantity:1,unitPrice:2},
+    {id:'first-b',productId:'2',name:'Karte B',quantity:1,unitPrice:3},
+    {id:'copy-a',productId:'1',name:'Karte A',quantity:1,unitPrice:2},
+    {id:'copy-b',productId:'2',name:'Karte B',quantity:1,unitPrice:3}
+  ];
+  assert.deepEqual(automation.deduplicatePurchaseDraftRows(repeatedBlock).map(row=>row.id),['first-a','first-b']);
+});
+
+test('Warenkorb kennzeichnet eine nur im typischen Price Guide plausible Karte zur Marktpruefung', () => {
+  const analysis=automation.analyzePurchaseDraft([{
+    id:'junoldo',productId:'885405',quantity:1,unitPrice:2,
+    low:1.70,avg1:3.96,avg7:4.10,avg30:4.29,trend:4.25
+  }],{},{feePercent:5,packaging:0.04,safetyPercent:5,minRoi:25});
+  const line=analysis.lines[0];
+  assert.equal(line.pricing.suggestedSell,1.93);
+  assert.equal(line.pricing.typicalSell,4.10);
+  assert.equal(line.recommendation,'Marktpreis prüfen');
+  assert.ok(line.pricing.typicalMaxBuy>line.pricing.maxBuy);
+  assert.ok(analysis.totals.typicalProjectedRevenue>analysis.totals.projectedRevenue);
 });

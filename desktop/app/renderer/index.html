@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.3.0</title>
+  <title>TCG Business Manager 6.3.1</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.3.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.3.1 · SQLite</div>
         </div>
       </div>
 
@@ -433,8 +433,8 @@
           <label class="buying-paste-label">Positionen einfügen <small>Eine Zeile je Karte: Produkt-ID; Kartenname; Menge; Stückpreis; Sprache; Zustand</small><textarea id="purchaseCartPaste" rows="5" placeholder="889955; Requiem des Unterweltlerschmieds; 2; 0,75; DE; NM"></textarea></label>
           <div class="row-actions buying-actions"><button id="analyzePurchaseCartBtn" class="primary" type="button">Warenkorb analysieren</button><button id="convertPurchaseDraftBtn" class="secondary" type="button">Als Einkauf übernehmen</button></div>
           <div id="purchaseDraftSummary" class="collection-summary"></div>
-          <p class="market-estimate-note"><strong>Wichtig:</strong> Ohne Cardmarket-API ist der Markt-VK eine vorsichtige Schätzung aus dem täglichen Price Guide. Trend sowie 7-/30-Tage-Werte sind nur Verlaufshinweise. Ein echtes API-Angebot hat später automatisch Vorrang.</p>
-          <div class="table-wrap"><table><thead><tr><th>Geschäft</th><th>Privat</th><th>Karte / Druckvariante</th><th>Menge</th><th>Angebot</th><th>Vollständiger EK</th><th>Geschätzter Markt-VK</th><th>Sichere Kaufgrenze</th><th>Gewinn / ROI</th><th>Klare Entscheidung</th></tr></thead><tbody id="purchaseDraftTable"><tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr></tbody></table></div>
+          <p class="market-estimate-note"><strong>Wichtig:</strong> Ohne Cardmarket-API zeigt der Manager eine Price-Guide-Spanne: eine vorsichtige Untergrenze und ein typisches Niveau aus den 1-/7-/30-Tage-Werten. Die obere Grenze muss vor dem Kauf mit aktuellen Angeboten geprüft werden. Ein echtes API-Angebot hat später automatisch Vorrang.</p>
+          <div class="table-wrap"><table><thead><tr><th>Geschäft</th><th>Privat</th><th>Karte / Druckvariante</th><th>Menge</th><th>Angebot</th><th>Vollständiger EK</th><th>Price-Guide-Spanne</th><th>Kaufgrenze als Spanne</th><th>Gewinn / ROI als Spanne</th><th>Klare Entscheidung</th></tr></thead><tbody id="purchaseDraftTable"><tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr></tbody></table></div>
         </article>
 
         <article class="panel buying-panel demand-panel">

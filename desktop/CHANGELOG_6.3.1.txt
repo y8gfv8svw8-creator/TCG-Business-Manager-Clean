@@ -1,0 +1,11 @@
+TCG Business Manager 6.3.1 – zuverlässige Warenkorbprüfung
+
+- Doppelte Artikelblöcke aus gespeicherten Cardmarket-Warenkorbseiten werden erkannt und nur einmal ausgewertet.
+- Echte verschiedene Cardmarket-Angebote derselben Karte bleiben anhand ihrer Artikel-ID getrennt erhalten.
+- Bereits gespeicherte Entwürfe mit einem vollständig wiederholten Artikelblock werden beim Öffnen bereinigt.
+- Die Kaufprüfung zeigt ohne Cardmarket-API keine scheinbar exakten Marktwerte mehr, sondern eine Spanne:
+  vorsichtige Untergrenze bis typisches 1-/7-/30-Tage-Niveau.
+- Kaufgrenze, möglicher Umsatz, Gewinn und ROI werden ebenfalls als Spanne dargestellt.
+- Liegt ein Einkauf nur innerhalb der oberen Orientierung, lautet die Entscheidung "Marktpreis prüfen" statt voreilig "kaufen" oder "nicht kaufen".
+- Ein echtes Live-Angebot aus einer späteren Cardmarket-API-Anbindung hat weiterhin Vorrang.
+

@@ -1,0 +1,34 @@
+TCG Business Manager 6.3.0 – sichere Einkaufsentscheidungen und kompakte Ansichten
+
+PREISE UND EINKAUFSPLANUNG
+- Trend sowie 7-/30-Tage-Durchschnitt werden nicht mehr als aktueller Verkaufspreis verwendet.
+- Ohne API entsteht eine bewusst vorsichtige Markt-VK-Schätzung aus dem aktuellen Price Guide.
+- Ein späteres Cardmarket-API-Live-Angebot hat automatisch Vorrang vor der Schätzung.
+- Sehr günstige Karten und auffällige Low-Ausreißer werden gesondert und vorsichtig behandelt.
+- Ein geladener Warenkorb ergänzt die gespeicherten SQLite-Preisdaten automatisch.
+- Jede Warenkorbposition zeigt vollständigen EK, geschätzten Markt-VK, sichere Kaufgrenze,
+  Gewinn/ROI sowie eine verständliche Entscheidung mit Begründung.
+
+NACHFRAGE- UND SHOP-RADAR
+- Nachfrage und Kaufpreis sind jetzt getrennt: Ein Meta-Signal allein erzeugt keine Kaufempfehlung.
+- Ohne konkretes Angebot erscheinen "Hohe Nachfrage", "Testbestand" oder "Beobachten".
+- Erst ein Angebot innerhalb der sicheren Kaufgrenze wird als "Lohnt sich" bewertet.
+- Preis-Trend beeinflusst den Nachfrage-Score nicht mehr.
+
+KARTENZUORDNUNG UND CARDMARKET
+- In der Preisprüfung eigener Bestände führen Kartenname und eigener Button direkt zu Cardmarket.
+- Mehrdeutige Katalogvarianten zeigen jede mögliche CM-ID mit eigenem Prüflink.
+- Nach der Prüfung kann eine exakte numerische CM-ID direkt gesucht und ausgewählt werden.
+- Vorhandene Set-, Setnummer- und Seltenheitsangaben bleiben bei einer Reparatur erhalten,
+  wenn der unvollständige Produktkatalog diese Felder nicht mitliefert.
+
+OBERFLÄCHE
+- Filterbereiche lassen sich über einen Filter-Schalter ein- und ausblenden.
+- Große Bereiche mit Kopfzeile lassen sich einklappen; die Auswahl bleibt gespeichert.
+- Price-Guide-Schätzungen und deren Grenzen werden direkt in der Oberfläche erklärt.
+
+DATENSICHERHEIT
+- Bestehende Bestände, Einkäufe, Verkäufe, Reservierungen, Cardmarket-IDs und Druckvarianten
+  werden nicht automatisch überschrieben oder geraten.
+- Alle Änderungen sind mit der vorhandenen SQLite-Migration und alten Programmständen kompatibel.
+

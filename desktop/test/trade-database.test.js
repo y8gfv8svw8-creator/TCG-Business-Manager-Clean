@@ -76,10 +76,10 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.equal(recommendation.buySampleCount, 1, 'Nur tatsächlich in den Geschäftsbestand übernommene Exemplare zählen als eigener EK');
   assert.equal(recommendation.sellSampleCount, 1);
   assert.ok(recommendation.recommendedBuy > 0);
-  assert.equal(recommendation.recommendedSell, 2.2, 'SQLite nutzt dieselbe Cardmarket-Gewichtung wie Bestand und Datencenter');
+  assert.equal(recommendation.recommendedSell, 2, 'SQLite nutzt dieselbe kurzfristige Marktreferenz wie Bestand und Datencenter');
   assert.ok(recommendation.recommendedSell < recommendation.priceFloor, 'Der Markt-VK wird nicht auf den ROI-Zielpreis angehoben');
   assert.equal(recommendation.profitableAtMarket, false);
-  assert.equal(recommendation.modelVersion, 'v3-market-roi');
+  assert.equal(recommendation.modelVersion, 'v4-short-term-market');
 
   const changed = structuredClone(state);
   changed.purchases[0].shipping = 4;

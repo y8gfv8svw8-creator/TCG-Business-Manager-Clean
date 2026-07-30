@@ -235,29 +235,60 @@
   }
 
   function calculateAutomaticPriceTargets(prices = {}, settings = {}) {
+    const liveOffer = optionalNumber(prices.liveOffer ?? prices.offerLow ?? prices.currentOffer);
     const low = optionalNumber(prices.low ?? prices.currentBuy);
     const trend = optionalNumber(prices.trend);
     const avg1 = optionalNumber(prices.avg1);
     const avg7 = optionalNumber(prices.avg7);
     const avg30 = optionalNumber(prices.avg30);
-    const pricePointCount = [low, trend, avg1, avg7, avg30].filter(value => value !== null).length;
-    const weighted = [];
-    if (trend !== null) weighted.push([trend, 0.45]);
-    if (avg7 !== null) weighted.push([avg7, 0.35]);
-    if (avg30 !== null) weighted.push([avg30, 0.20]);
-    if (!weighted.length && avg1 !== null) weighted.push([avg1, 1]);
-    if (!weighted.length && low !== null) weighted.push([low, 1]);
-    const weightTotal = weighted.reduce((sum, row) => sum + row[1], 0);
-    const weightedSell = weightTotal
-      ? weighted.reduce((sum, row) => sum + row[0] * row[1], 0) / weightTotal
+    const pricePointCount = [liveOffer, low, trend, avg1, avg7, avg30].filter(value => value !== null).length;
+    // Trend sowie 7-/30-Tage-Werte beschreiben die Vergangenheit und sind
+    // kein heute sicher erreichbarer Verkaufspreis. Ein echtes Angebotsniveau
+    // hat Vorrang; ohne API wird Low vorsichtig mit dem 1-Tages-Wert geglättet.
+    let marketReference = 0;
+    let marketReferenceSource = 'Keine kurzfristige Preisreferenz';
+    let lowOutlier = false;
+    if (liveOffer !== null) {
+      marketReference = liveOffer;
+      marketReferenceSource = 'Live-Angebot';
+    } else if (low !== null && avg1 !== null) {
+      const ratio = avg1 > 0 ? low / avg1 : 1;
+      lowOutlier = ratio < 0.35 || ratio > 2.85;
+      if (lowOutlier) {
+        const recentValues = [avg1, avg7, avg30].filter(value => value !== null).sort((a, b) => a - b);
+        const recentMedian = recentValues[Math.floor((recentValues.length - 1) / 2)] || avg1;
+        // Bei Cent-Karten ist ein einzelnes 0,02-EUR-Angebot normal und darf
+        // nicht durch den deutlich hoeheren Tagesdurchschnitt ersetzt werden.
+        // Bei hoeherpreisigen Karten ist ein sehr kleines Low dagegen oft eine
+        // andere Sprache/ein anderer Zustand oder ein bereits veraltetes Angebot.
+        marketReference = low < 0.25
+          ? Math.min(recentMedian, low + Math.min(0.20, recentMedian * 0.35))
+          : recentMedian;
+        marketReferenceSource = low < 0.25
+          ? 'Vorsichtige Price-Guide-Spanne (Cent-Ausreißer begrenzt)'
+          : 'Kurzfristige Durchschnittswerte (Low-Ausreißer erkannt)';
+      } else {
+        marketReference = low * 0.90 + avg1 * 0.10;
+        marketReferenceSource = 'Price Guide Low mit kleinem 1-Tages-Puffer';
+      }
+    } else if (avg1 !== null) {
+      marketReference = avg1;
+      marketReferenceSource = 'Cardmarket 1-Tages-Wert';
+    } else if (low !== null) {
+      marketReference = low;
+      marketReferenceSource = 'Cardmarket Low';
+    } else {
+      const historical = [avg7, avg30, trend].filter(value => value !== null).sort((a, b) => a - b);
+      if (historical.length) {
+        marketReference = historical[0];
+        marketReferenceSource = 'Vorsichtige historische Untergrenze';
+      }
+    }
+    const historicalValues = [trend, avg7, avg30].filter(value => value !== null).sort((a, b) => a - b);
+    const historicalReference = historicalValues.length
+      ? historicalValues[Math.floor((historicalValues.length - 1) / 2)]
       : 0;
-    // Cardmarket Low ist ein historischer Price-Guide-Wert und kein garantiert
-    // aktuell kaufbares Angebot für Sprache/Zustand. Sobald belastbarere
-    // Referenzen vorhanden sind, wird der Markt-VK daher aus Trend und
-    // Durchschnittswerten gebildet; Low dient nur als Rückfallwert.
-    const recommendedSell = pricePointCount
-      ? roundMoney(Math.max(0, weightedSell || low || 0))
-      : 0;
+    const recommendedSell = roundMoney(Math.max(0, marketReference));
     const safety = clamp(settings.safetyPercent, 0, 50) / 100;
     const feeRate = clamp(settings.feePercent, 0, 100) / 100;
     const packaging = Math.max(0, asNumber(settings.packaging));
@@ -279,7 +310,7 @@
       : 0;
     const priceFloor = ownedCost > 0 ? Math.ceil(targetRoiPrice * 100) / 100 : 0;
     const quickSell = recommendedSell > 0
-      ? Math.ceil(Math.max(low || 0, recommendedSell * (1 - safety)) * 100) / 100
+      ? Math.ceil(Math.max(0, Math.min(low ?? recommendedSell, recommendedSell)) * 100) / 100
       : 0;
     const confidenceScore = Math.min(100,
       pricePointCount * 10 +
@@ -288,7 +319,8 @@
     );
     const confidenceLevel = confidenceScore >= 75 ? 'high' : confidenceScore >= 45 ? 'medium' : 'low';
     return {
-      low, trend, avg1, avg7, avg30, pricePointCount,
+      liveOffer, low, trend, avg1, avg7, avg30, pricePointCount, lowOutlier,
+      marketReference: recommendedSell, marketReferenceSource, historicalReference,
       recommendedSell, safeSell, feeRate, packaging, feeAmount, netBeforeBuy,
       minProfit, minRoi, targetRoi, maxByProfit, maxByRoi, maxBuy,
       ownedCost, breakEvenPrice: roundMoney(breakEvenPrice), targetRoiPrice: priceFloor,
@@ -498,8 +530,10 @@
       const unitPrice = Math.max(0, asNumber(row.unitPrice));
       const positiveMarketValue = value => asNumber(value) > 0 ? asNumber(value) : null;
       const market = {
+        liveOffer: positiveMarketValue(row.liveOffer ?? row.offerLow ?? row.currentOffer),
         low: positiveMarketValue(row.low ?? row.marketLow),
         trend: positiveMarketValue(row.trend ?? row.marketTrend),
+        avg1: positiveMarketValue(row.avg1),
         avg7: positiveMarketValue(row.avg7),
         avg30: positiveMarketValue(row.avg30)
       };
@@ -519,13 +553,27 @@
       const pricing = hasMarket ? calculatedPricing : { ...calculatedPricing, suggestedSell: 0, marketSell: 0, expectedProfit: 0, expectedRoi: 0, profitableAtMarket: null, meetsTargetRoi: null };
       const expectedProfit = pricing.suggestedSell > 0 ? pricing.expectedProfit : 0;
       const expectedRoi = landedUnitCost > 0 ? expectedProfit / landedUnitCost * 100 : 0;
-      let recommendation = 'Keine Preisdaten';
-      if (row.enabled === false || !row.businessQuantity) recommendation = 'Nicht geschäftlich';
-      else if (!pricing.suggestedSell) recommendation = 'Beobachten';
-      else if (pricing.profitableAtMarket && expectedRoi >= Math.max(40, asNumber(settings.targetRoi, 30))) recommendation = 'Stark kaufen';
-      else if (pricing.profitableAtMarket) recommendation = 'Kleine Testmenge';
-      else recommendation = 'Nicht kaufen';
-      return { ...row, share, allocatedTotal: roundMoney(allocatedTotal), landedUnitCost: roundMoney(landedUnitCost), pricing, expectedProfit: roundMoney(expectedProfit), expectedRoi, recommendation };
+      let recommendation = 'Preisdaten fehlen';
+      let decisionReason = 'Für diese Druckvariante ist noch kein kurzfristiger Marktwert gespeichert.';
+      if (row.enabled === false || !row.businessQuantity) {
+        recommendation = 'Nicht geschäftlich';
+        decisionReason = 'Diese Position ist nicht für den Geschäftsbestand vorgesehen.';
+      } else if (!pricing.suggestedSell) {
+        recommendation = 'Preisdaten fehlen';
+      } else if (landedUnitCost > pricing.maxBuy) {
+        recommendation = 'Nicht kaufen';
+        decisionReason = `Der vollständige EK liegt über der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+      } else if (landedUnitCost <= pricing.maxBuy * 0.85) {
+        recommendation = 'Sehr guter EK';
+        decisionReason = `Der vollständige EK liegt deutlich unter der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+      } else if (landedUnitCost <= pricing.maxBuy) {
+        recommendation = 'Lohnt sich';
+        decisionReason = `Der vollständige EK liegt innerhalb der sicheren Kaufgrenze von ${pricing.maxBuy.toFixed(2)} €.`;
+      } else {
+        recommendation = 'Knapp prüfen';
+        decisionReason = 'Preis, Sprache, Zustand und Versand sollten vor dem Kauf noch einmal geprüft werden.';
+      }
+      return { ...row, share, allocatedTotal: roundMoney(allocatedTotal), landedUnitCost: roundMoney(landedUnitCost), pricing, expectedProfit: roundMoney(expectedProfit), expectedRoi, recommendation, decisionReason };
     });
     const businessLines = lines.filter(row => row.businessQuantity > 0 && row.enabled !== false);
     const businessCost = businessLines.reduce((sum, row) => sum + row.businessQuantity * row.landedUnitCost, 0);
@@ -592,14 +640,36 @@
       const copies = Math.max(1, asNumber(record.copies || record.averageCopies || 1));
       const ownSales = Math.max(0, asNumber(salesByProduct[productId]));
       const stock = Math.max(0, asNumber(stockByProduct[productId]));
-      const trend = asNumber(record.trend);
-      const avg30 = asNumber(record.avg30);
-      const momentum = avg30 > 0 ? Math.max(-1, Math.min(1, (trend - avg30) / avg30)) : 0;
       const risk = String(record.risk || '').toLowerCase();
       const riskPenalty = /hoch|high|ban|reprint/.test(risk) ? 25 : /mittel|medium/.test(risk) ? 10 : 0;
-      const score = Math.max(0, Math.min(100, Math.round(metaRate * 55 + Math.min(20, copies * 5) + Math.min(15, ownSales * 3) + Math.max(-10, momentum * 20) - Math.min(15, stock * 2) - riskPenalty)));
-      const recommendation = riskPenalty >= 25 ? 'Hohes Risiko' : score >= 65 ? 'Stark kaufen' : score >= 50 ? 'Kleine Testmenge' : score >= 30 ? 'Beobachten' : 'Nicht kaufen';
-      return { ...record, score, recommendation, metaRate, stock, ownSales };
+      const shortageSignal = stock <= 0 ? 10 : Math.max(0, 10 - stock * 2);
+      const score = Math.max(0, Math.min(100, Math.round(metaRate * 60 + Math.min(15, copies * 5) + Math.min(15, ownSales * 3) + shortageSignal - riskPenalty)));
+      const offerPrice = Math.max(0, asNumber(record.offerPrice ?? record.maxPrice));
+      const maxBuy = Math.max(0, asNumber(record.maxBuy));
+      let recommendation;
+      let reason;
+      if (riskPenalty >= 25) {
+        recommendation = 'Hohes Risiko';
+        reason = 'Banlist- oder Reprint-Risiko ist als hoch markiert.';
+      } else if (offerPrice > 0 && maxBuy > 0) {
+        recommendation = offerPrice <= maxBuy * 0.85 ? 'Sehr guter EK' : offerPrice <= maxBuy ? 'Lohnt sich' : 'Nicht kaufen';
+        reason = offerPrice <= maxBuy
+          ? `Das konkrete Angebot liegt innerhalb der sicheren Kaufgrenze von ${maxBuy.toFixed(2)} €.`
+          : `Das konkrete Angebot liegt über der sicheren Kaufgrenze von ${maxBuy.toFixed(2)} €.`;
+      } else if (score >= 65) {
+        recommendation = 'Hohe Nachfrage';
+        reason = 'Starkes Nachfrage-Signal; vor dem Kauf muss noch ein konkreter Angebotspreis geprüft werden.';
+      } else if (score >= 50) {
+        recommendation = 'Testbestand';
+        reason = 'Die Nachfrage rechtfertigt höchstens eine kleine Testmenge zum passenden Einkaufspreis.';
+      } else if (score >= 30) {
+        recommendation = 'Beobachten';
+        reason = 'Das Nachfrage-Signal ist noch nicht stark genug für eine Kaufentscheidung.';
+      } else {
+        recommendation = 'Niedrige Nachfrage';
+        reason = 'Die vorhandenen Nachfrage- und Verkaufsdaten rechtfertigen aktuell keinen Zukauf.';
+      }
+      return { ...record, sourceReason:record.reason || '', score, recommendation, reason, metaRate, stock, ownSales, offerPrice };
     }).sort((a, b) => b.score - a.score || String(a.name || '').localeCompare(String(b.name || '')));
   }
 

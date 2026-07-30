@@ -903,7 +903,7 @@
     // Preisformel. So werden automatisch gesetzte Grenzen nicht anschließend
     // von einer zweiten Berechnung mit leicht anderen Rundungen überschrieben.
     const automaticTargets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(product,cmPricingSettings());
-    const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,targetRoi,maxByProfit,maxByRoi,maxBuy}=automaticTargets;
+    const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,targetRoi,maxByProfit,maxByRoi,maxBuy,marketReferenceSource,historicalReference}=automaticTargets;
     const isCostCovering = netBeforeBuy > 0;
     const costShortfall = isCostCovering ? 0 : Math.abs(netBeforeBuy);
     const profitAtMarket = marketBuy > 0 ? netBeforeBuy-marketBuy : 0;
@@ -1001,10 +1001,10 @@
         recommendationReason = `Der erwartete Nettoerlös reicht nicht für ${Number(state.settings.minRoi||25)} % Mindest-ROI.`;
       } else if (eligible && marketBuy <= maxBuy*0.85) {
         recommendation = "TOP DEAL";
-        recommendationReason = "Markt-Low liegt deutlich unter dem berechneten Max-EK und erfüllt den Mindest-ROI.";
+        recommendationReason = "Price-Guide Low liegt deutlich unter dem berechneten Max-EK. Vor dem Kauf muss das konkrete Angebot geprüft werden.";
       } else if (eligible) {
         recommendation = "KAUFEN";
-        recommendationReason = "Markt-Low liegt innerhalb des berechneten Max-EK und erfüllt den Mindest-ROI.";
+        recommendationReason = "Price-Guide Low liegt innerhalb des berechneten Max-EK. Vor dem Kauf muss das konkrete Angebot geprüft werden.";
       } else if (marketBuy <= maxBuy*1.08) {
         recommendation = "BEOBACHTEN";
         recommendationReason = "Der Marktpreis liegt knapp über dem berechneten Einkaufslimit.";
@@ -1026,7 +1026,7 @@
       dailyPct, change7Pct, change30Pct,
       score, scoreConfidence, scoreReasons, recommendation, recommendationReason,
       quality, eligible, meetsProfit, meetsRoi, minProfit, minRoi, targetRoi, packaging,
-      low, trend, avg1, avg7, avg30
+      low, trend, avg1, avg7, avg30, marketReferenceSource, historicalReference
     };
   }
 
@@ -2573,7 +2573,7 @@
           <div class="cm-result-section"><h4>Echte Preisentwicklung aus Importhistorie</h4><div class="cm-result-metrics cm-result-metrics-3">${deltaMetric("Δ 1 Tag",delta1)}${deltaMetric("Δ 7 Tage",delta7)}${deltaMetric("Δ 30 Tage",delta30)}</div></div>
           <div class="cm-result-section"><h4>Einkaufs- und Verkaufsrechnung</h4><div class="cm-result-metrics cm-result-metrics-3">
             <div class="cm-result-metric"><span>Berechnungs-EK</span><strong>${calc.marketBuy>0?money(calc.marketBuy):"–"}</strong><small>Quelle: ${escapeHtml(calc.marketBuySource)}</small></div>
-            <div class="cm-result-metric"><span>Empfohlener VK</span><strong>${cmAnalysisMoney(calc.recommendedSell)}</strong><small>Gewichtet aus Trend, Ø 7 und Ø 30</small></div>
+            <div class="cm-result-metric"><span>Kurzfristiger Markt-VK</span><strong>${cmAnalysisMoney(calc.recommendedSell)}</strong><small>${escapeHtml(calc.marketReferenceSource||"vorsichtige Price-Guide-Referenz")}</small></div>
             <div class="cm-result-metric"><span>Sicherheits-VK</span><strong>${cmAnalysisMoney(calc.safeSell)}</strong><small>${Number(state.settings.safetyPercent||0)} % Sicherheitsabschlag</small></div>
             <div class="cm-result-metric"><span>Gebühren + Verpackung</span><strong>${cmAnalysisMoney(calc.feeAmount+calc.packaging)}</strong><small>${Number(state.settings.feePercent||0)} % Gebühr · ${money(calc.packaging)} anteilige Verpackung</small></div>
             <div class="cm-result-metric ${calc.isCostCovering?"":"cm-metric-critical"}"><span>Break-even-EK</span><strong class="${calc.isCostCovering?"":"money-negative"}">${calc.isCostCovering?cmAnalysisMoney(cmFloorMoney(calc.netBeforeBuy)):"Nicht kostendeckend"}</strong><small>${calc.isCostCovering?"Maximaler EK ohne Gewinn":"Fehlbetrag vor Karteneinkauf: "+money(calc.costShortfall)}</small></div>

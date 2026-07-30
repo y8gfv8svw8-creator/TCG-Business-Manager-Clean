@@ -1,0 +1,28 @@
+QA-Bericht TCG Business Manager 6.3.0
+
+Automatische Prüfungen
+- JavaScript-Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Automatik- und Oberflächendateien: BESTANDEN
+- Vollständige Testsuite: 62 von 62 Tests BESTANDEN
+- SQLite-Migration einer älteren Datenbank inklusive Sicherung: BESTANDEN
+- Deutsche/englische Suche und Ausgabe aller Cardmarket-Druckvarianten: BESTANDEN
+- Warenkorbanalyse mit klarer positiver und negativer Kaufentscheidung: BESTANDEN
+- Preisfall Shizuku: Trend wird nicht als aktueller VK übernommen: BESTANDEN
+- Nachfrage-Radar trennt Nachfrage-Signal und konkrete Kaufentscheidung: BESTANDEN
+- Bestehende Reservierungs-, Bestands-, Einkaufs-, Verkaufs- und Kostenlogik: BESTANDEN
+
+Prüfung mit einer Kopie der aktuellen Benutzerdaten
+- Die vier gezeigten Warenkorbpositionen erhalten wieder gespeicherte Price-Guide-Werte.
+- Für alle vier Positionen werden Markt-VK, sichere Kaufgrenze und "Nicht kaufen" ausgegeben,
+  weil der vollständige EK jeweils oberhalb der sicheren Kaufgrenze liegt.
+- Die echte Benutzerdatenbank wurde während dieser Prüfung nicht verändert.
+
+Hinweis zu fehlenden Cardmarket-IDs
+- Die archivierten Bestandsdateien enthalten für die 31 betroffenen Bestandskarten exakte
+  Cardmarket-Variantenlinks, aber in diesen Exportzeilen keine Produkt-ID.
+- Deshalb wird keine ID geraten. Version 6.3.0 zeigt jeden Kandidaten mit Prüflink und erlaubt
+  anschließend die direkte Auswahl über die bestätigte numerische CM-ID.
+
+Veröffentlichungsprüfung
+- Windows-Installer 6.3.0 erfolgreich erstellt und auf Existenz geprüft: BESTANDEN
+- Abschließender Sichttest bleibt beim Benutzer nach der Installation, da dabei bewusst
+  die echte lokale Oberfläche und die eigenen Daten verwendet werden.

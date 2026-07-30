@@ -107,15 +107,16 @@ test('warnt vor Inseraten unter Einstand und fallenden Watchlist-Preisen', () =>
   assert.equal(alerts.find(alert=>alert.type==='Preisrückgang').searchTerm,'456');
 });
 
-test('berechnet automatische Max-EK- und Ziel-VK-Werte mit einheitlicher Rundung', () => {
+test('berechnet kurzfristige Max-EK- und Markt-VK-Werte ohne Trend als Verkaufspreis zu behandeln', () => {
   const settings = { safetyPercent: 5, feePercent: 5, packaging: 0.20, minProfit: 1, minRoi: 30 };
   const first = automation.calculateAutomaticPriceTargets({ low: 8, trend: 10, avg7: 9, avg30: 8 }, settings);
   const updated = automation.calculateAutomaticPriceTargets({ low: 8, trend: 12, avg7: 10, avg30: 9 }, settings);
 
-  assert.equal(first.recommendedSell, 9.25);
-  assert.equal(first.maxBuy, 6.26);
-  assert.ok(updated.recommendedSell > first.recommendedSell);
-  assert.ok(updated.maxBuy > first.maxBuy);
+  assert.equal(first.recommendedSell, 8);
+  assert.equal(first.maxBuy, 5.4);
+  assert.equal(updated.recommendedSell, 8);
+  assert.equal(updated.maxBuy, first.maxBuy);
+  assert.ok(updated.historicalReference > first.historicalReference);
 });
 
 test('normalisiert Cardmarket-Wantlist-Zeilen und erhält eigene Historie beim Folgeimport', () => {
@@ -389,7 +390,7 @@ test('VK-Vorschläge bleiben am Markt und warnen, wenn der Ziel-ROI dort nicht e
   const result=automation.calculateOwnedCardPriceTargets({low:2,trend:2.2,avg7:2.1,avg30:2,cost:5},settings);
   assert.ok(result.priceFloor>result.marketSell);
   assert.equal(result.suggestedSell,result.marketSell);
-  assert.equal(result.suggestedSell,2.13);
+  assert.equal(result.suggestedSell,2);
   assert.equal(result.profitableAtMarket,false);
   assert.ok(result.expectedProfit<0);
 });
@@ -399,7 +400,8 @@ test('günstige Karten erhalten keinen künstlichen VK durch einen festen Mindes
     {low:0.02,trend:0.44,avg1:0.38,avg7:0.40,avg30:0.41,cost:0.337649},
     {feePercent:5,packaging:0.04,minRoi:25,targetRoi:30,safetyPercent:5,minProfit:0.75}
   );
-  assert.equal(result.suggestedSell,0.42);
+  assert.equal(result.suggestedSell,0.16);
+  assert.equal(result.lowOutlier,true);
   assert.equal(result.targetRoiPrice,0.51);
   assert.equal(result.profitableAtMarket,false);
 });
@@ -465,7 +467,7 @@ test('Warenkorbanalyse trennt private Karten und verteilt Nebenkosten', () => {
   assert.equal(result.lines[1].landedUnitCost,3);
   const withoutMarket=automation.analyzePurchaseDraft([{quantity:1,unitPrice:1}],{}, {feePercent:5,packaging:0.04,minRoi:25,targetRoi:30});
   assert.equal(withoutMarket.lines[0].pricing.suggestedSell,0);
-  assert.equal(withoutMarket.lines[0].recommendation,'Beobachten');
+  assert.equal(withoutMarket.lines[0].recommendation,'Preisdaten fehlen');
 });
 
 test('Einkaufsleistung trennt realisierten Gewinn und gebundenes Kapital', () => {
@@ -486,6 +488,26 @@ test('Nachfrage-Radar bewertet Häufigkeit, Eigenverkäufe, Bestand und Risiko',
     {productId:'2',name:'Riskant',appearances:10,tournaments:10,copies:3,risk:'high reprint'}
   ],{stockByProduct:{1:0,2:0},salesByProduct:{1:2,2:0}});
   assert.equal(rows[0].name,'Staple');
-  assert.equal(rows[0].recommendation,'Stark kaufen');
+  assert.equal(rows[0].recommendation,'Hohe Nachfrage');
   assert.equal(rows.find(row=>row.name==='Riskant').recommendation,'Hohes Risiko');
+});
+
+test('Shizuku wird nahe am kurzfristigen Angebotsniveau statt am Trend bewertet', () => {
+  const pricing=automation.calculateAutomaticPriceTargets(
+    {low:1.15,trend:1.80,avg1:1.77,avg7:1.65,avg30:1.76},
+    {feePercent:5,packaging:0.03,safetyPercent:5,minRoi:25}
+  );
+  assert.equal(pricing.recommendedSell,1.21);
+  assert.equal(pricing.maxBuy,0.84);
+  assert.match(pricing.marketReferenceSource,/Low/);
+});
+
+test('Warenkorb liefert je Karte eine klare Kaufentscheidung', () => {
+  const analysis=automation.analyzePurchaseDraft([
+    {id:'good',productId:'1',quantity:1,unitPrice:0.50,low:1.15,avg1:1.22,businessQuantity:1},
+    {id:'bad',productId:'2',quantity:1,unitPrice:1.70,low:1.00,avg1:1.99,businessQuantity:1}
+  ],{},{feePercent:5,packaging:0.03,safetyPercent:5,minRoi:25});
+  assert.equal(analysis.lines[0].recommendation,'Sehr guter EK');
+  assert.equal(analysis.lines[1].recommendation,'Nicht kaufen');
+  assert.match(analysis.lines[1].decisionReason,/sicheren Kaufgrenze/);
 });

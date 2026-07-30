@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.2.1</title>
+  <title>TCG Business Manager 6.3.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.2.1 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.3.0 · SQLite</div>
         </div>
       </div>
 
@@ -433,15 +433,17 @@
           <label class="buying-paste-label">Positionen einfügen <small>Eine Zeile je Karte: Produkt-ID; Kartenname; Menge; Stückpreis; Sprache; Zustand</small><textarea id="purchaseCartPaste" rows="5" placeholder="889955; Requiem des Unterweltlerschmieds; 2; 0,75; DE; NM"></textarea></label>
           <div class="row-actions buying-actions"><button id="analyzePurchaseCartBtn" class="primary" type="button">Warenkorb analysieren</button><button id="convertPurchaseDraftBtn" class="secondary" type="button">Als Einkauf übernehmen</button></div>
           <div id="purchaseDraftSummary" class="collection-summary"></div>
-          <div class="table-wrap"><table><thead><tr><th>Geschäft</th><th>Privat</th><th>Karte / Druckvariante</th><th>Menge</th><th>Angebot</th><th>Vollständiger EK</th><th>CM Low / Trend</th><th>VK</th><th>Gewinn / ROI</th><th>Empfehlung</th></tr></thead><tbody id="purchaseDraftTable"><tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr></tbody></table></div>
+          <p class="market-estimate-note"><strong>Wichtig:</strong> Ohne Cardmarket-API ist der Markt-VK eine vorsichtige Schätzung aus dem täglichen Price Guide. Trend sowie 7-/30-Tage-Werte sind nur Verlaufshinweise. Ein echtes API-Angebot hat später automatisch Vorrang.</p>
+          <div class="table-wrap"><table><thead><tr><th>Geschäft</th><th>Privat</th><th>Karte / Druckvariante</th><th>Menge</th><th>Angebot</th><th>Vollständiger EK</th><th>Geschätzter Markt-VK</th><th>Sichere Kaufgrenze</th><th>Gewinn / ROI</th><th>Klare Entscheidung</th></tr></thead><tbody id="purchaseDraftTable"><tr><td colspan="10" class="empty">Noch keinen Warenkorb analysiert.</td></tr></tbody></table></div>
         </article>
 
         <article class="panel buying-panel demand-panel">
           <div class="panel-head"><div><h2>Nachfrage- & Shop-Radar</h2><small>Verbindet Deck-/Turnierhäufigkeit mit Price Guide, Verkäufen und Bestand. Quelle und Datum bleiben gespeichert.</small></div><div class="row-actions"><button id="refreshStaplesBtn" class="secondary" type="button">Aktuelle TCG-Staples laden</button><label class="secondary file-label">Meta-Datei importieren<input id="demandRadarFile" type="file" accept=".csv,.json" hidden /></label></div></div>
           <div class="info">Die öffentliche Kartendatenquelle liefert Karten, Sets, Archetypen, Staple- und Banlist-Informationen, aber keine vollständigen Turnierergebnisse. Für echte Meta-Häufigkeiten importierst du eine CSV/JSON-Auswertung aus deiner Turnierquelle; der Manager kennzeichnet die Herkunft.</div>
-          <div class="filter-panel"><label>Kategorie<select id="demandCategoryFilter"><option value="">Alle Kategorien</option><option>Meta-Chance</option><option>Staple</option><option>Deck-Core</option><option>Basket-Add-on</option><option>Spekulativ</option></select></label><label>Empfehlung<select id="demandRecommendationFilter"><option value="">Alle Empfehlungen</option><option>Stark kaufen</option><option>Kleine Testmenge</option><option>Beobachten</option><option>Nicht kaufen</option><option>Hohes Risiko</option></select></label><label>Budget je Exemplar (€)<input id="demandBudgetFilter" type="number" min="0" step="0.01" placeholder="ohne Grenze" /></label><button id="demandFilterReset" class="secondary filter-reset" type="button">Filter zurücksetzen</button></div>
+          <div class="filter-panel"><label>Kategorie<select id="demandCategoryFilter"><option value="">Alle Kategorien</option><option>Meta-Chance</option><option>Staple</option><option>Deck-Core</option><option>Basket-Add-on</option><option>Spekulativ</option></select></label><label>Signal<select id="demandRecommendationFilter"><option value="">Alle Signale</option><option>Hohe Nachfrage</option><option>Testbestand</option><option>Beobachten</option><option>Niedrige Nachfrage</option><option>Sehr guter EK</option><option>Lohnt sich</option><option>Nicht kaufen</option><option>Hohes Risiko</option></select></label><label>Budget je Exemplar (€)<input id="demandBudgetFilter" type="number" min="0" step="0.01" placeholder="ohne Grenze" /></label><button id="demandFilterReset" class="secondary filter-reset" type="button">Filter zurücksetzen</button></div>
           <div id="demandRadarSummary" class="collection-summary"></div>
-          <div class="table-wrap"><table><thead><tr><th>Karte / genaue Druckvariante</th><th>Kategorie</th><th>Meta-Signal</th><th>Bestand / Verkäufe</th><th>CM Low / Trend</th><th>Max-EK / VK</th><th>Score</th><th>Empfehlung / Grund</th></tr></thead><tbody id="demandRadarTable"><tr><td colspan="8" class="empty">Noch keine Nachfragedaten importiert.</td></tr></tbody></table></div>
+          <p class="market-estimate-note"><strong>Nachfrage ist noch keine Kaufempfehlung:</strong> „Hohe Nachfrage“ bedeutet nur, dass sich die Karte grundsätzlich verkaufen könnte. „Lohnt sich“ erscheint erst, wenn zusätzlich ein konkreter Angebotspreis innerhalb der sicheren Kaufgrenze vorliegt.</p>
+          <div class="table-wrap"><table><thead><tr><th>Karte / genaue Druckvariante</th><th>Kategorie</th><th>Nachfrage-Signal</th><th>Bestand / Verkäufe</th><th>Geschätzter Markt-VK</th><th>Sichere Kaufgrenze</th><th>Nachfrage-Score</th><th>Einordnung / Grund</th></tr></thead><tbody id="demandRadarTable"><tr><td colspan="8" class="empty">Noch keine Nachfragedaten importiert.</td></tr></tbody></table></div>
           <p id="demandRadarSource" class="muted"></p>
         </article>
       </section>
@@ -509,7 +511,7 @@
         <article class="panel cm-search-panel">
           <div class="panel-head"><div><h2>Marktanalyse – alle Kartenvarianten</h2><p class="muted">Suche im vollständigen lokalen Produktkatalog. Ergebnisse zeigen Marktpreis, Entwicklung, eigenen Einkauf/Verkauf, Bestand und Empfehlung.</p></div><span id="cmSearchSummary" class="muted"></span></div>
           <div class="toolbar"><input id="cmSearch" class="search cm-search" placeholder="Kartenname, Produkt-ID, Expansion oder Seltenheit suchen …" /></div>
-          <div class="table-wrap cm-results-wrap"><table><thead><tr><th>Karte / Variante</th><th>Markt</th><th>Δ vorheriger Import</th><th>Trend–Ø 7</th><th>Trend–Ø 30</th><th>Empf. VK</th><th>Max-EK</th><th>Gewinn</th><th>Bestand / reserviert</th><th>Bewertung</th></tr></thead><tbody id="cmSearchResults"><tr><td colspan="10" class="empty">Mindestens zwei Zeichen eingeben.</td></tr></tbody></table></div>
+          <div class="table-wrap cm-results-wrap"><table><thead><tr><th>Karte / Variante</th><th>Price Guide</th><th>Δ vorheriger Import</th><th>Trend–Ø 7</th><th>Trend–Ø 30</th><th>Geschätzter Markt-VK</th><th>Sichere Kaufgrenze</th><th>Gewinn</th><th>Bestand / reserviert</th><th>Bewertung</th></tr></thead><tbody id="cmSearchResults"><tr><td colspan="10" class="empty">Mindestens zwei Zeichen eingeben.</td></tr></tbody></table></div>
         </article>
 
         <article id="cmProductDetails" class="panel cm-product-details"><div class="empty">Eine Kartenvariante über „Details“ auswählen, um Preisverlauf und eigene Kennzahlen zu sehen.</div></article>

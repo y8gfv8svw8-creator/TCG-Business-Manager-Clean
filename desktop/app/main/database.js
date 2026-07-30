@@ -1094,6 +1094,7 @@ class TcgDatabase {
       const latestMarket = marketRows[0] || {};
       const referenceFor = row => {
         return businessAutomation.calculateAutomaticPriceTargets({
+          liveOffer: row.source_id === 'cardmarket_api' ? row.low_price : null,
           low: row.low_price,
           trend: row.trend_price,
           avg1: row.avg_1,
@@ -1101,7 +1102,15 @@ class TcgDatabase {
           avg30: row.avg_30
         }, {...settings, packaging, minProfit:0}).recommendedSell;
       };
-      const marketReference = referenceFor(latestMarket);
+      const latestTargets = businessAutomation.calculateAutomaticPriceTargets({
+        liveOffer: latestMarket.source_id === 'cardmarket_api' ? latestMarket.low_price : null,
+        low: latestMarket.low_price,
+        trend: latestMarket.trend_price,
+        avg1: latestMarket.avg_1,
+        avg7: latestMarket.avg_7,
+        avg30: latestMarket.avg_30
+      }, {...settings, packaging, minProfit:0});
+      const marketReference = latestTargets.recommendedSell;
       const dailyReferences = [];
       const seenDates = new Set();
       for (const row of marketRows) {
@@ -1152,7 +1161,8 @@ class TcgDatabase {
       const explanation = [];
       if (!exactVariant) explanation.push('Druckvariante ist noch nicht vollstaendig belegt');
       if (volatility > 0) explanation.push(`Marktschwankung ${volatility.toFixed(1)} % wurde als Risikopuffer beruecksichtigt`);
-      if (marketReference > 0) explanation.push(`Cardmarket-Marktwert aus ${marketSampleCount} Quellen-/Tagesständen`);
+      if (marketReference > 0) explanation.push(`${latestTargets.marketReferenceSource} als kurzfristiger Markt-VK; ${marketSampleCount} Quellen-/Tagesstände vorhanden`);
+      if (numberValue(latestMarket.trend_price) > 0) explanation.push('Trend sowie 7-/30-Tage-Werte dienen nur als Verlaufshinweis');
       explanation.push(`Verpackung ${packaging.toFixed(2)} € je Karte (${packagingAllocation.source === 'actual' ? 'aus echten Bestellungen' : `auf ${packagingAllocation.averageCardsPerOrder} Karten verteilt`})`);
       if (buySampleCount) explanation.push(`${buySampleCount} eigene Einkaufseinheit(en) berücksichtigt`);
       if (sellSampleCount) explanation.push(`${sellSampleCount} realisierte Verkaufseinheit(en) berücksichtigt`);
@@ -1166,6 +1176,16 @@ class TcgDatabase {
         englishName: String(product.english_name || ''),
         setName: String(product.set_name || tradeIdentity.set_name || ''),
         rarity: String(product.rarity || tradeIdentity.rarity || ''),
+        priceDate: String(latestMarket.observed_date || ''),
+        priceSource: String(latestMarket.source_id || ''),
+        liveOffer: latestMarket.source_id === 'cardmarket_api' ? roundedMoney(latestMarket.low_price) : 0,
+        low: roundedMoney(latestMarket.low_price),
+        trend: roundedMoney(latestMarket.trend_price),
+        avg1: roundedMoney(latestMarket.avg_1),
+        avg7: roundedMoney(latestMarket.avg_7),
+        avg30: roundedMoney(latestMarket.avg_30),
+        marketReferenceSource: latestTargets.marketReferenceSource,
+        historicalReference: roundedMoney(latestTargets.historicalReference),
         recommendedBuy: roundedMoney(recommendedBuy),
         priceFloor: roundedMoney(priceFloor),
         quickSell: roundedMoney(quickSell),
@@ -1176,7 +1196,7 @@ class TcgDatabase {
         buySampleCount, sellSampleCount, marketSampleCount,
         expectedProfit: roundedMoney(expectedProfit), expectedRoi: Math.round(expectedRoi * 1000) / 10,
         profitableAtMarket,
-        confidenceScore, confidenceLevel, volatility: roundedMoney(volatility), modelVersion: 'v3-market-roi', explanation,
+        confidenceScore, confidenceLevel, volatility: roundedMoney(volatility), modelVersion: 'v4-short-term-market', explanation,
         calculatedAt
       };
       cache.run(

@@ -1,0 +1,19 @@
+QA-Bericht TCG Business Manager 6.4.1
+
+Prüfbereiche
+- Syntax- und Paketprüfung: BESTANDEN
+- Automatische Funktionstests (64/64): BESTANDEN
+- Positionsgenaue Zuordnung von zwei unterschiedlichen Bestandskarten: BESTANDEN
+- Schutz vor doppelter Verwendung desselben Bestandsexemplars: BESTANDEN
+- Windows-Installer 6.4.1 erfolgreich erstellt: BESTANDEN
+- Oberflächentest des gebauten Programms: TESTUMGEBUNG BLOCKIERT (Windows-Grafikprozess konnte nicht gestartet werden)
+
+Ersatzprüfung für die geänderte Funktion
+- Positionslogik als isolierter Regressionstest mit zwei unterschiedlichen Karten: BESTANDEN
+- Automatische Auswahl einer unpassenden Karte ausgeschlossen: BESTANDEN
+- Bewusste manuelle abweichende Zuordnung weiterhin möglich: BESTANDEN
+
+Datenintegrität
+- Keine bestehende Verkaufs- oder Bestandszeile wird beim Öffnen der Zuordnung verändert.
+- Änderungen erfolgen erst nach „Zuordnung speichern“.
+- Nicht mehr verwendete Zuordnungen werden erst nach erfolgreicher Gesamtprüfung freigegeben.

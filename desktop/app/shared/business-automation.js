@@ -564,6 +564,20 @@
     return { selected: available.slice(0, wanted), missing: Math.max(0, wanted - available.length), candidates: available };
   }
 
+  function selectSaleAllocationDefault({ line = {}, draftId = '', explicitId = '', linkedItems = [], automaticItems = [], candidates = [], claimedIds = [] } = {}) {
+    const productId = String(line.productId || '').trim();
+    const candidateIds = new Set((candidates || []).map(item => String(item?.id || '')).filter(Boolean));
+    const claimed = claimedIds instanceof Set ? claimedIds : new Set(claimedIds || []);
+    const matchingIds = items => (items || [])
+      .filter(item => productId && String(item?.productId || '').trim() === productId)
+      .map(item => String(item.id || ''));
+    // draftId und explicitId stammen aus einer bewussten Auswahl. Alle weiteren
+    // Kandidaten dürfen nur automatisch gewählt werden, wenn die Produkt-ID passt.
+    return [draftId, explicitId, ...matchingIds(linkedItems), ...matchingIds(automaticItems), ...matchingIds(candidates)]
+      .map(value => String(value || ''))
+      .find(id => id && candidateIds.has(id) && !claimed.has(id)) || '';
+  }
+
   function analyzePurchaseDraft(rows = [], costs = {}, settings = {}) {
     const normalized = (rows || []).map((row, index) => {
       const quantity = wholeQuantity(row.quantity || 1);
@@ -1435,6 +1449,7 @@
     planPurchaseReceipt,
     purchaseOwnershipTotals,
     selectInventoryForSale,
+    selectSaleAllocationDefault,
     analyzePurchaseDraft,
     summarizePurchasePerformance,
     scoreDemandRadar,

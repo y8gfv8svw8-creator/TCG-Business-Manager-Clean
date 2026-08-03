@@ -3811,7 +3811,9 @@ function renderSaleAllocationDialog(sale){
   const lines=Array.isArray(sale.items)?sale.items:[];
   if(!lines.length){document.getElementById('saleAllocationContent').innerHTML='<div class="warning">Dieser Verkauf enthält noch keine kartengenauen Positionen. Füge die Karten zuerst beim Verkauf hinzu oder importiere die detaillierte Cardmarket-Bestellung.</div>';}
   else{
-    const currentlyLinked=[...(sale.itemIds||[])];const claimedDefaults=new Set();
+    const currentlyLinked=[...(sale.itemIds||[])];
+    const currentlyLinkedItems=currentlyLinked.map(id=>state.inventory.find(item=>item.id===id)).filter(Boolean);
+    const claimedDefaults=new Set();
     const rows=[];
     lines.forEach((line,lineIndex)=>{
       const quantity=Math.max(1,Math.round(Number(line.quantity||1)));
@@ -3820,9 +3822,11 @@ function renderSaleAllocationDialog(sale){
       const strategy=state.settings.saleAllocationStrategy||"fifo";
       const automatic=strategy==="manual"?[]:TcgBusinessAutomation.selectInventoryForSale(state.inventory,{...line,strategy},quantity).selected;
       for(let unit=0;unit<quantity;unit++){
-        const candidateIds=new Set(candidates.map(item=>item.id));
         const draftKey=`${lineIndex}:${unit}`;
-        const selectedId=[saleAllocationDraftSelections.get(draftKey),explicit[unit],...currentlyLinked,...automatic.map(item=>item.id),...candidates.map(item=>item.id)].find(id=>id&&candidateIds.has(id)&&!claimedDefaults.has(id))||'';
+        // Bei eingeblendeten Fremdvarianten niemals irgendeine Bestandskarte automatisch
+        // vorauswählen. Nur eine bewusste Auswahl des Benutzers darf die Identität einer
+        // Verkaufsposition ändern.
+        const selectedId=TcgBusinessAutomation.selectSaleAllocationDefault({line,draftId:saleAllocationDraftSelections.get(draftKey),explicitId:explicit[unit],linkedItems:currentlyLinkedItems,automaticItems:automatic,candidates,claimedIds:claimedDefaults});
         if(selectedId)claimedDefaults.add(selectedId);
         if(selectedId)saleAllocationDraftSelections.set(draftKey,selectedId);
         const options=candidates.map(item=>{const matchingProduct=cleanProductId(line.productId)&&cleanProductId(item.productId)===cleanProductId(line.productId);const names=cardDisplayNames(item);return `<option value="${escapeHtml(item.id)}" ${item.id===selectedId?'selected':''}>${matchingProduct?'✓ Passend':'Andere Bestandskarte'} · ${escapeHtml(names.primary)} · ${escapeHtml([item.setName||item.set,item.collectorNumber,item.rarity,`CM ${item.productId||'fehlt'}`].filter(Boolean).join(' · '))} · ${escapeHtml(fmtDate(item.purchaseDate)||'-')} · EK ${money(item.cost)}</option>`;}).join('');

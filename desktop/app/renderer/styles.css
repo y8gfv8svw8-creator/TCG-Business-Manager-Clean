@@ -552,7 +552,7 @@ html[data-theme="dark"] .repair-section,html[data-theme="dark"] .repair-row{colo
 @media(max-width:900px){.card-repair-toolbar{grid-template-columns:1fr 1fr}.card-repair-toolbar input,.card-repair-toolbar button{grid-column:1/-1}}
 @media(max-width:700px){.card-repair-toolbar{display:flex;flex-direction:column;align-items:stretch}.repair-row{align-items:flex-start;flex-direction:column}.repair-row .row-actions,.repair-row button{width:100%}.repair-row .row-actions{display:grid}}
 
-/* Version 6.4.0 – Sammelerfassung, direkte CM-ID-Zuordnung und flexible Bestandszuweisung */
+/* Version 6.4.1 – stabile positionsgenaue Bestandszuweisung */
 .purchasing-center-panel{margin-bottom:18px;border-color:#9ebbd0}
 .wantlist-import-note{margin:4px 0 14px;line-height:1.45}
 .wantlist-table-wrap{max-height:64vh}

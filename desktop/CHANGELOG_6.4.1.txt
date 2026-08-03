@@ -1,0 +1,7 @@
+TCG Business Manager 6.4.1 – stabile Bestandszuordnung
+
+- Bereits zugeordnete Bestandskarten bleiben bei ihrer passenden Verkaufsposition.
+- Das Einblenden aller Bestandskarten wählt keine unpassende Karte mehr automatisch aus.
+- Eine abweichende Karte wird nur noch nach einer bewussten manuellen Auswahl übernommen.
+- Jede physische Bestandskarte kann weiterhin nur einer Verkaufsposition zugeordnet werden.
+- Ein zusätzlicher Oberflächentest prüft zwei unterschiedliche Karten in derselben Bestellung.

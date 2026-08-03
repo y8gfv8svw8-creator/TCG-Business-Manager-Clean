@@ -454,6 +454,18 @@ test('Verkaufszuordnung unterstützt FIFO sowie niedrigsten und höchsten EK', (
   assert.equal(automation.selectInventoryForSale(inventory,{productId:'1',strategy:'highest-cost'},1).selected[0].id,'expensive');
 });
 
+test('Bestandszuordnung vertauscht unterschiedliche Verkaufspositionen nicht', () => {
+  const cardA={id:'asset-a',productId:'100',name:'Karte A'};
+  const cardB={id:'asset-b',productId:'200',name:'Karte B'};
+  const candidates=[cardA,cardB];
+  const first=automation.selectSaleAllocationDefault({line:{productId:'100'},linkedItems:[cardA,cardB],candidates});
+  const second=automation.selectSaleAllocationDefault({line:{productId:'200'},linkedItems:[cardA,cardB],candidates,claimedIds:new Set([first])});
+  assert.equal(first,'asset-a');
+  assert.equal(second,'asset-b');
+  assert.equal(automation.selectSaleAllocationDefault({line:{productId:'999'},linkedItems:[cardA,cardB],candidates}), '');
+  assert.equal(automation.selectSaleAllocationDefault({line:{productId:'999'},draftId:'asset-b',linkedItems:[cardA,cardB],candidates}), 'asset-b');
+});
+
 test('Warenkorbanalyse trennt private Karten und verteilt Nebenkosten', () => {
   const result=automation.analyzePurchaseDraft([
     {id:'a',quantity:2,privateQuantity:1,unitPrice:1,low:3,trend:3,avg7:3,avg30:3},

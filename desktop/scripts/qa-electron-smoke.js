@@ -94,6 +94,22 @@ async function main() {
       const createdTestItems=state.inventory.slice(inventoryBefore);
       const batchInventoryCreated=createdTestItems.length===3&&createdTestItems.filter(item=>item.productId==='990001').length===2&&createdTestItems.filter(item=>item.productId==='990002').length===1;
 
+      const stableAllocationSale={id:'qa-stable-sale-'+Date.now(),orderNo:'QA-STABILE-ZUORDNUNG',status:'Offen',itemIds:[createdTestItems[0].id,createdTestItems[2].id],items:[
+        {productId:'990001',name:'Sammeltest A',quantity:1,unitPrice:1,matchedItemIds:[]},
+        {productId:'990002',name:'Sammeltest B',quantity:1,unitPrice:1,matchedItemIds:[]}
+      ]};
+      createdTestItems[0].saleId=stableAllocationSale.id;createdTestItems[0].status='Reserviert';
+      createdTestItems[2].saleId=stableAllocationSale.id;createdTestItems[2].status='Reserviert';
+      state.sales.push(stableAllocationSale);openSaleAllocation(stableAllocationSale.id);
+      const stableToggle=document.getElementById('saleAllocationShowAll');stableToggle.checked=true;stableToggle.dispatchEvent(new Event('change',{bubbles:true}));
+      const stableSelects=[...document.querySelectorAll('#saleAllocationContent [data-sale-allocation]')];
+      const allocationsStayWithTheirLines=stableSelects.length===2&&stableSelects[0].value===createdTestItems[0].id&&stableSelects[1].value===createdTestItems[2].id;
+      stableAllocationSale.itemIds=[];stableAllocationSale.items.forEach(item=>item.matchedItemIds=[]);
+      createdTestItems[0].status='Im Bestand';delete createdTestItems[0].saleId;
+      createdTestItems[2].status='Im Bestand';delete createdTestItems[2].saleId;
+      state.sales=state.sales.filter(sale=>sale.id!==stableAllocationSale.id);
+      document.getElementById('saleAllocationDialog').close();
+
       const allocationSale={id:'qa-sale-'+Date.now(),orderNo:'QA-ALLE-KARTEN',status:'Offen',itemIds:[],items:[{productId:'999999',name:'Falsch zugeordnete Testkarte',quantity:1,unitPrice:1,matchedItemIds:[]}]};
       state.sales.push(allocationSale);openSaleAllocation(allocationSale.id);
       const allInventoryToggle=document.getElementById('saleAllocationShowAll');allInventoryToggle.checked=true;allInventoryToggle.dispatchEvent(new Event('change',{bubbles:true}));
@@ -123,6 +139,7 @@ async function main() {
         directProductIdAssignment,
         batchQueued,
         batchInventoryCreated,
+        allocationsStayWithTheirLines,
         allInventoryAssignable,
         mismatchedAllocationRepairsIdentity,
         reportsActive:document.getElementById('view-reports').classList.contains('active'),
@@ -146,7 +163,7 @@ async function main() {
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

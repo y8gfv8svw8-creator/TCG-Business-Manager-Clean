@@ -1,7 +1,7 @@
 {
   "name": "tcg-business-manager",
   "productName": "TCG Business Manager",
-  "version": "6.4.0",
+  "version": "6.4.1",
   "private": true,
   "description": "Lokale SQLite-Warenwirtschaft, Kartenbestand, Finanzanalyse und Marktbeobachtung für den europäischen TCG-Handel.",
   "main": "app/main/main.js",

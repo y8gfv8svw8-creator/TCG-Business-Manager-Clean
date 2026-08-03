@@ -1,0 +1,26 @@
+TCG Business Manager 6.4.0 – schnelle Kartenerfassung und vollständige Bestandszuordnung
+
+Bestand und Privatsammlung
+
+- Beim manuellen Hinzufügen kann jetzt eine Stückzahl angegeben werden.
+- Auch bei mehreren Exemplaren bleibt jede physische Karte als eigener Datensatz nachvollziehbar.
+- Mehrere unterschiedliche Karten lassen sich in einer Sammelliste erfassen und gemeinsam speichern.
+- Stückzahlen in der Sammelliste können vor dem Speichern geändert werden.
+- Einzelne Positionen lassen sich wieder aus der Sammelliste entfernen.
+- Einstand, Sprache, Zustand, Edition, Lagerort und Inseratspreis werden pro erfasster Position übernommen.
+
+Cardmarket-Zuordnung
+
+- Kandidaten mit fehlender Setnummer oder Seltenheit besitzen nun neben dem Cardmarket-Prüflink den Button „Diese CM-ID übernehmen“.
+- Eine bestätigte Produkt-ID kann dadurch direkt ausgewählt werden, ohne sie erneut in das Suchfeld schreiben zu müssen.
+- Die Sicherheitsregel bleibt erhalten: Eine CM-ID wird niemals ungefragt oder nur anhand eines unsicheren Namens übernommen.
+
+Verkaufs- und Bestandszuordnung
+
+- In „Bestandszuordnung prüfen“ kann nun „Alle verfügbaren Bestandskarten anzeigen“ aktiviert werden.
+- Passende Produkt-IDs stehen zuerst und sind als passend gekennzeichnet.
+- Andere freie Bestandskarten werden deutlich als abweichend angezeigt.
+- Wird bewusst eine abweichende Bestandskarte gewählt, werden nach Bestätigung Kartenname, Druckdaten und CM-ID der Verkaufsposition korrigiert.
+- Ein Bestandsexemplar kann weiterhin nicht doppelt zugeordnet werden.
+- Reservierte, verkaufte, stornierte, beschädigte oder in Rückgabe befindliche Karten anderer Vorgänge bleiben geschützt.
+

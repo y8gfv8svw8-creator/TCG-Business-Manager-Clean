@@ -66,6 +66,8 @@ let scannerReviewActive = false;
 let scannerSubmissionQueue = [];
 let scannerSubmissionProcessing = false;
 let scannerDialogSuspended = false;
+let saleAllocationShowAll = false;
+let saleAllocationDraftSelections = new Map();
 
 const views = {
   private: ["Privatsammlung", "Private Karten getrennt vom Geschaeftsbestand verwalten."],
@@ -1414,7 +1416,7 @@ function openCardAssignmentRepair(row){
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction({submitLabel:"Zuordnung übernehmen"});showDialogSafely(document.getElementById("modal"));
   const query=row.record.collectorNumber||row.record.name||row.record.germanName||row.record.englishName||"";
   if(query)setTimeout(()=>renderInventoryCardSearch(query),0);
@@ -2432,7 +2434,7 @@ function assignWantlistVariant(listId,entryId){
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(entry.name)setTimeout(()=>renderInventoryCardSearch(entry.name),0);
 }
@@ -2937,6 +2939,8 @@ function renderSettings() {
 
 function configureModalAction({submitLabel="Speichern",destructive=false}={}) {
   const submit=document.getElementById("modalSubmit");
+  const addAnother=document.getElementById("modalAddAnother");
+  if(addAnother){addAnother.hidden=true;addAnother.onclick=null;}
   if(!submit)return;
   submit.textContent=submitLabel;
   submit.className=destructive?"danger-button":"primary";
@@ -3245,6 +3249,18 @@ async function chooseInventoryVariant(productId,preserveResults=false){
   if(priceInfo)priceInfo.innerHTML=suggestion.recommendedSell?`<strong>Marktbasierter VK-Vorschlag ${money(suggestion.recommendedSell)}</strong><span>${suggestion.quickSell?`Schnellverkauf ${money(suggestion.quickSell)} · `:""}${suggestion.priceFloor?`VK für Ziel-ROI ${money(suggestion.priceFloor)} · `:""}Maximaler sinnvoller EK ${suggestion.recommendedBuy?money(suggestion.recommendedBuy):"noch ohne ausreichende Daten"} · Datenbasis ${escapeHtml({high:"hoch",medium:"mittel",low:"niedrig"}[suggestion.confidence]||suggestion.confidence||"niedrig")}</span>${suggestion.profitableAtMarket===false?'<span class="money-negative">Der aktuelle Marktpreis erreicht den Mindest-ROI nicht. Der Vorschlag wird nicht künstlich erhöht.</span>':""}<button type="button" class="link-button" id="applyInventorySuggestedPrice">Vorschlag als Inseratspreis übernehmen</button>`:`<span>Noch kein belastbarer VK-Vorschlag für diese Druckvariante vorhanden.</span>`;
 }
 
+function handleInventoryProductChoice(event){
+  const direct=event.target.closest("[data-select-inventory-product]");
+  if(direct){chooseInventoryVariant(direct.dataset.selectInventoryProduct);return true;}
+  const confirmed=event.target.closest("[data-confirm-inventory-product]");
+  if(!confirmed)return false;
+  const productId=confirmed.dataset.confirmInventoryProduct;
+  const product=inventoryModalVariants.get(String(productId));
+  if(product)product.explicitProductIdSelection=true;
+  chooseInventoryVariant(productId,true);
+  return true;
+}
+
 function scannerReviewTitle(scan={}){
   if(scan.recognizedProduct)return "Karte und Druckvariante erkannt – bitte kontrollieren";
   if(scan.recognitionMatch?.products?.length)return "Karte erkannt – bitte Druckvariante auswählen";
@@ -3262,10 +3278,10 @@ function renderInventoryProductChoices(products=[],scan=null){
   const target=document.getElementById("inventoryCardResults");if(!target)return;
   const complete=products.filter(product=>scannerProductComplete(product)||product.explicitProductIdSelection);
   const incomplete=products.filter(product=>!complete.includes(product));
-  inventoryModalVariants=new Map(complete.map(product=>[String(product.productId),product]));
+  inventoryModalVariants=new Map(products.map(product=>[String(product.productId),product]));
   const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":scan.recognitionMatch?.reason==="fuzzy-name"?"Ähnlicher Kartenname gefunden":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe, Seltenheit und Edition kontrollieren.</span></div>`:"";
   const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
-  const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} noch nicht eindeutig auswählbar</strong><span>Setnummer oder Seltenheit fehlt in der Quelldatei. Öffne die Kandidaten bei Cardmarket und suche danach hier direkt nach der bestätigten Produkt-ID.</span>${incomplete.slice(0,30).map(product=>`<a class="inventory-product-check" href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(inventoryVariantName(product))} · ${escapeHtml(inventoryVariantSubtitle(product))}</span><strong>CM ${escapeHtml(product.productId)} prüfen ↗</strong></a>`).join("")}</div>`:"";
+  const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} mit unvollständigen Quelldaten</strong><span>Prüfe die Variante bei Cardmarket. Wenn die Produkt-ID stimmt, kannst du sie anschließend direkt übernehmen.</span>${incomplete.slice(0,30).map(product=>`<div class="inventory-product-check"><a href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(inventoryVariantName(product))} · ${escapeHtml(inventoryVariantSubtitle(product))}</span><strong>CM ${escapeHtml(product.productId)} prüfen ↗</strong></a><button type="button" class="secondary compact-button" data-confirm-inventory-product="${escapeHtml(product.productId)}">Diese CM-ID übernehmen</button></div>`).join("")}</div>`:"";
   target.innerHTML=products.length?recognitionHtml+completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
 }
 
@@ -3309,6 +3325,7 @@ async function renderInventoryCardSearch(query){
 
 function addInventory(initial={}, collection="business", scan=null) {
   const isPrivate=collection==="private";
+  const batchEntries=[];
   inventoryCardSearchSequence++;
   inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent=isPrivate?(initial.id?"Private Karte bearbeiten":"Private Karte hinzufügen"):(initial.id?"Karte bearbeiten":"Karte hinzufügen");
@@ -3316,6 +3333,7 @@ function addInventory(initial={}, collection="business", scan=null) {
   const language=initial.language||"DE",condition=initial.condition||"NM",edition=initial.edition||"Unbekannt",status=initial.status||(isPrivate?"Privatsammlung":"Im Bestand");
   wrap.innerHTML=`
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
+    ${!initial.id&&!scan?'<div id="inventoryBatchSummary" class="inventory-batch-summary full-width" hidden></div>':""}
     <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
     ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
@@ -3325,6 +3343,7 @@ function addInventory(initial={}, collection="business", scan=null) {
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option ${language===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option ${condition===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Edition<select name="edition">${["Unbekannt","1st Edition","Unlimited","Limited Edition"].map(value=>`<option ${edition===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    ${initial.id?"":`<label>Stückzahl<input name="quantity" type="number" min="1" max="999" step="1" value="1" required></label>`}
     <label>Einstand (€)<input name="cost" type="number" min="0" step="0.01" value="${Number(initial.cost||0)||""}"></label>
     ${isPrivate?'':`<label>Gewünschter Inseratspreis (€)<input name="listingPrice" type="number" min="0" step="0.01" value="${Number(initial.listingPrice||0)||""}"></label>`}
     ${isPrivate?`<label>Verkaufsbereitschaft<select name="saleIntent">${["Nicht verkaufen","Vielleicht","Verkaufsbereit"].map(value=>`<option ${String(initial.saleIntent||"Nicht verkaufen")===value?"selected":""}>${value}</option>`).join("")}</select></label><label>Wunschpreis bei Verkauf (€)<input name="desiredSalePrice" type="number" min="0" step="0.01" value="${Number(initial.desiredSalePrice||0)||""}"></label>`:""}
@@ -3335,12 +3354,46 @@ function addInventory(initial={}, collection="business", scan=null) {
     <label>Lagerort<input name="location" value="${escapeHtml(initial.location||"")}"></label>
     <label class="full-width">Notiz<input name="note" value="${escapeHtml(initial.note||"")}"></label>`;
   wrap.dataset.inventorySelection=initial.productId?"selected":(initial.id?"legacy":"required");
+  const inventoryObject=data=>{
+    const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
+    delete obj.quantity;
+    if(scan?.fingerprint){obj.scanFingerprint=scan.fingerprint;obj.scanSource="iPhone";if(state.settings.scannerKeepImages)obj.scanImageDataUrl=scan.imageDataUrl;}
+    return obj;
+  };
+  const createInventoryCopies=(obj,quantity,reference)=>{
+    const target=isPrivate?state.privateCollection:state.inventory;
+    const created=[];
+    for(let index=0;index<quantity;index++){const item={...obj,id:uid(),movementRecorded:true};target.push(item);created.push(item);}
+    addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created[0]),reference,note:`${obj.name||"Karte"}${quantity>1?` · ${quantity} Exemplare`:""}`,addedIds:created.map(item=>item.id),inventorySnapshot:structuredClone(created[0])});
+  };
+  const renderBatchSummary=()=>{
+    const summary=document.getElementById("inventoryBatchSummary");if(!summary)return;
+    const total=batchEntries.reduce((sum,row)=>sum+row.quantity,0);
+    summary.hidden=!batchEntries.length;
+    summary.innerHTML=batchEntries.length?`<div class="inventory-batch-head"><strong>Sammelliste · ${batchEntries.length} Position${batchEntries.length===1?"":"en"} · ${total} Karte${total===1?"":"n"}</strong><span>Stückzahlen können vor dem Speichern noch geändert werden.</span></div>${batchEntries.map((row,index)=>`<div class="inventory-batch-row"><div><strong>${escapeHtml(row.obj.name||"Karte")}</strong><small>${escapeHtml([row.obj.setName||row.obj.set,row.obj.collectorNumber,row.obj.rarity,`CM ${row.obj.productId}`].filter(Boolean).join(" · "))}</small></div><label>Stückzahl<input type="number" min="1" max="999" step="1" value="${row.quantity}" data-inventory-batch-quantity="${index}"></label><button type="button" class="icon-button danger-text" data-remove-inventory-batch="${index}">Entfernen</button></div>`).join("")}`:"";
+    const submit=document.getElementById("modalSubmit");if(submit)submit.textContent=batchEntries.length?`Alle ${total} Karten speichern`:"Speichern";
+    const addAnother=document.getElementById("modalAddAnother");if(addAnother){addAnother.hidden=false;addAnother.textContent="Aktuelle Karte zur Liste hinzufügen";}
+  };
+  const currentInventoryEntry=data=>{
+    if(!data.productId||!data.name)return null;
+    return {obj:inventoryObject(data),quantity:Math.max(1,Math.round(Number(data.quantity||1)))};
+  };
+  const resetInventoryEntry=()=>{
+    ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});
+    ["cost","listingPrice","desiredSalePrice"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});
+    const quantityField=wrap.querySelector('[name="quantity"]');if(quantityField)quantityField.value="1";
+    document.getElementById("inventoryCardSearch").value="";
+    document.getElementById("inventoryCardResults").innerHTML="";
+    document.getElementById("inventorySelectedCard").innerHTML='<span>Noch keine Druckvariante ausgewählt.</span>';
+    document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";
+    document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';
+    wrap.dataset.inventorySelection="required";inventoryModalVariants=new Map();document.getElementById("inventoryCardSearch").focus();
+  };
   modalHandler=data=>{
     const legacyUnchanged=initial.id&&wrap.dataset.inventorySelection==="legacy"&&initial.name;
-    if((!data.productId||!data.name)&&!legacyUnchanged){alert("Bitte zuerst eine Karte und anschließend die richtige Druckvariante auswählen.");document.getElementById("inventoryCardSearch")?.focus();return false;}
+    if((!data.productId||!data.name)&&!legacyUnchanged&&!batchEntries.length){alert("Bitte zuerst eine Karte und anschließend die richtige Druckvariante auswählen.");document.getElementById("inventoryCardSearch")?.focus();return false;}
     if(legacyUnchanged)data.name=initial.name;
-    const obj={...data,cost:Number(data.cost||0),listingPrice:isPrivate?0:Number(data.listingPrice||0),desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed:isPrivate?false:Number(data.listingPrice||0)>0,ownership:isPrivate?"private":"business"};
-    if(scan?.fingerprint){obj.scanFingerprint=scan.fingerprint;obj.scanSource="iPhone";if(state.settings.scannerKeepImages)obj.scanImageDataUrl=scan.imageDataUrl;}
+    const obj=inventoryObject(data);
     const target=isPrivate?state.privateCollection:state.inventory;
     if(initial.id){
       const current=target.find(row=>row.id===initial.id);const before=current?structuredClone(current):null;const beforeBucket=!isPrivate&&current?purchaseBucketForAsset(current,"business"):null;
@@ -3359,15 +3412,20 @@ function addInventory(initial={}, collection="business", scan=null) {
         if(fields.length)addMovement({type:isPrivate?"Privatkorrektur":"Kartenkorrektur",quantity:0,productId:cleanProductId(current.productId),reference:isPrivate?"Privatsammlung":"Bestand",note:`Geändert: ${fields.join(", ")}`});
       }
     }
-    else {const created={...obj,id:uid(),movementRecorded:true};target.push(created);addMovement({type:isPrivate?"Privatsammlung Zugang":"Manueller Bestand",quantity:1,productId:cleanProductId(obj.productId),inventoryGroupKey:isPrivate?"":inventoryGroupKey(created),reference:scan?"iPhone-Scanner":isPrivate?"Private Erfassung":"Manuelle Erfassung",note:obj.name||"Karte",addedIds:[created.id],inventorySnapshot:structuredClone(created)});}
-    if(scan)rememberScannerChoice(scan,obj);
+    else {
+      const current=currentInventoryEntry(data);
+      const entries=[...batchEntries];if(current)entries.push(current);
+      entries.forEach(entry=>createInventoryCopies(entry.obj,entry.quantity,scan?"iPhone-Scanner":isPrivate?"Private Sammelerfassung":"Bestands-Sammelerfassung"));
+    }
+    if(scan&&data.productId)rememberScannerChoice(scan,obj);
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
+  wrap.oninput=event=>{if(event.target.dataset.inventoryBatchQuantity!==undefined){const index=Number(event.target.dataset.inventoryBatchQuantity);if(batchEntries[index])batchEntries[index].quantity=Math.max(1,Math.round(Number(event.target.value||1)));const total=batchEntries.reduce((sum,row)=>sum+row.quantity,0);const heading=document.querySelector("#inventoryBatchSummary .inventory-batch-head strong");if(heading)heading.textContent=`Sammelliste · ${batchEntries.length} Position${batchEntries.length===1?"":"en"} · ${total} Karte${total===1?"":"n"}`;document.getElementById("modalSubmit").textContent=`Alle ${total} Karten speichern`;return;}if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.onclick=event=>{const remove=event.target.closest("[data-remove-inventory-batch]");if(remove){batchEntries.splice(Number(remove.dataset.removeInventoryBatch),1);renderBatchSummary();return;}if(handleInventoryProductChoice(event))return;if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
   inventoryModalVariants=new Map();
   configureModalAction();
+  if(!initial.id&&!scan){const addAnother=document.getElementById("modalAddAnother");addAnother.hidden=false;addAnother.onclick=()=>{const form=document.getElementById("modalForm");if(!form.reportValidity())return;const data=Object.fromEntries(new FormData(form).entries());const entry=currentInventoryEntry(data);if(!entry){alert("Bitte zuerst die richtige Karte beziehungsweise CM-ID auswählen.");document.getElementById("inventoryCardSearch")?.focus();return;}batchEntries.push(entry);renderBatchSummary();resetInventoryEntry();};}
   showDialogSafely(document.getElementById("modal"));
   if(scan)applyScannerModalRecognition(scan);
   else if(initial.productId)searchInventoryCardVariants(String(initial.productId)).then(products=>{if(wrap.dataset.inventorySelection!=="selected")return;const selected=products.find(row=>String(row.productId)===String(initial.productId));if(selected){inventoryModalVariants.set(String(selected.productId),selected);chooseInventoryVariant(selected.productId);}}).catch(()=>{});
@@ -3407,7 +3465,7 @@ function addPurchaseLine(purchaseId,scan=null){
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
@@ -3440,7 +3498,7 @@ function addSaleLine(saleId,scan=null){
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice){chooseInventoryVariant(choice.dataset.selectInventoryProduct);return;}if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
+  wrap.onclick=event=>{if(handleInventoryProductChoice(event))return;if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
@@ -3512,7 +3570,7 @@ function repairPurchaseLineIdentity(purchaseId,index){
   };
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
-  wrap.onclick=event=>{const choice=event.target.closest("[data-select-inventory-product]");if(choice)chooseInventoryVariant(choice.dataset.selectInventoryProduct);};
+  wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
@@ -3733,22 +3791,23 @@ function syncSaleInventoryStatus(sale) {
   grouped.forEach(row=>addMovement({...row,saleId:sale.id,reference:`Bestellung ${sale.orderNo||"-"}`,note:row.copies>1?`${row.copies} Exemplare: ${row.note}`:row.note}));
 }
 
-function saleAllocationCandidates(line,sale){
+function saleAllocationCandidates(line,sale,includeAll=false){
   const productId=cleanProductId(line.productId);
-  if(!productId)return [];
-  const candidates=state.inventory.filter(item=>{
+  const availableCandidates=state.inventory.filter(item=>{
     const linkedToSale=item.saleId===sale.id||(sale.itemIds||[]).includes(item.id);
     const available=!['Verkauft','Reserviert','Storniert','Beschädigt','Rückgabe unterwegs'].includes(item.status||'');
-    return (linkedToSale||available)&&cleanProductId(item.productId)===productId;
+    return linkedToSale||available;
   });
+  const candidates=availableCandidates.filter(item=>productId&&cleanProductId(item.productId)===productId);
   const language=String(line.language||'').toUpperCase(),condition=String(line.condition||'').toUpperCase();
   const exact=candidates.filter(item=>(!language||String(item.language||'').toUpperCase()===language)&&(!condition||String(item.condition||'').toUpperCase()===condition));
-  return (exact.length?exact:candidates).sort((a,b)=>Number(b.saleId===sale.id)-Number(a.saleId===sale.id)||String(a.purchaseDate||'').localeCompare(String(b.purchaseDate||''))||String(a.id).localeCompare(String(b.id)));
+  const matching=exact.length?exact:candidates;
+  const source=includeAll?availableCandidates:matching;
+  return source.sort((a,b)=>Number(b.saleId===sale.id)-Number(a.saleId===sale.id)||Number(cleanProductId(b.productId)===productId)-Number(cleanProductId(a.productId)===productId)||cardDisplayNames(a).primary.localeCompare(cardDisplayNames(b).primary,"de",{numeric:true,sensitivity:"base"})||String(a.purchaseDate||'').localeCompare(String(b.purchaseDate||''))||String(a.id).localeCompare(String(b.id)));
 }
 
-function openSaleAllocation(saleId){
-  const sale=state.sales.find(row=>row.id===saleId);if(!sale)return;
-  const dialog=document.getElementById('saleAllocationDialog');dialog.dataset.saleId=sale.id;
+function renderSaleAllocationDialog(sale){
+  const dialog=document.getElementById('saleAllocationDialog');
   const lines=Array.isArray(sale.items)?sale.items:[];
   if(!lines.length){document.getElementById('saleAllocationContent').innerHTML='<div class="warning">Dieser Verkauf enthält noch keine kartengenauen Positionen. Füge die Karten zuerst beim Verkauf hinzu oder importiere die detaillierte Cardmarket-Bestellung.</div>';}
   else{
@@ -3757,20 +3816,32 @@ function openSaleAllocation(saleId){
     lines.forEach((line,lineIndex)=>{
       const quantity=Math.max(1,Math.round(Number(line.quantity||1)));
       const explicit=Array.isArray(line.matchedItemIds)?line.matchedItemIds:[];
-      const candidates=saleAllocationCandidates(line,sale);
+      const candidates=saleAllocationCandidates(line,sale,saleAllocationShowAll);
       const strategy=state.settings.saleAllocationStrategy||"fifo";
       const automatic=strategy==="manual"?[]:TcgBusinessAutomation.selectInventoryForSale(state.inventory,{...line,strategy},quantity).selected;
       for(let unit=0;unit<quantity;unit++){
         const candidateIds=new Set(candidates.map(item=>item.id));
-        const selectedId=[explicit[unit],...currentlyLinked,...automatic.map(item=>item.id),...candidates.map(item=>item.id)].find(id=>id&&candidateIds.has(id)&&!claimedDefaults.has(id))||'';
+        const draftKey=`${lineIndex}:${unit}`;
+        const selectedId=[saleAllocationDraftSelections.get(draftKey),explicit[unit],...currentlyLinked,...automatic.map(item=>item.id),...candidates.map(item=>item.id)].find(id=>id&&candidateIds.has(id)&&!claimedDefaults.has(id))||'';
         if(selectedId)claimedDefaults.add(selectedId);
-        const options=candidates.map(item=>`<option value="${escapeHtml(item.id)}" ${item.id===selectedId?'selected':''}>${escapeHtml(fmtDate(item.purchaseDate)||'-')} · EK ${money(item.cost)} · ${escapeHtml(item.language||'-')}/${escapeHtml(item.condition||'-')} · ${escapeHtml(item.location||'ohne Lagerort')} · Los ${escapeHtml(item.lotId||item.purchaseId||'-')}</option>`).join('');
-        rows.push(`<tr><td><strong>${escapeHtml(line.name||line.germanName||line.englishName||'Karte')}</strong><small>${escapeHtml([line.setName||line.set,line.collectorNumber,line.rarity].filter(Boolean).join(' · '))}</small></td><td>${unit+1} / ${quantity}</td><td><select data-sale-allocation data-line-index="${lineIndex}" data-unit-index="${unit}"><option value="">Bitte Einkaufsexemplar wählen</option>${options}</select>${!candidates.length?'<small class="money-negative">Kein passendes verfügbares Exemplar vorhanden</small>':''}</td></tr>`);
+        if(selectedId)saleAllocationDraftSelections.set(draftKey,selectedId);
+        const options=candidates.map(item=>{const matchingProduct=cleanProductId(line.productId)&&cleanProductId(item.productId)===cleanProductId(line.productId);const names=cardDisplayNames(item);return `<option value="${escapeHtml(item.id)}" ${item.id===selectedId?'selected':''}>${matchingProduct?'✓ Passend':'Andere Bestandskarte'} · ${escapeHtml(names.primary)} · ${escapeHtml([item.setName||item.set,item.collectorNumber,item.rarity,`CM ${item.productId||'fehlt'}`].filter(Boolean).join(' · '))} · ${escapeHtml(fmtDate(item.purchaseDate)||'-')} · EK ${money(item.cost)}</option>`;}).join('');
+        rows.push(`<tr><td><strong>${escapeHtml(line.name||line.germanName||line.englishName||'Karte')}</strong><small>${escapeHtml([line.setName||line.set,line.collectorNumber,line.rarity,`CM ${line.productId||'fehlt'}`].filter(Boolean).join(' · '))}</small></td><td>${unit+1} / ${quantity}</td><td><select data-sale-allocation data-line-index="${lineIndex}" data-unit-index="${unit}"><option value="">Bitte Bestandsexemplar wählen</option>${options}</select>${!candidates.length?'<small class="money-negative">Keine passende freie Karte vorhanden. Aktiviere „Alle verfügbaren Bestandskarten“.</small>':''}</td></tr>`);
       }
     });
     const strategyLabel={fifo:"FIFO (ältester Einkauf)","lowest-cost":"niedrigster EK","highest-cost":"höchster EK",manual:"manuelle Auswahl"}[state.settings.saleAllocationStrategy||"fifo"];
-    document.getElementById('saleAllocationContent').innerHTML=`<div class="table-wrap"><table class="receipt-table"><thead><tr><th>Verkaufsposition</th><th>Exemplar</th><th>Einkaufslos / tatsächlicher EK</th></tr></thead><tbody>${rows.join('')}</tbody></table></div><div class="info">Voreinstellung: ${escapeHtml(strategyLabel)}. Du kannst jedes Exemplar bewusst ändern.</div>`;
+    const availableCount=state.inventory.filter(item=>!['Verkauft','Reserviert','Storniert','Beschädigt','Rückgabe unterwegs'].includes(item.status||'')||item.saleId===sale.id).length;
+    document.getElementById('saleAllocationContent').innerHTML=`<div class="sale-allocation-toolbar"><label class="switch-label"><input type="checkbox" id="saleAllocationShowAll" ${saleAllocationShowAll?'checked':''}> Alle ${availableCount} verfügbaren Bestandskarten anzeigen</label><small>${saleAllocationShowAll?'Passende Varianten stehen oben; abweichende Karten sind deutlich als „Andere Bestandskarte“ markiert.':'Standardmäßig werden nur passende Cardmarket-Produkt-IDs angezeigt.'}</small></div><div class="table-wrap"><table class="receipt-table"><thead><tr><th>Verkaufsposition</th><th>Exemplar</th><th>Bestandskarte / tatsächlicher EK</th></tr></thead><tbody>${rows.join('')}</tbody></table></div><div class="info">Voreinstellung: ${escapeHtml(strategyLabel)}. Eine bewusst abweichende Bestandskarte berichtigt beim Speichern auch die Karten- und CM-ID-Zuordnung der Verkaufsposition.</div>`;
+    document.getElementById('saleAllocationShowAll').onchange=event=>{document.querySelectorAll('#saleAllocationContent [data-sale-allocation]').forEach(select=>saleAllocationDraftSelections.set(`${select.dataset.lineIndex}:${select.dataset.unitIndex}`,select.value));saleAllocationShowAll=event.target.checked;renderSaleAllocationDialog(sale);};
+    document.getElementById('saleAllocationContent').onchange=event=>{if(event.target.matches('[data-sale-allocation]'))saleAllocationDraftSelections.set(`${event.target.dataset.lineIndex}:${event.target.dataset.unitIndex}`,event.target.value);};
   }
+}
+
+function openSaleAllocation(saleId){
+  const sale=state.sales.find(row=>row.id===saleId);if(!sale)return;
+  const dialog=document.getElementById('saleAllocationDialog');dialog.dataset.saleId=sale.id;
+  saleAllocationShowAll=false;saleAllocationDraftSelections=new Map();
+  renderSaleAllocationDialog(sale);
   showDialogSafely(dialog);
 }
 
@@ -3782,6 +3853,17 @@ function saveSaleAllocation(){
   if(selects.some(select=>!select.value)){alert('Bitte jeder verkauften Karte ein konkretes Bestandsexemplar zuordnen.');return false;}
   const ids=selects.map(select=>select.value);
   if(new Set(ids).size!==ids.length){alert('Ein Bestandsexemplar kann nicht mehrfach verkauft werden. Bitte die Zuordnung prüfen.');return false;}
+  const selectedAssets=ids.map(id=>state.inventory.find(item=>item.id===id));
+  if(selectedAssets.some(item=>!item)){alert('Mindestens eine ausgewählte Bestandskarte ist nicht mehr vorhanden. Bitte die Zuordnung neu öffnen.');return false;}
+  const lineSelections=(sale.items||[]).map((line,index)=>{
+    const lineSelects=selects.filter(select=>Number(select.dataset.lineIndex)===index).sort((a,b)=>Number(a.dataset.unitIndex)-Number(b.dataset.unitIndex));
+    const assets=lineSelects.map(select=>state.inventory.find(item=>item.id===select.value)).filter(Boolean);
+    const productIds=[...new Set(assets.map(item=>cleanProductId(item.productId)).filter(Boolean))];
+    return {line,lineSelects,assets,productIds,mismatch:assets.some(item=>cleanProductId(item.productId)!==cleanProductId(line.productId))};
+  });
+  if(lineSelections.some(row=>row.productIds.length>1)){alert('Einer Verkaufsposition wurden unterschiedliche Kartenvarianten zugeordnet. Bitte pro Verkaufsposition nur Exemplare derselben Bestandskarte wählen.');return false;}
+  const mismatchCount=lineSelections.reduce((sum,row)=>sum+(row.mismatch?row.assets.length:0),0);
+  if(mismatchCount&&!confirm(`${mismatchCount} Zuordnung(en) weichen von der bisherigen Verkaufsposition ab. Die Karten- und CM-ID-Daten des Verkaufs werden an die gewählten Bestandskarten angepasst. Fortfahren?`))return false;
   const newIds=new Set(ids);
   (sale.itemIds||[]).filter(id=>!newIds.has(id)).forEach(id=>{
     const old=state.inventory.find(item=>item.id===id&&item.saleId===sale.id);if(!old)return;
@@ -3789,7 +3871,11 @@ function saveSaleAllocation(){
     old.status='Im Bestand';delete old.saleId;delete old.saleOrderNo;delete old.saleDate;delete old.saleMovementRecorded;
     addMovement({type:'Bestandszuordnung gelöst',quantity:previousStatus==='Verkauft'?1:0,productId:cleanProductId(old.productId),saleId:sale.id,reference:`Bestellung ${sale.orderNo||'-'}`,note:`Einkaufslos ${old.lotId||old.purchaseId||'-'} wieder freigegeben`});
   });
-  (sale.items||[]).forEach((line,index)=>line.matchedItemIds=selects.filter(select=>Number(select.dataset.lineIndex)===index).sort((a,b)=>Number(a.dataset.unitIndex)-Number(b.dataset.unitIndex)).map(select=>select.value));
+  const identityFields=['productId','metacardId','name','germanName','englishName','set','setName','collectorNumber','rarity','productUrl','cardPasscode','edition','language','condition'];
+  lineSelections.forEach(({line,lineSelects,assets,mismatch})=>{
+    line.matchedItemIds=lineSelects.map(select=>select.value);
+    if(mismatch&&assets[0])identityFields.forEach(field=>line[field]=assets[0][field]||'');
+  });
   sale.itemIds=ids;
   const assets=ids.map(id=>state.inventory.find(item=>item.id===id)).filter(Boolean);
   sale.cost=assets.reduce((sum,item)=>sum+Number(item.cost||0),0);
@@ -3799,6 +3885,7 @@ function saveSaleAllocation(){
   delete sale.historicalCostNote;
   delete sale.historicalCostConfirmedAt;
   sale.quantity=ids.length;
+  sale.cardNames=(sale.items||[]).map(item=>`${Number(item.quantity||1)}× ${item.name||item.germanName||item.englishName||'Karte'}`).join(', ');
   syncSaleInventoryStatus(sale);
   addMovement({type:'Bestandszuordnung',quantity:0,saleId:sale.id,reference:`Bestellung ${sale.orderNo||'-'}`,note:`${ids.length} konkrete Einkaufsexemplare zugeordnet; Wareneinsatz ${money(sale.cost)}`});
   saveState();renderAll();dialog.close();openOrderDetails('sale',sale.id);return true;

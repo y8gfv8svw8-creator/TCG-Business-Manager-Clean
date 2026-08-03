@@ -71,6 +71,37 @@ async function main() {
       const input=document.createElement('input');input.readOnly=true;const form=document.createElement('div');form.className='form-grid';form.appendChild(input);document.body.appendChild(form);const inputStyle=getComputedStyle(input);samples.push({className:'readonly',ratio:contrast(inputStyle.color,inputStyle.backgroundColor)});form.remove();
       showView('inventory');
       const inventoryActive=document.getElementById('view-inventory').classList.contains('active');
+      addInventory({},'business');
+      renderInventoryProductChoices([{productId:'990003',name:'Direkte CM-ID Testkarte',set:'TEST',setName:'Test Set',collectorNumber:'TEST-EN001',rarity:''}]);
+      document.querySelector('[data-confirm-inventory-product="990003"]')?.click();
+      await new Promise(resolve=>setTimeout(resolve,30));
+      const directProductIdAssignment=document.querySelector('#modalFields [name="productId"]')?.value==='990003';
+      document.getElementById('modalCancel').click();
+
+      const inventoryBefore=state.inventory.length;
+      addInventory({},'business');
+      const assignInventoryForm=(productId,name,quantity)=>{
+        const fields={productId,name,germanName:name,set:'TEST',setName:'Test Set',collectorNumber:'TEST-EN'+productId.slice(-3),rarity:'Ultra Rare'};
+        Object.entries(fields).forEach(([field,value])=>{const input=document.querySelector('#modalFields [name="'+field+'"]');if(input)input.value=value;});
+        document.querySelector('#modalFields [name="quantity"]').value=String(quantity);
+      };
+      assignInventoryForm('990001','Sammeltest A',2);
+      document.getElementById('modalAddAnother').click();
+      const batchQueued=document.querySelectorAll('#inventoryBatchSummary .inventory-batch-row').length===1;
+      assignInventoryForm('990002','Sammeltest B',1);
+      document.getElementById('modalForm').requestSubmit();
+      await new Promise(resolve=>setTimeout(resolve,30));
+      const createdTestItems=state.inventory.slice(inventoryBefore);
+      const batchInventoryCreated=createdTestItems.length===3&&createdTestItems.filter(item=>item.productId==='990001').length===2&&createdTestItems.filter(item=>item.productId==='990002').length===1;
+
+      const allocationSale={id:'qa-sale-'+Date.now(),orderNo:'QA-ALLE-KARTEN',status:'Offen',itemIds:[],items:[{productId:'999999',name:'Falsch zugeordnete Testkarte',quantity:1,unitPrice:1,matchedItemIds:[]}]};
+      state.sales.push(allocationSale);openSaleAllocation(allocationSale.id);
+      const allInventoryToggle=document.getElementById('saleAllocationShowAll');allInventoryToggle.checked=true;allInventoryToggle.dispatchEvent(new Event('change',{bubbles:true}));
+      const allocationSelect=document.querySelector('#saleAllocationContent [data-sale-allocation]');
+      const allInventoryAssignable=allocationSelect&&[...allocationSelect.options].some(option=>createdTestItems.some(item=>item.id===option.value));
+      allocationSelect.value=createdTestItems[0].id;window.confirm=()=>true;
+      const allocationSaved=saveSaleAllocation();
+      const mismatchedAllocationRepairsIdentity=allocationSaved&&allocationSale.items[0].productId==='990001'&&createdTestItems[0].saleId===allocationSale.id;
       showView('reports');
       const ocrCanvas=document.createElement('canvas');ocrCanvas.width=620;ocrCanvas.height=160;
       const ocrContext=ocrCanvas.getContext('2d');ocrContext.fillStyle='#fff';ocrContext.fillRect(0,0,620,160);ocrContext.fillStyle='#000';ocrContext.font='bold 58px Arial';ocrContext.fillText('RA01-EN008',45,102);
@@ -89,6 +120,11 @@ async function main() {
         sqliteStatus:document.getElementById('saveStatus')?.textContent||'',
         navigation:document.querySelectorAll('.nav-item').length,
         inventoryActive,
+        directProductIdAssignment,
+        batchQueued,
+        batchInventoryCreated,
+        allInventoryAssignable,
+        mismatchedAllocationRepairsIdentity,
         reportsActive:document.getElementById('view-reports').classList.contains('active'),
         filterPanels:document.querySelectorAll('.filter-panel').length,
         hasCashflow:Boolean(document.getElementById('mMonthlyProfit')),
@@ -110,7 +146,7 @@ async function main() {
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || !result.scannerRegionalSetCode || !result.scannerRegionalPasscode || result.scannerRegionalEdition !== '1st Edition' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

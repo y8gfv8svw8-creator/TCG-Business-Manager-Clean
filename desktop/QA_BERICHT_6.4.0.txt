@@ -1,0 +1,20 @@
+QA-Bericht TCG Business Manager 6.4.0
+
+Geprüfte Punkte
+
+- Syntaxprüfung aller Haupt-, Datenbank-, Scanner-, Such-, Analyse-, Renderer- und QA-Dateien: BESTANDEN
+- Vollständige automatisierte Tests: BESTANDEN
+- Stückzahl erzeugt mehrere getrennte physische Bestandsexemplare: BESTANDEN
+- Sammelliste speichert mehrere Karten und unterschiedliche Stückzahlen gemeinsam: BESTANDEN
+- Positionen und Stückzahlen der Sammelliste bleiben vor dem Speichern korrigierbar: BESTANDEN
+- Bestätigte unvollständige Cardmarket-Kandidaten lassen sich direkt per Produkt-ID übernehmen: BESTANDEN
+- Verkaufszuordnung kann alle freien Bestandskarten anzeigen: BESTANDEN
+- Abweichende Bestandszuordnung berichtigt Karten- und CM-ID-Daten der Verkaufsposition erst nach Bestätigung: BESTANDEN
+- Doppelte Verwendung desselben Bestandsexemplars bleibt gesperrt: BESTANDEN
+- Bestehende FIFO-, niedrigster-EK-, höchster-EK- und manuelle Strategien bleiben erhalten: BESTANDEN
+- Echter Oberflächentest im gebauten Windows-Programm für Sammelliste, Stückzahl, CM-ID und vollständige Bestandsauswahl: BESTANDEN
+- Windows-Installer 6.4.0 erfolgreich erstellt: BESTANDEN
+
+Datensicherheit
+
+Die Erweiterung verändert keine bestehenden Mengen. Neue Stückzahlen werden als einzelne Karten angelegt. Bei einer Verkaufszuordnung werden nur ausdrücklich ausgewählte freie oder bereits mit demselben Verkauf verknüpfte Exemplare verwendet.

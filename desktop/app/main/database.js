@@ -1627,9 +1627,12 @@ class TcgDatabase {
 
   searchCards({ query = '', limit = 25, offset = 0 } = {}) {
     this.open();
-    const forms = cardSearch.queryForms(String(query || '').slice(0, 200));
-    const setCodeQuery = cardSearch.parseSetCode(String(query || ''));
-    const exactProductId = /^\d+$/.test(String(query || '').trim()) ? String(query).trim() : '';
+    const rawQuery = String(query || '').slice(0, 200);
+    const variantQuery = cardSearch.parseVariantLabel(rawQuery);
+    const searchableQuery = variantQuery.variantNumber ? variantQuery.baseName : rawQuery;
+    const forms = cardSearch.queryForms(searchableQuery);
+    const setCodeQuery = cardSearch.parseSetCode(rawQuery);
+    const exactProductId = /^\d+$/.test(rawQuery.trim()) ? rawQuery.trim() : '';
     if (forms.compact.length < 2) return { totalCards: 0, offset: 0, limit: 25, cards: [] };
     const safeLimit = boundedInteger(limit, 1, 100, 25);
     const safeOffset = boundedInteger(offset, 0, 1000000, 0);
@@ -1749,7 +1752,18 @@ class TcgDatabase {
           return parsed && parsed.prefix === setCodeQuery.prefix && parsed.number === setCodeQuery.number;
         });
       };
-      for (const variant of variants.filter(variant =>
+      const inferredVariants = cardSearch.inferVariantOrdinals(variants);
+      inferredVariants.forEach(variant => {
+        const variantLabel = variant.variant || variant.inferredVariant || '';
+        variant.queryVariantMatch = Boolean(variantQuery.variantNumber
+          && cardSearch.normalizeCompact(variantLabel) === cardSearch.normalizeCompact(variantQuery.variant));
+      });
+      inferredVariants.sort((left, right) =>
+        Number(right.queryVariantMatch) - Number(left.queryVariantMatch)
+        || Number(left.archived) - Number(right.archived)
+        || String(left.setName || '').localeCompare(String(right.setName || ''), 'de')
+        || Number(left.productId || 0) - Number(right.productId || 0));
+      for (const variant of inferredVariants.filter(variant =>
         (!exactProductId || variant.productId === exactProductId) && variantMatchesSetCode(variant)
       )) variantsByMetacard.get(String(variant.metacardId))?.push(variant);
     }

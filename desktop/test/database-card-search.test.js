@@ -126,6 +126,27 @@ test('liefert auch bei einer realen Karte mit mehr als 80 Drucken jede Cardmarke
   );
 });
 
+test('setzt bei einer Suche mit V-Nummer die passende Cardmarket-Druckvariante an die erste Stelle', t => {
+  const database=temporaryDatabase(t);
+  database.upsertProducts([
+    {productId:'910001',metacardId:'910',expansionId:'920',officialName:'Kashtira Fenrir',officialBaseName:'Kashtira Fenrir',setName:'Darkwing Blast',setCode:'DABL-EN012',rarity:'Secret Rare'},
+    {productId:'910002',metacardId:'910',expansionId:'920',officialName:'Kashtira Fenrir',officialBaseName:'Kashtira Fenrir',setName:'Darkwing Blast',setCode:'DABL-EN012',rarity:'Ultra Rare'},
+    {productId:'910003',metacardId:'910',expansionId:'920',officialName:'Kashtira Fenrir',officialBaseName:'Kashtira Fenrir',setName:'Darkwing Blast',setCode:'DABL-EN012',rarity:'Collector Rare'},
+    {productId:'910004',metacardId:'910',expansionId:'920',officialName:'Kashtira Fenrir',officialBaseName:'Kashtira Fenrir',setName:'Darkwing Blast',setCode:'DABL-EN012',rarity:'Ultimate Rare'}
+  ]);
+  database.upsertCardNames({
+    source:'variant-test',
+    mappings:[{metacardId:'910',nameDe:'Kashtira Fenrir',nameEn:'Kashtira Fenrir'}],
+    aliases:[]
+  });
+
+  const result=database.searchCards({query:'Kashtira Fenrir (V.2 - Ultra Rare)'});
+  assert.equal(result.cards.length,1);
+  assert.equal(result.cards[0].variants[0].productId,'910002');
+  assert.equal(result.cards[0].variants[0].inferredVariant,'V.2');
+  assert.equal(result.cards[0].variants[0].queryVariantMatch,true);
+});
+
 test('migriert eine bestehende v3-Datenbank verlustfrei und legt vorher eine SQLite-Sicherung an', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-card-migration-'));
   const databasePath = path.join(root, 'legacy.sqlite');

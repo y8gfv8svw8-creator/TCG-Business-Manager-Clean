@@ -176,6 +176,7 @@ function resolveProduct(productId, fallback={}) {
     englishName: c.englishName || c.officialBaseName || c.officialName || fallback.englishName || "",
     set: c.set || fallback.set || "",
     setName: c.setName || fallback.setName || "",
+    variant: c.variant || fallback.variant || "",
     rarity: c.rarity || fallback.rarity || "",
     language: c.language || fallback.language || state?.settings?.languages || "DE/EN",
     condition: c.condition || fallback.condition || state?.settings?.condition || "NM",
@@ -1312,7 +1313,7 @@ function renderDataRepairCenter(){
   const criticalCount=records.assignmentRows.filter(row=>row.inspection.issues.some(issue=>issue.severity==="danger")).length;
   const filtered=records.assignmentRows.filter(row=>(!cardRepairAreaFilter||row.area===cardRepairAreaFilter)&&(!cardRepairIssueFilter||row.inspection.issues.some(issue=>issue.code===cardRepairIssueFilter))&&(!cardRepairSearch||cardRecordMatchesSearch(row.record,cardRepairSearch)||normalizeSearchTerm(cardRepairReference(row)).includes(normalizeSearchTerm(cardRepairSearch))));
   const issueOptions=[...new Map(records.assignmentRows.flatMap(row=>row.inspection.issues).map(issue=>[issue.code,issue.label])).entries()];
-  const assignmentBody=records.assignmentRows.length?`<div class="repair-toolbar card-repair-toolbar"><input id="cardRepairSearch" placeholder="Karte, Setnummer oder Bestellung suchen …" value="${escapeHtml(cardRepairSearch)}"><select id="cardRepairAreaFilter"><option value="">Alle Bereiche</option>${[["inventory","Bestand"],["private","Privatsammlung"],["purchase","Einkäufe"],["sale","Verkäufe"],["watch","Marktbeobachtung"],["want","Wantlisten"]].map(([value,label])=>`<option value="${value}" ${cardRepairAreaFilter===value?"selected":""}>${label} (${areaCounts[value]||0})</option>`).join("")}</select><select id="cardRepairIssueFilter"><option value="">Alle Hinweise</option>${issueOptions.map(([value,label])=>`<option value="${escapeHtml(value)}" ${cardRepairIssueFilter===value?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select><button type="button" class="secondary" id="repairMetadataBtn">Eindeutige Daten automatisch ergänzen</button></div><div class="repair-result-count">${filtered.length} von ${records.assignmentRows.length} Zuordnungen angezeigt</div><div class="repair-list card-assignment-repair-list">${filtered.slice(0,200).map(row=>{const names=cardDisplayNames(row.record);return `<div class="repair-row ${row.inspection.issues.some(issue=>issue.severity==="danger")?"repair-row-danger":""}"><div><span class="repair-area-badge">${escapeHtml(row.areaLabel)}</span><strong>${escapeHtml(names.primary||"Unbekannte Karte")}</strong><small>${escapeHtml(cardRepairReference(row))} · ${escapeHtml([row.record.setName||row.record.set,row.record.collectorNumber,row.record.rarity||row.record.version,`CM ${row.inspection.productId||"fehlt"}`].filter(Boolean).join(" · "))}</small><div class="repair-issue-list">${row.inspection.issues.map(issue=>`<span class="repair-issue ${issue.severity}">${escapeHtml(issue.label)}</span>`).join("")}</div></div><button type="button" class="secondary" data-card-repair-key="${escapeHtml(row.key)}">Zuordnung prüfen</button></div>`;}).join("")||'<div class="empty">Für diesen Filter gibt es keine offenen Zuordnungen.</div>'}</div>`:`<div class="success">Alle Karten in allen Bereichen sind vollständig und plausibel zugeordnet.</div>`;
+  const assignmentBody=records.assignmentRows.length?`<div class="repair-toolbar card-repair-toolbar"><input id="cardRepairSearch" placeholder="Karte, Setnummer oder Bestellung suchen …" value="${escapeHtml(cardRepairSearch)}"><select id="cardRepairAreaFilter"><option value="">Alle Bereiche</option>${[["inventory","Bestand"],["private","Privatsammlung"],["purchase","Einkäufe"],["sale","Verkäufe"],["watch","Marktbeobachtung"],["want","Wantlisten"]].map(([value,label])=>`<option value="${value}" ${cardRepairAreaFilter===value?"selected":""}>${label} (${areaCounts[value]||0})</option>`).join("")}</select><select id="cardRepairIssueFilter"><option value="">Alle Hinweise</option>${issueOptions.map(([value,label])=>`<option value="${escapeHtml(value)}" ${cardRepairIssueFilter===value?"selected":""}>${escapeHtml(label)}</option>`).join("")}</select><button type="button" class="secondary" id="repairAssignmentProposalBtn">Sichere CM-IDs vorschlagen</button><button type="button" class="secondary" id="repairMetadataBtn">Eindeutige Druckdaten ergänzen</button></div><div class="repair-result-count">${filtered.length} von ${records.assignmentRows.length} Zuordnungen angezeigt</div><div class="repair-list card-assignment-repair-list">${filtered.slice(0,200).map(row=>{const names=cardDisplayNames(row.record);return `<div class="repair-row ${row.inspection.issues.some(issue=>issue.severity==="danger")?"repair-row-danger":""}"><div><span class="repair-area-badge">${escapeHtml(row.areaLabel)}</span><strong>${escapeHtml(names.primary||"Unbekannte Karte")}</strong><small>${escapeHtml(cardRepairReference(row))} · ${escapeHtml([row.record.setName||row.record.set,row.record.collectorNumber,row.record.rarity||row.record.version,`CM ${row.inspection.productId||"fehlt"}`].filter(Boolean).join(" · "))}</small><div class="repair-issue-list">${row.inspection.issues.map(issue=>`<span class="repair-issue ${issue.severity}">${escapeHtml(issue.label)}</span>`).join("")}</div></div><button type="button" class="secondary" data-card-repair-key="${escapeHtml(row.key)}">Zuordnung prüfen</button></div>`;}).join("")||'<div class="empty">Für diesen Filter gibt es keine offenen Zuordnungen.</div>'}</div>`:`<div class="success">Alle Karten in allen Bereichen sind vollständig und plausibel zugeordnet.</div>`;
   const salesBody=records.sales.length?`<div class="repair-list">${records.sales.map(sale=>`<div class="repair-row"><div><strong>Verkauf #${escapeHtml(sale.orderNo||"-")}</strong><small>${Number(sale.quantity||0)} Karte(n) · der bisher angezeigte Gewinn ist nicht belastbar</small></div><div class="row-actions"><button type="button" class="secondary" data-repair-sale-allocation="${escapeHtml(sale.id)}">Lose suchen</button><button type="button" class="primary" data-repair-sale-cost="${escapeHtml(sale.id)}">Wareneinsatz klären</button></div></div>`).join("")}</div>`:`<div class="success">Alle abgeschlossenen Verkäufe besitzen einen bestätigten Wareneinsatz.</div>`;
   target.innerHTML=`<div class="repair-summary"><div><small>Kartenzuordnungen offen</small><strong>${records.assignmentRows.length}</strong></div><div><small>Widersprüchliche IDs</small><strong class="${criticalCount?"money-negative":"money-positive"}">${criticalCount}</strong></div><div><small>Verkäufe zu klären</small><strong>${records.sales.length}</strong></div><div><small>Bewusst unbekannt</small><strong>${unknownConfirmed}</strong></div></div><div class="info repair-safety-note"><strong>Sicherheitsregel:</strong> Eine bestätigte Kartenzuordnung ändert nur Namen, Cardmarket-ID und Druckdaten. Mengen, Besitzart, Einstand, Inseratspreis, Reservierungen und Verkäufe bleiben unverändert. Verknüpfte Einkaufs-, Bestands- und Verkaufsdatensätze werden gemeinsam berichtigt.</div>${section("Karten- und Druckzuordnung in allen Bereichen",records.assignmentRows.length,assignmentBody)}${section("Historischen Wareneinsatz klären",records.sales.length,salesBody)}`;
 }
@@ -1359,12 +1360,14 @@ function applyCardRepairIdentity(row,data,reason){
   const targets=linkedCardRepairTargets(row);
   const productId=cleanProductId(data.productId);
   if(!productId)return 0;
+  const sourceIdentity=window.TcgCardSearch?.parseVariantLabel?.(row.record.name||"")||{};
   const patch={
     productId,metacardId:cleanProductId(data.metacardId),name:String(data.name||"").trim(),
     germanName:String(data.germanName||data.name||"").trim(),englishName:String(data.englishName||"").trim(),
     set:String(data.set||row.record.set||"").trim(),setName:String(data.setName||row.record.setName||"").trim(),
+    variant:String(data.variant||data.inferredVariant||row.record.variant||sourceIdentity.variant||"").trim(),
     rarity:String(data.rarity||row.record.rarity||row.record.version||"").trim(),collectorNumber:String(data.collectorNumber||row.record.collectorNumber||"").trim(),
-    productUrl:String(data.productUrl||"").trim(),cardPasscode:String(data.cardPasscode||"").trim()
+    productUrl:String(data.productUrl||row.record.productUrl||"").trim(),cardPasscode:String(data.cardPasscode||row.record.cardPasscode||"").trim()
   };
   const previousIds=[...new Set(targets.map(target=>cleanProductId(target.record.productId)||"fehlt"))];
   targets.forEach(target=>{
@@ -1401,7 +1404,7 @@ function openCardAssignmentRepair(row){
     <div class="info full-width"><strong>Aktuell:</strong> ${escapeHtml(row.record.name||"Unbekannte Karte")}<br>${escapeHtml(current||"Noch keine Druckdaten")}<br><strong>${targets.length} Datensatz${targets.length===1?"":"sätze"}</strong> ${targets.length===1?"wird":"werden"} sicher gemeinsam berichtigt. Mengen, Preise und Status bleiben unverändert.</div>
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(row.record.collectorNumber||row.record.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Bitte die richtige Cardmarket-Druckvariante auswählen.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Der Preis wird hier nicht verändert.</span></div>
@@ -1415,11 +1418,60 @@ function openCardAssignmentRepair(row){
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction({submitLabel:"Zuordnung übernehmen"});showDialogSafely(document.getElementById("modal"));
   const query=row.record.collectorNumber||row.record.name||row.record.germanName||row.record.englishName||"";
   if(query)setTimeout(()=>renderInventoryCardSearch(query),0);
+}
+
+async function openSafeCardAssignmentProposals(){
+  const rows=dataRepairRecords().assignmentRows.filter(row=>!cleanProductId(row.record.productId));
+  const proposals=[];
+  const coveredRecords=new Set();
+  const candidateCache=new Map();
+  for(const row of rows){
+    if(coveredRecords.has(row.record))continue;
+    const source=window.TcgCardSearch?.parseVariantLabel?.(row.record.name||row.record.germanName||row.record.englishName||"")||{};
+    const urlSource=window.TcgCardSearch?.parseCardmarketProductUrl?.(row.record.productUrl||"")||{};
+    const cacheKey=[source.baseName,source.variant,row.record.setName||row.record.set||urlSource.setSlug,row.record.rarity||row.record.version||source.rarity,urlSource.productBase].map(normalizeCardName).join("|");
+    if(!candidateCache.has(cacheKey))candidateCache.set(cacheKey,await safeCatalogVariantFor(row.record));
+    const candidate=candidateCache.get(cacheKey);
+    if(!candidate)continue;
+    const targets=linkedCardRepairTargets(row);
+    targets.forEach(target=>coveredRecords.add(target.record));
+    proposals.push({row,candidate,targets});
+  }
+  if(!proposals.length){
+    alert("Es wurden keine weiteren sicheren CM-ID-Vorschläge gefunden. Die übrigen Fälle benötigen eine manuelle Prüfung über den Cardmarket-Link.");
+    renderDataRepairCenter();
+    return;
+  }
+  document.getElementById("dataRepairDialog").close();
+  document.getElementById("modalTitle").textContent="Sichere CM-ID-Vorschläge prüfen";
+  const wrap=document.getElementById("modalFields");
+  wrap.oninput=null;wrap.onclick=null;delete wrap.dataset.inventorySelection;
+  wrap.innerHTML=`<div class="info full-width"><strong>${proposals.length} sichere Zuordnung${proposals.length===1?"":"en"} gefunden.</strong><br>Verglichen wurden Kartenname, Set und die Cardmarket-Versionsnummer. Bitte kontrolliere die Vorschläge; erst „Ausgewählte übernehmen“ speichert sie. Mengen, Einstand, Status und Reservierungen bleiben unverändert.</div><div class="bulk-card-assignment-list full-width">${proposals.map((proposal,index)=>{const source=window.TcgCardSearch?.parseVariantLabel?.(proposal.row.record.name||"")||{};return `<label class="bulk-card-assignment-row"><input type="checkbox" data-safe-card-proposal="${index}" checked><span><strong>${escapeHtml(proposal.row.record.name||inventoryVariantName(proposal.candidate))}</strong><small>${escapeHtml(cardRepairReference(proposal.row))}</small></span><span><strong>CM ${escapeHtml(proposal.candidate.productId)}</strong><small>${escapeHtml([proposal.candidate.setName||proposal.candidate.set,proposal.candidate.collectorNumber||proposal.candidate.setCode,proposal.candidate.variant||proposal.candidate.inferredVariant,proposal.candidate.rarity||proposal.row.record.rarity||source.rarity].filter(Boolean).join(" · "))}</small></span></label>`;}).join("")}</div>`;
+  modalHandler=()=>{
+    const selected=[...wrap.querySelectorAll("[data-safe-card-proposal]:checked")].map(field=>proposals[Number(field.dataset.safeCardProposal)]).filter(Boolean);
+    if(!selected.length){alert("Bitte mindestens einen Vorschlag auswählen oder den Dialog abbrechen.");return false;}
+    selected.forEach(({row,candidate})=>{
+      const source=window.TcgCardSearch?.parseVariantLabel?.(row.record.name||"")||{};
+      applyCardRepairIdentity(row,{
+        ...candidate,
+        name:candidate.germanName||candidate.name||row.record.name,
+        variant:candidate.variant||candidate.inferredVariant||source.variant||"",
+        rarity:candidate.rarity||row.record.rarity||row.record.version||source.rarity||"",
+        set:candidate.setCode||candidate.set||row.record.set||"",
+        setName:candidate.setName||row.record.setName||"",
+        collectorNumber:candidate.collectorNumber||candidate.setCode||row.record.collectorNumber||""
+      },"Sicherer Abgleich aus Kartenname, Set und Versionsnummer bestätigt");
+    });
+    setTimeout(openDataRepairCenter,0);
+    return true;
+  };
+  configureModalAction({submitLabel:`Ausgewählte übernehmen (${proposals.length})`});
+  showDialogSafely(document.getElementById("modal"));
 }
 
 function openDataRepairCenter(){
@@ -2422,18 +2474,18 @@ function assignWantlistVariant(listId,entryId){
   inventoryCardSearchSequence++;inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent="Wantlist-Druckvariante zuordnen";
   const wrap=document.getElementById("modalFields");
-  wrap.innerHTML=`<div class="info full-width">Wähle nur die Druckvariante aus, die wirklich zu deinem Wantlist-Eintrag gehört. Menge, Preisgrenze, Sprache und Zustand bleiben erhalten.</div><label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher/englischer Name oder Setnummer …" value="${escapeHtml(entry.name||entry.germanName||entry.englishName||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label><div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}<label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label><input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen; der Price Guide dient nur als Markt-Orientierung.</span></div>`;
+  wrap.innerHTML=`<div class="info full-width">Wähle nur die Druckvariante aus, die wirklich zu deinem Wantlist-Eintrag gehört. Menge, Preisgrenze, Sprache und Zustand bleiben erhalten.</div><label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher/englischer Name oder Setnummer …" value="${escapeHtml(entry.name||entry.germanName||entry.englishName||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label><div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl"].map(name=>`<input type="hidden" name="${name}">`).join("")}<label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label><input name="suggestedSell" type="hidden"><div id="inventoryPriceSuggestion" class="inventory-price-suggestion full-width"><span>Druckvariante auswählen; der Price Guide dient nur als Markt-Orientierung.</span></div>`;
   wrap.dataset.inventorySelection="required";
   modalHandler=data=>{
     if(!data.productId||!data.name){alert("Bitte zuerst die richtige Druckvariante aus der Ergebnisliste auswählen.");return false;}
     entry.history=Array.isArray(entry.history)?entry.history:[];
     entry.history.push({at:new Date().toISOString(),productId:entry.productId||"",name:entry.name||"",set:entry.set||entry.setName||"",version:entry.version||entry.rarity||"",collectorNumber:entry.collectorNumber||"",action:"Druckvariante manuell zugeordnet"});
     entry.history=entry.history.slice(-100);
-    Object.assign(entry,{productId:cleanProductId(data.productId),metacardId:data.metacardId||"",name:data.name,germanName:data.germanName||data.name,englishName:data.englishName||"",set:data.set||"",setName:data.setName||"",version:data.rarity||"",rarity:data.rarity||"",collectorNumber:data.collectorNumber||"",productUrl:data.productUrl||"",manuallyAssignedAt:new Date().toISOString()});
+    Object.assign(entry,{productId:cleanProductId(data.productId),metacardId:data.metacardId||"",name:data.name,germanName:data.germanName||data.name,englishName:data.englishName||"",set:data.set||"",setName:data.setName||"",variant:data.variant||"",version:data.rarity||"",rarity:data.rarity||"",collectorNumber:data.collectorNumber||"",productUrl:data.productUrl||"",manuallyAssignedAt:new Date().toISOString()});
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(entry.name)setTimeout(()=>renderInventoryCardSearch(entry.name),0);
@@ -3191,22 +3243,33 @@ let inventoryCardSearchSequence=0;
 let inventoryPriceSequence=0;
 
 async function searchInventoryCardVariants(query){
+  const parsedQuery=window.TcgCardSearch?.parseVariantLabel?.(query)||{baseName:query,variant:""};
+  const searchQuery=parsedQuery.variant?parsedQuery.baseName:query;
+  const prepare=rows=>{
+    const products=window.TcgCardSearch?.inferVariantOrdinals?.(rows)||rows||[];
+    const wanted=normalizeCardName(parsedQuery.variant||"");
+    products.forEach(product=>{
+      const actual=normalizeCardName(product.variant||product.inferredVariant||"");
+      product.queryVariantMatch=Boolean(wanted&&actual===wanted);
+    });
+    return products.sort((left,right)=>Number(Boolean(right.queryVariantMatch))-Number(Boolean(left.queryVariantMatch)));
+  };
   if(window.tcgSearchCatalogCards){
-    const result=await window.tcgSearchCatalogCards(query,100);
-    return result.products||[];
+    const result=await window.tcgSearchCatalogCards(searchQuery,100);
+    return prepare(result.products||[]);
   }
   if(window.desktopApp?.searchCards){
-    const result=await window.desktopApp.searchCards({query,limit:100,offset:0});
+    const result=await window.desktopApp.searchCards({query:searchQuery,limit:100,offset:0});
     const products=(result.cards||[]).flatMap(card=>(card.variants||[]).map(variant=>({...variant,germanName:card.germanName||variant.germanName,englishName:card.englishName||variant.englishName,name:card.germanName||variant.germanName||card.englishName||variant.englishName||variant.officialName})));
     if(window.desktopApp.getTradeRecommendations&&products.length){
       const recommendations=await window.desktopApp.getTradeRecommendations({productIds:products.map(row=>row.productId),limit:100});
       const byId=new Map((recommendations.recommendations||[]).map(row=>[String(row.productId),row]));
       products.forEach(product=>product.learnedPricing=byId.get(String(product.productId))||null);
     }
-    return products;
+    return prepare(products);
   }
-  const q=normalizeCardName(query);
-  return Object.entries(state.productCatalog||{}).filter(([id,row])=>normalizeCardName([id,row.name,row.germanName,row.englishName,row.set,row.setName,row.rarity,row.collectorNumber].join(" ")).includes(q)).slice(0,100).map(([productId,row])=>({productId,...row}));
+  const q=normalizeCardName(searchQuery);
+  return prepare(Object.entries(state.productCatalog||{}).filter(([id,row])=>normalizeCardName([id,row.name,row.germanName,row.englishName,row.set,row.setName,row.rarity,row.collectorNumber].join(" ")).includes(q)).slice(0,100).map(([productId,row])=>({productId,...row})));
 }
 
 function inventoryVariantName(product={}){
@@ -3216,8 +3279,16 @@ function inventoryVariantName(product={}){
 function inventoryVariantSubtitle(product={}){
   const setName=product.setName||product.set||"Set unbekannt";
   const setNumber=product.collectorNumber||product.setCode||"Setnummer unbekannt";
-  const rarity=[product.variant,product.rarity].filter((value,index,array)=>value&&array.indexOf(value)===index).join(" · ")||"Seltenheit unbekannt";
+  const rarity=[product.variant||product.inferredVariant,product.rarity].filter((value,index,array)=>value&&array.indexOf(value)===index).join(" · ")||"Seltenheit unbekannt";
   return `${setName} · ${setNumber} · ${rarity}`;
+}
+
+async function safeCatalogVariantFor(record={}){
+  const identity=window.TcgCardSearch?.parseVariantLabel?.(record.name||record.germanName||record.englishName||"");
+  const urlIdentity=window.TcgCardSearch?.parseCardmarketProductUrl?.(record.productUrl||"")||{};
+  if(!identity?.variantNumber||!(record.setName||record.set||record.expansion||urlIdentity.setSlug))return null;
+  const products=await searchInventoryCardVariants(record.name||record.germanName||record.englishName||"");
+  return window.TcgCardSearch?.selectSafeVariant?.(record,products)||null;
 }
 
 async function inventoryPricingSuggestion(product={}){
@@ -3233,12 +3304,13 @@ async function chooseInventoryVariant(productId,preserveResults=false){
   const wrap=document.getElementById("modalFields");
   wrap.dataset.inventorySelection="selected";
   const setValue=product.setCode||product.set||product.setName||"";
-  const rarityValue=[product.variant,product.rarity].filter((value,index,array)=>value&&array.indexOf(value)===index).join(" · ");
-  const values={productId:String(product.productId||""),metacardId:String(product.metacardId||""),name:inventoryVariantName(product),germanName:product.germanName||inventoryVariantName(product),englishName:product.englishName||product.officialName||"",set:setValue,setName:product.setName||product.set||"",rarity:rarityValue,collectorNumber:product.collectorNumber||product.setCode||"",productUrl:product.productUrl||""};
+  const variantValue=product.variant||product.inferredVariant||"";
+  const rarityValue=product.rarity||"";
+  const values={productId:String(product.productId||""),metacardId:String(product.metacardId||""),name:inventoryVariantName(product),germanName:product.germanName||inventoryVariantName(product),englishName:product.englishName||product.officialName||"",set:setValue,setName:product.setName||product.set||"",variant:variantValue,rarity:rarityValue,collectorNumber:product.collectorNumber||product.setCode||"",productUrl:product.productUrl||""};
   Object.entries(values).forEach(([name,value])=>{const field=document.querySelector(`#modalFields [name="${name}"]`);if(field)field.value=value;});
   document.getElementById("inventorySelectedCard").innerHTML=`<strong>${escapeHtml(values.name)}</strong>${values.englishName&&normalizeCardName(values.englishName)!==normalizeCardName(values.name)?`<small>Englisch: ${escapeHtml(values.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span>`;
   document.getElementById("inventorySetDisplay").value=values.setName||values.set;
-  document.getElementById("inventoryRarityDisplay").value=values.rarity;
+  document.getElementById("inventoryRarityDisplay").value=[values.variant,values.rarity].filter(Boolean).join(" · ");
   document.getElementById("inventoryNumberDisplay").value=values.collectorNumber;
   if(!preserveResults)document.getElementById("inventoryCardResults").innerHTML="";
   else document.querySelectorAll("#inventoryCardResults [data-select-inventory-product]").forEach(button=>button.classList.toggle("selected",button.dataset.selectInventoryProduct===String(productId)));
@@ -3280,8 +3352,9 @@ function renderInventoryProductChoices(products=[],scan=null){
   const incomplete=products.filter(product=>!complete.includes(product));
   inventoryModalVariants=new Map(products.map(product=>[String(product.productId),product]));
   const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":scan.recognitionMatch?.reason==="fuzzy-name"?"Ähnlicher Kartenname gefunden":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe, Seltenheit und Edition kontrollieren.</span></div>`:"";
-  const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
-  const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} mit unvollständigen Quelldaten</strong><span>Prüfe die Variante bei Cardmarket. Wenn die Produkt-ID stimmt, kannst du sie anschließend direkt übernehmen.</span>${incomplete.slice(0,30).map(product=>`<div class="inventory-product-check"><a href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(inventoryVariantName(product))} · ${escapeHtml(inventoryVariantSubtitle(product))}</span><strong>CM ${escapeHtml(product.productId)} prüfen ↗</strong></a><button type="button" class="secondary compact-button" data-confirm-inventory-product="${escapeHtml(product.productId)}">Diese CM-ID übernehmen</button></div>`).join("")}</div>`:"";
+  const matchNote=product=>product.queryVariantMatch?'<small class="variant-match-note">Passt zur gesuchten Versionsnummer</small>':"";
+  const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice ${product.queryVariantMatch?"recommended":""}" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span>${matchNote(product)}<small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
+  const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} mit unvollständigen Quelldaten</strong><span>Die Versionsnummer macht die CM-IDs unterscheidbar. Prüfe den direkten Cardmarket-Link und bestätige anschließend nur die passende Zeile.</span>${incomplete.slice(0,30).map(product=>`<div class="inventory-product-check ${product.queryVariantMatch?"recommended":""}"><a href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(inventoryVariantName(product))} · ${escapeHtml(inventoryVariantSubtitle(product))}</span>${matchNote(product)}<strong>CM ${escapeHtml(product.productId)} prüfen ↗</strong></a><button type="button" class="secondary compact-button" data-confirm-inventory-product="${escapeHtml(product.productId)}">Diese CM-ID übernehmen</button></div>`).join("")}</div>`:"";
   target.innerHTML=products.length?recognitionHtml+completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
 }
 
@@ -3336,7 +3409,7 @@ function addInventory(initial={}, collection="business", scan=null) {
     ${!initial.id&&!scan?'<div id="inventoryBatchSummary" class="inventory-batch-summary full-width" hidden></div>':""}
     <label class="full-width inventory-card-search-label">Kartenname suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutscher oder englischer Kartenname …" value="${escapeHtml(initial.name||scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width">${initial.productId?`<strong>${escapeHtml(initial.name||"Ausgewählte Karte")}</strong><span>${escapeHtml([initial.setName||initial.set,initial.collectorNumber,initial.rarity].filter(Boolean).join(" · "))}</span>`:'<span>Noch keine Druckvariante ausgewählt.</span>'}</div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}" value="${escapeHtml(initial[name]||"")}">`).join("")}
     <label>Set<input id="inventorySetDisplay" value="${escapeHtml(initial.setName||initial.set||"")}" readonly></label>
     <label>Setnummer<input id="inventoryNumberDisplay" value="${escapeHtml(initial.collectorNumber||"")}" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" value="${escapeHtml(initial.rarity||"")}" readonly></label>
@@ -3379,7 +3452,7 @@ function addInventory(initial={}, collection="business", scan=null) {
     return {obj:inventoryObject(data),quantity:Math.max(1,Math.round(Number(data.quantity||1)))};
   };
   const resetInventoryEntry=()=>{
-    ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});
+    ["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});
     ["cost","listingPrice","desiredSalePrice"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});
     const quantityField=wrap.querySelector('[name="quantity"]');if(quantityField)quantityField.value="1";
     document.getElementById("inventoryCardSearch").value="";
@@ -3421,7 +3494,7 @@ function addInventory(initial={}, collection="business", scan=null) {
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.dataset.inventoryBatchQuantity!==undefined){const index=Number(event.target.dataset.inventoryBatchQuantity);if(batchEntries[index])batchEntries[index].quantity=Math.max(1,Math.round(Number(event.target.value||1)));const total=batchEntries.reduce((sum,row)=>sum+row.quantity,0);const heading=document.querySelector("#inventoryBatchSummary .inventory-batch-head strong");if(heading)heading.textContent=`Sammelliste · ${batchEntries.length} Position${batchEntries.length===1?"":"en"} · ${total} Karte${total===1?"":"n"}`;document.getElementById("modalSubmit").textContent=`Alle ${total} Karten speichern`;return;}if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.dataset.inventoryBatchQuantity!==undefined){const index=Number(event.target.dataset.inventoryBatchQuantity);if(batchEntries[index])batchEntries[index].quantity=Math.max(1,Math.round(Number(event.target.value||1)));const total=batchEntries.reduce((sum,row)=>sum+row.quantity,0);const heading=document.querySelector("#inventoryBatchSummary .inventory-batch-head strong");if(heading)heading.textContent=`Sammelliste · ${batchEntries.length} Position${batchEntries.length===1?"":"en"} · ${total} Karte${total===1?"":"n"}`;document.getElementById("modalSubmit").textContent=`Alle ${total} Karten speichern`;return;}if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;inventoryPriceSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML='<span>Bitte die richtige Druckvariante aus der Liste auswählen.</span>';document.getElementById("inventorySetDisplay").value="";document.getElementById("inventoryNumberDisplay").value="";document.getElementById("inventoryRarityDisplay").value="";document.getElementById("inventoryPriceSuggestion").innerHTML='<span>Druckvariante auswählen, um den aktuellen VK-Vorschlag anzuzeigen.</span>';searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{const remove=event.target.closest("[data-remove-inventory-batch]");if(remove){batchEntries.splice(Number(remove.dataset.removeInventoryBatch),1);renderBatchSummary();return;}if(handleInventoryProductChoice(event))return;if(event.target.id==="applyInventorySuggestedPrice"){const suggestion=Number(document.querySelector('#modalFields [name="suggestedSell"]')?.value||0);const priceField=document.querySelector('#modalFields [name="listingPrice"]')||document.querySelector('#modalFields [name="desiredSalePrice"]');if(priceField&&suggestion){priceField.value=suggestion.toFixed(2);priceField.focus();}}};
   inventoryModalVariants=new Map();
   configureModalAction();
@@ -3441,7 +3514,7 @@ function addPurchaseLine(purchaseId,scan=null){
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="z. B. Aschenblüte oder RA01-008" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <label>Menge<input name="quantity" type="number" min="1" step="1" value="1" required></label>
@@ -3464,7 +3537,7 @@ function addPurchaseLine(purchaseId,scan=null){
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
@@ -3479,7 +3552,7 @@ function addSaleLine(saleId,scan=null){
     ${scan?`<div class="scan-review full-width"><img src="${scan.imageDataUrl}" alt="Vom iPhone aufgenommenes Kartenfoto"><div><strong>${escapeHtml(scannerReviewTitle(scan))}</strong><span>${escapeHtml(scannerReviewDescription(scan))}</span></div></div>`:""}
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(scan?.hint||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Noch keine Druckvariante ausgewählt.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label><label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <label>Menge<input name="quantity" type="number" min="1" step="1" value="1" required></label><label>Verkaufspreis pro Stück (€)<input name="unitPrice" type="number" min="0" step="0.01" required></label>
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option>${value}</option>`).join("")}</select></label><label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option>${value}</option>`).join("")}</select></label>
@@ -3497,7 +3570,7 @@ function addSaleLine(saleId,scan=null){
     setTimeout(()=>openSaleAllocation(sale.id),0);return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{if(handleInventoryProductChoice(event))return;if(event.target.id==="applyInventorySuggestedPrice"){const price=Number(wrap.querySelector('[name="suggestedSell"]')?.value||0);const field=wrap.querySelector('[name="unitPrice"]');if(field&&price)field.value=price.toFixed(2);}};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(!applyScannerModalRecognition(scan))setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
@@ -3550,7 +3623,7 @@ function repairPurchaseLineIdentity(purchaseId,index){
     <div class="info full-width"><strong>Vorhandene Einkaufsposition</strong><br>${escapeHtml(line.name||"Unbekannte Karte")} · ${Number(line.quantity||1)} Exemplar(e). Die Menge und der Wareneingang bleiben unverändert.</div>
     <label class="full-width inventory-card-search-label">Kartenname oder Setnummer suchen<input id="inventoryCardSearch" autocomplete="off" placeholder="Deutsch, Englisch oder Setnummer" value="${escapeHtml(line.name||"")}"><div id="inventoryCardResults" class="inventory-card-results"></div></label>
     <div id="inventorySelectedCard" class="inventory-selected-card full-width"><span>Bitte die richtige Druckvariante auswählen.</span></div>
-    ${["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
+    ${["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].map(name=>`<input type="hidden" name="${name}">`).join("")}
     <label>Set<input id="inventorySetDisplay" readonly></label><label>Setnummer<input id="inventoryNumberDisplay" readonly></label>
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" readonly></label>
     <label class="full-width">Grund der Zuordnung<input name="reason" value="Fehlende Cardmarket-ID und Druckvariante ergänzt" required></label>`;
@@ -3558,18 +3631,18 @@ function repairPurchaseLineIdentity(purchaseId,index){
   modalHandler=data=>{
     if(!data.productId||!data.name){alert("Bitte zuerst die richtige Druckvariante aus der Ergebnisliste auswählen.");return false;}
     const beforeProductId=cleanProductId(line.productId);
-    ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>line[field]=data[field]||"");
+    ["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>line[field]=data[field]||"");
     const productId=cleanProductId(line.productId);
     if(productId)state.productCatalog[productId]={...(state.productCatalog[productId]||{}),...line,productId};
     refreshPurchaseAssetCosts(purchase);
     (state.sales||[]).forEach(sale=>(sale.items||[]).filter(item=>beforeProductId&&cleanProductId(item.productId)===beforeProductId).forEach(item=>{
-      ["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>item[field]=line[field]||"");
+      ["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode"].forEach(field=>item[field]=line[field]||"");
     }));
     addMovement({type:"Einkaufskarte zugeordnet",quantity:0,productId,purchaseId:purchase.id,reference:`Einkauf ${purchase.orderNo||"-"}`,note:String(data.reason||"").trim()});
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
   if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
@@ -4045,16 +4118,44 @@ function stockRowMetadata(r) {
   const productId = cleanProductId(getAny(r,["idProduct","productId","CM Produkt-ID"]));
   const imageUrl = getAny(r,["ImageUrl","imageUrl"]);
   const setFromImage = String(imageUrl||"").match(/\/5\/([^/]+)\/\d+\//)?.[1] || "";
+  const sourceName=getAny(r,["Name","Karte","Product Name"]);
+  const sourceIdentity=window.TcgCardSearch?.parseVariantLabel?.(sourceName)||{};
   return resolveProduct(productId, {
-    name:getAny(r,["Name","Karte","Product Name"]),
+    name:sourceName,
     set:setFromImage || getAny(r,["SetCode","Set","ExpansionCode"]),
     setName:getAny(r,["Expansion","Setname"]),
+    variant:sourceIdentity.variant||getAny(r,["Variant","Version"]),
     rarity:getAny(r,["Rarity","Seltenheit"]),
     language:getAny(r,["Language","Sprache"]),
     condition:getAny(r,["Condition","Zustand"]),
     collectorNumber:getAny(r,["CollectorNumber","Kartennr."]),
     productUrl:getAny(r,["ProductUrl","Produkt-URL"])
   });
+}
+
+function setStockRowProductId(row,productId){
+  const matchingKey=Object.keys(row||{}).find(key=>["idproduct","productid","cmprodukt-id"].includes(String(key).toLowerCase().replace(/\s+/g,"")));
+  row[matchingKey||"idProduct"]=String(productId||"");
+}
+
+async function resolveMissingStockProductIds(rows=[]){
+  const cache=new Map();
+  let resolved=0,unresolved=0;
+  for(const row of rows){
+    if(cleanProductId(getAny(row,["idProduct","productId","CM Produkt-ID"])))continue;
+    const record=stockRowMetadata(row);
+    const sourceIdentity=window.TcgCardSearch?.parseVariantLabel?.(record.name||"")||{};
+    const cacheKey=[sourceIdentity.baseName,record.setName||record.set,record.rarity||sourceIdentity.rarity,sourceIdentity.variant].map(normalizeCardName).join("|");
+    let candidate=cache.get(cacheKey);
+    if(candidate===undefined){
+      candidate=await safeCatalogVariantFor(record);
+      cache.set(cacheKey,candidate||null);
+    }
+    if(!candidate){unresolved++;continue;}
+    setStockRowProductId(row,candidate.productId);
+    resolved++;
+  }
+  return {resolved,unresolved};
 }
 
 function updateCatalogFromRows(rows) {
@@ -4162,6 +4263,7 @@ async function importStock(file) {
   const key=`STOCK-${file.name}-${Number(file.size||0)}-${Number(file.lastModified||0)}-${rows.length}`;
   const previous=state.imports.find(i=>i.type==="inventory" && i.key===key);
   if(previous)throw new Error("Dieser Cardmarket-Bestand wurde bereits verarbeitet. Bitte einen neueren Export auswählen.");
+  const productIdResolution=await resolveMissingStockProductIds(rows);
   updateCatalogFromRows(rows);
 
   // Mengen aus offenen Bestellungen werden beim Bestandsimport reserviert und
@@ -4231,7 +4333,7 @@ async function importStock(file) {
 
     const metadata={
       productId:row.p.productId,name:row.p.name,germanName:row.p.germanName||"",englishName:row.p.englishName||"",
-      set:row.p.set,setName:row.p.setName,rarity:row.p.rarity,language:row.p.language,condition:row.p.condition,
+      set:row.p.set,setName:row.p.setName,variant:row.p.variant||"",rarity:row.p.rarity,language:row.p.language,condition:row.p.condition,
       collectorNumber:row.p.collectorNumber,productUrl:row.p.productUrl,listed:row.offerPrice>0,listingPrice:row.offerPrice,
       articleId:row.articleId,stockIdentity:row.identity,lastStockSnapshot:key
     };
@@ -4264,13 +4366,14 @@ async function importStock(file) {
   state.imports.push({
     id:uid(),type:"inventory",key,file:file.name,date:new Date().toISOString(),
     rows:rows.length,cards,unknown,skippedOpenOrders,soldHistoryPreserved,snapshotSync:true,createdIds,removedItems,updatedFieldsBefore,
+    productIdsResolved:productIdResolution.resolved,productIdsUnresolved:productIdResolution.unresolved,
     added:createdIds.length,removed:removedItems.length
   });
   await window.tcgBackfillBusinessPrintMetadata?.([...snapshotRows.values()].map(row=>row.p.productId));
   saveState();renderAll();
   return {
-    rows:rows.length,cards,unknown,skippedOpenOrders,added:createdIds.length,removed:removedItems.length,soldHistoryPreserved,
-    warning:`Vollständiger Bestandsabgleich: ${removedItems.length} nicht mehr angebotene Exemplare aus dem aktuellen Bestand entfernt. ${soldHistoryPreserved} verkaufte/stornierte Exemplare bleiben für Historie und Auswertung gespeichert.`
+    rows:rows.length,cards,unknown,skippedOpenOrders,added:createdIds.length,removed:removedItems.length,soldHistoryPreserved,...productIdResolution,
+    warning:`Vollständiger Bestandsabgleich: ${removedItems.length} nicht mehr angebotene Exemplare aus dem aktuellen Bestand entfernt. ${soldHistoryPreserved} verkaufte/stornierte Exemplare bleiben für Historie und Auswertung gespeichert.${productIdResolution.resolved?` ${productIdResolution.resolved} fehlende CM-ID${productIdResolution.resolved===1?" wurde":"s wurden"} sicher aus Kartenname, Set und Versionsnummer ergänzt.`:""}${productIdResolution.unresolved?` ${productIdResolution.unresolved} nicht eindeutige Zuordnung${productIdResolution.unresolved===1?" bleibt":"en bleiben"} zur manuellen Prüfung offen.`:""}`
   };
 }
 
@@ -4300,7 +4403,7 @@ async function importPurchases(file,details={}) {
     const language=mapLanguage(getAny(r,["idLanguage","language","Sprache"])) || p.language;
     const condition=mapCondition(getAny(r,["condition","Condition-Code","Zustand"])) || p.condition;
     pendingItems.push({
-      productId, name:p.name, set:p.set, setName:p.setName, rarity:p.rarity,
+      productId, name:p.name, set:p.set, setName:p.setName, variant:p.variant||"", rarity:p.rarity,
       language,condition,
       collectorNumber:p.collectorNumber, productUrl:p.productUrl,
       quantity, unitPrice:price, sourceRow:idx+2,
@@ -5393,6 +5496,12 @@ document.getElementById("dataRepairContent").addEventListener("click",async even
   if(allocationButton){document.getElementById("dataRepairDialog").close();openSaleAllocation(allocationButton.dataset.repairSaleAllocation);return;}
   const costButton=event.target.closest("[data-repair-sale-cost]");
   if(costButton){document.getElementById("dataRepairDialog").close();openHistoricalCostRepair(costButton.dataset.repairSaleCost);return;}
+  if(event.target.closest("#repairAssignmentProposalBtn")){
+    const button=event.target.closest("#repairAssignmentProposalBtn");button.disabled=true;button.textContent="Sichere CM-IDs werden gesucht …";
+    try{await openSafeCardAssignmentProposals();}
+    catch(error){alert(`CM-ID-Vorschläge konnten nicht ermittelt werden: ${error.message}`);renderDataRepairCenter();}
+    return;
+  }
   if(event.target.closest("#repairMetadataBtn")){
     const button=event.target.closest("#repairMetadataBtn");button.disabled=true;button.textContent="Kartendaten werden geprüft …";
     try{

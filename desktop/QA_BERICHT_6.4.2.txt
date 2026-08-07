@@ -1,0 +1,19 @@
+QA-Bericht TCG Business Manager 6.4.2
+
+Prüfbereiche
+- Syntax- und Paketprüfung: BESTANDEN
+- Automatische Funktionstests (70/70): BESTANDEN
+- Deutsche und englische Kartensuche: BESTANDEN
+- Suche mit Cardmarket-Versionsnummer: BESTANDEN
+- Sichere Auswahl nach Name, Set, Version und Seltenheit: BESTANDEN
+- Schutz kleiner uneinheitlicher Cardmarket-Druckgruppen: BESTANDEN
+- Windows-Installer 6.4.2 erfolgreich erstellt: BESTANDEN
+- Automatischer Oberflächentest des gebauten Programms: TESTUMGEBUNG BLOCKIERT (Windows-Grafikprozess konnte nicht gestartet werden)
+- Auswertung der aktuellen Bestandsdatei vom 07.08.2026: 125 von 128 bekannten Versionsnummern stimmen mit der Produktreihenfolge überein; die drei Abweichungen liegen ausschließlich in kleinen alten Dreiergruppen und werden von der Automatik ausgeschlossen.
+- Aktueller Datenbestand: 31 fehlende IDs im Bestand, zwei verknüpfte Verkaufszeilen und vier eindeutige Wantlist-Zeilen können als kontrollierbare Vorschläge aufbereitet werden.
+
+Datenintegrität
+- Die produktiven Nutzerdaten wurden bei der Prüfung nur gelesen und nicht verändert.
+- Vorschläge werden erst nach ausdrücklicher Bestätigung gespeichert.
+- Mengen, Einstand, Inseratspreise, Status, Besitzart und Reservierungen bleiben unverändert.
+- Verknüpfte Einkaufs-, Bestands- und Verkaufsdatensätze werden gemeinsam berichtigt.

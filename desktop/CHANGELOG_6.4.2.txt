@@ -1,0 +1,11 @@
+TCG Business Manager 6.4.2 – sichere Cardmarket-ID-Zuordnung
+
+- Fehlende Cardmarket-IDs können im Reparaturcenter gesammelt vorgeschlagen und vor dem Speichern kontrolliert werden.
+- Die Zuordnung vergleicht Kartenname, Set, Cardmarket-Versionsnummer und vorhandene Seltenheit.
+- Kleine alte Druckgruppen mit uneinheitlicher Cardmarket-Reihenfolge bleiben bewusst zur manuellen Prüfung offen.
+- Suchanfragen mit Namen wie „Kashtira Fenrir (V.2 - Ultra Rare)“ stellen die passende Version sichtbar nach oben.
+- Alle Kandidaten zeigen Versionsnummer, Seltenheit, Setnummer und Cardmarket-Produkt-ID getrennt an.
+- Künftige Cardmarket-Bestandsimporte ergänzen nur sicher herleitbare fehlende Produkt-IDs und melden offene Fälle.
+- Mengen, Einstandspreise, Inseratspreise, Status, Reservierungen und Verkaufsdaten werden bei der Zuordnung nicht verändert.
+- Direkte Cardmarket-Produktlinks aus den Quelldateien bleiben erhalten.
+

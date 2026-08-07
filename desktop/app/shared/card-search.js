@@ -154,6 +154,54 @@
     return uniqueMatches.length === 1 ? uniqueMatches[0] : null;
   }
 
+  function variantCandidateMatch(query = "", expected = {}, candidate = {}) {
+    const queryIdentity = parseVariantLabel(query);
+    const expectedIdentity = parseVariantLabel(expected.name || expected.germanName || expected.englishName || "");
+    const candidateIdentities = uniqueStrings([
+      candidate.name, candidate.germanName, candidate.englishName, candidate.officialName
+    ]).map(parseVariantLabel);
+    const expectedBase = normalizeCompact(expectedIdentity.baseName || queryIdentity.baseName);
+    const candidateNames = candidateIdentities.map(identity => normalizeCompact(identity.baseName)).filter(Boolean);
+    const nameMatch = Boolean(expectedBase && candidateNames.includes(expectedBase));
+
+    const wantedVariant = normalizeCompact(queryIdentity.variant || expected.variant || expectedIdentity.variant);
+    const actualVariant = normalizeCompact(candidate.variant || candidate.inferredVariant || candidateIdentities.find(identity => identity.variant)?.variant || "");
+    const versionMatch = Boolean(wantedVariant && actualVariant === wantedVariant);
+
+    const urlIdentity = parseCardmarketProductUrl(expected.productUrl || "");
+    const expectedSetValues = uniqueStrings([
+      expected.setName, expected.set, expected.expansion, expected.setCode, expected.collectorNumber, urlIdentity.setSlug
+    ]);
+    const candidateSetValues = uniqueStrings([
+      candidate.setName, candidate.set, candidate.expansion, candidate.setCode, candidate.collectorNumber
+    ]);
+    const setKeys = values => new Set(values.flatMap(value => {
+      const parsed = parseSetCode(value);
+      return uniqueStrings([normalizeCompact(value), parsed?.prefix ? normalizeCompact(parsed.prefix) : ""]);
+    }));
+    const expectedSetKeys = setKeys(expectedSetValues);
+    const candidateSetKeys = setKeys(candidateSetValues);
+    const setMatch = expectedSetKeys.size > 0 && [...expectedSetKeys].some(key => candidateSetKeys.has(key));
+
+    const expectedCode = parseSetCode(expected.collectorNumber || expected.setCode || "");
+    const candidateCode = parseSetCode(candidate.collectorNumber || candidate.setCode || "");
+    const collectorMatch = !expectedCode
+      ? true
+      : Boolean(candidateCode && (candidateCode.full === expectedCode.full || candidateCode.neutral === expectedCode.neutral));
+
+    const expectedRarity = normalizeCompact(expected.rarity || expected.version || expectedIdentity.rarity || queryIdentity.rarity);
+    const candidateRarity = normalizeCompact(candidate.rarity || candidateIdentities.find(identity => identity.rarity)?.rarity || "");
+    const rarityMatch = !expectedRarity || !candidateRarity || expectedRarity === candidateRarity;
+    return {
+      nameMatch,
+      versionMatch,
+      setMatch,
+      collectorMatch,
+      rarityMatch,
+      fullMatch:Boolean(nameMatch && versionMatch && setMatch && collectorMatch && rarityMatch)
+    };
+  }
+
   function matchesSearch(documentOrValues, query = "") {
     const document = documentOrValues && typeof documentOrValues === "object" && !Array.isArray(documentOrValues)
       ? documentOrValues
@@ -180,6 +228,7 @@
     parseCardmarketProductUrl,
     inferVariantOrdinals,
     selectSafeVariant,
+    variantCandidateMatch,
     matchesSearch,
     uniqueStrings
   });

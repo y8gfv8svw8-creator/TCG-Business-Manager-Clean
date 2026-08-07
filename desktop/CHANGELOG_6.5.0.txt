@@ -1,0 +1,12 @@
+TCG Business Manager 6.5.0 – sichere Druckdaten und Navigation
+
+- Eine gleiche Cardmarket-Versionsnummer allein wird nicht mehr als sichere Druckzuordnung bewertet.
+- Grüne Empfehlungen verlangen nun passenden Kartennamen, Set, Versionsnummer, vorhandene Setnummer und Seltenheit.
+- Treffer aus einem anderen oder unbekannten Set werden gelb als prüfpflichtig gekennzeichnet.
+- Die verschärfte Prüfung gilt im Reparaturcenter, in Wantlisten und bei Einkaufspositionen.
+- „Eindeutige Druckdaten ergänzen“ gleicht zuerst den lokalen Katalog ab und lädt bei weiterhin fehlenden Setnummern aktuelle Kartendaten nach.
+- Automatisch ergänzte Druckdaten speichern ihre Herkunft und den Aktualisierungszeitpunkt.
+- Unklare Druckvarianten bleiben unverändert; Mengen, Einstand, Inseratspreise, Reservierungen und Verkäufe werden nicht verändert.
+- Die obere Zurück-/Vorwärtsnavigation merkt sich besuchte Bereiche und deren Scrollposition.
+- Zusätzliche Maustasten funktionieren wie im Browser: hintere Taste zurück, vordere Taste vorwärts.
+- Bei geöffneten Dialogen schließt „Zurück“ zunächst den obersten Dialog.

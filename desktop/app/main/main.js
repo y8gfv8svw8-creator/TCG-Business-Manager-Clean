@@ -5,7 +5,7 @@ const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.4.1';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.5.0';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();

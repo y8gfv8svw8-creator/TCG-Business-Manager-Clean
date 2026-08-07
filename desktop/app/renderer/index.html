@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.4.1</title>
+  <title>TCG Business Manager 6.5.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.4.1 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.5.0 · SQLite</div>
         </div>
       </div>
 
@@ -50,6 +50,10 @@
           <p id="pageSubtitle">Zentrale Übersicht über Bestand, Käufe, Verkäufe und Gewinn.</p>
         </div>
         <div class="top-actions">
+          <div class="navigation-actions" aria-label="Seitennavigation">
+            <button id="navBackBtn" class="secondary navigation-button" type="button" title="Zurück – auch mit der hinteren Maustaste" aria-label="Zur vorherigen Seite" disabled>←</button>
+            <button id="navForwardBtn" class="secondary navigation-button" type="button" title="Vorwärts – auch mit der vorderen Maustaste" aria-label="Zur nächsten Seite" disabled>→</button>
+          </div>
           <div class="global-search-wrap"><input id="globalSearch" type="search" placeholder="Überall suchen …" aria-label="Bestand, Bestellungen und Kontakte durchsuchen" autocomplete="off" /><div id="globalSearchResults" class="global-search-results" hidden></div></div>
           <span id="saveStatus" class="save-status">Lokal gespeichert</span>
           <button id="themeToggleBtn" class="theme-toggle" type="button" aria-label="Darstellung wechseln" title="Darstellung wechseln">Mond</button>

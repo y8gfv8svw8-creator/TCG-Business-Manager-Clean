@@ -90,3 +90,15 @@ test('liefert nur eine sichere CM-ID bei exaktem Namen, Set, Version und passend
   assert.equal(cardSearch.selectSafeVariant({name:'Kashtira Fenrir',setName:'Darkwing Blast'},candidates),null);
   assert.equal(cardSearch.selectSafeVariant({name:'Kashtira Fenrir (V.2 - Secret Rare)',setName:'Darkwing Blast',rarity:'Secret Rare'},candidates),null);
 });
+
+test('markiert dieselbe Versionsnummer aus einem anderen Set nicht als passenden Druck', () => {
+  const expected={name:'Abgeheuerlicher Dis Pater (V.1 - Super Rare)',setName:'Rarity Collection 5',rarity:'Super Rare'};
+  const japanese={productId:'791177',name:'Abgeheuerlicher Dis Pater',setName:'Japanese Promotion Pack',inferredVariant:'V.1',rarity:'Super Rare'};
+  const correct={productId:'880936',name:'Abgeheuerlicher Dis Pater',setName:'Rarity Collection 5',setCode:'RA05-EN041',inferredVariant:'V.1',rarity:'Super Rare'};
+  const wrong=cardSearch.variantCandidateMatch(expected.name,expected,japanese);
+  const right=cardSearch.variantCandidateMatch(expected.name,expected,correct);
+  assert.equal(wrong.versionMatch,true);
+  assert.equal(wrong.setMatch,false);
+  assert.equal(wrong.fullMatch,false);
+  assert.equal(right.fullMatch,true);
+});

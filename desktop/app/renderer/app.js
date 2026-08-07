@@ -194,7 +194,9 @@ function businessPrintMetadata(product={}) {
     germanName:String(product.germanName||"").trim(),englishName:String(product.englishName||product.officialBaseName||product.officialName||product.name||"").trim(),
     metacardId:cleanProductId(product.metacardId),set:setPrefix,setName:String(product.setName||"").trim(),
     collectorNumber:fullCode.includes("-")?fullCode:"",rarity:rarityParts.join(" · "),
-    productUrl:String(product.productUrl||"").trim()
+    productUrl:String(product.productUrl||"").trim(),
+    printDataSource:String(product.setDataSource||product.source||"Cardmarket-Katalog").trim(),
+    printDataUpdatedAt:String(product.updatedAt||state.cardmarket?.cardDataImportedAt||new Date().toISOString()).trim()
   };
 }
 
@@ -215,16 +217,18 @@ function applyBusinessProductMetadata(products=[]) {
     if(!record||!product)return;
     const metadata=businessPrintMetadata(product);
     const mapping=watchlist?{name:"name",germanName:"germanName",englishName:"englishName",set:"set",rarity:"version",productUrl:"productUrl"}:{name:"name",germanName:"germanName",englishName:"englishName",metacardId:"metacardId",set:"set",setName:"setName",collectorNumber:"collectorNumber",rarity:"rarity",productUrl:"productUrl"};
+    let metadataApplied=false;
     Object.entries(mapping).forEach(([source,target])=>{
       const value=metadata[source];
       if(!value||!missingBusinessPrintField(source,record[target]))return;
-      record[target]=value;changed++;
+      record[target]=value;changed++;metadataApplied=true;
     });
     if(watchlist){
       [["setName",metadata.setName],["collectorNumber",metadata.collectorNumber],["rarity",metadata.rarity]].forEach(([field,value])=>{
-        if(value&&missingBusinessPrintField(field,record[field])){record[field]=value;changed++;}
+        if(value&&missingBusinessPrintField(field,record[field])){record[field]=value;changed++;metadataApplied=true;}
       });
     }
+    if(metadataApplied){record.printDataSource=metadata.printDataSource;record.printDataUpdatedAt=metadata.printDataUpdatedAt;}
   };
   const records=[];
   (state.inventory||[]).forEach(record=>records.push(record));
@@ -873,14 +877,56 @@ function calculateWatch(w) {
   return {profit,roi,status,market,exactVariant,stale};
 }
 
-function showView(name) {
+const navigationBackStack=[];
+const navigationForwardStack=[];
+let currentViewName="";
+
+function updateNavigationButtons(){
+  const back=document.getElementById("navBackBtn"),forward=document.getElementById("navForwardBtn");
+  if(back)back.disabled=navigationBackStack.length===0;
+  if(forward)forward.disabled=navigationForwardStack.length===0;
+}
+
+function showView(name,options={}) {
+  if(!views[name]||!document.getElementById(`view-${name}`))return;
+  const keepHistory=options.history!==false;
+  if(currentViewName&&currentViewName!==name&&keepHistory){
+    navigationBackStack.push({name:currentViewName,scrollY:window.scrollY});
+    if(navigationBackStack.length>100)navigationBackStack.shift();
+    navigationForwardStack.length=0;
+  }
   document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
   document.getElementById(`view-${name}`).classList.add("active");
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===name));
   document.getElementById("pageTitle").textContent = views[name][0];
   document.getElementById("pageSubtitle").textContent = views[name][1];
+  currentViewName=name;
+  updateNavigationButtons();
   renderAll();
   if(name==="buying")setTimeout(()=>refreshActivePurchaseDraftPrices(false),0);
+}
+
+function closeTopDialog(){
+  const dialogs=[...document.querySelectorAll("dialog[open]")];
+  const dialog=dialogs.at(-1);
+  if(!dialog)return false;
+  dialog.close();
+  return true;
+}
+
+function navigateBack(){
+  if(closeTopDialog())return;
+  const target=navigationBackStack.pop();if(!target)return;
+  if(currentViewName)navigationForwardStack.push({name:currentViewName,scrollY:window.scrollY});
+  showView(target.name,{history:false});
+  requestAnimationFrame(()=>window.scrollTo({top:Number(target.scrollY||0),behavior:"auto"}));
+}
+
+function navigateForward(){
+  const target=navigationForwardStack.pop();if(!target)return;
+  if(currentViewName)navigationBackStack.push({name:currentViewName,scrollY:window.scrollY});
+  showView(target.name,{history:false});
+  requestAnimationFrame(()=>window.scrollTo({top:Number(target.scrollY||0),behavior:"auto"}));
 }
 
 let globalSearchActions=[];
@@ -1418,11 +1464,11 @@ function openCardAssignmentRepair(row){
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","cardPasscode","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value,row.record),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction({submitLabel:"Zuordnung übernehmen"});showDialogSafely(document.getElementById("modal"));
   const query=row.record.collectorNumber||row.record.name||row.record.germanName||row.record.englishName||"";
-  if(query)setTimeout(()=>renderInventoryCardSearch(query),0);
+  if(query)setTimeout(()=>renderInventoryCardSearch(query,row.record),0);
 }
 
 async function openSafeCardAssignmentProposals(){
@@ -2485,10 +2531,10 @@ function assignWantlistVariant(listId,entryId){
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl","suggestedSell"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value,entry),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
-  if(entry.name)setTimeout(()=>renderInventoryCardSearch(entry.name),0);
+  if(entry.name)setTimeout(()=>renderInventoryCardSearch(entry.name,entry),0);
 }
 
 function renderInventoryRepricing(){
@@ -3242,17 +3288,18 @@ let inventoryModalVariants=new Map();
 let inventoryCardSearchSequence=0;
 let inventoryPriceSequence=0;
 
-async function searchInventoryCardVariants(query){
+async function searchInventoryCardVariants(query,expectedRecord={}){
   const parsedQuery=window.TcgCardSearch?.parseVariantLabel?.(query)||{baseName:query,variant:""};
   const searchQuery=parsedQuery.variant?parsedQuery.baseName:query;
   const prepare=rows=>{
     const products=window.TcgCardSearch?.inferVariantOrdinals?.(rows)||rows||[];
-    const wanted=normalizeCardName(parsedQuery.variant||"");
     products.forEach(product=>{
-      const actual=normalizeCardName(product.variant||product.inferredVariant||"");
-      product.queryVariantMatch=Boolean(wanted&&actual===wanted);
+      const assessment=window.TcgCardSearch?.variantCandidateMatch?.(query,expectedRecord,product)||{};
+      product.queryVariantMatch=Boolean(assessment.fullMatch);
+      product.queryVariantOnlyMatch=Boolean(assessment.versionMatch&&!assessment.fullMatch);
+      product.querySetMatch=Boolean(assessment.setMatch);
     });
-    return products.sort((left,right)=>Number(Boolean(right.queryVariantMatch))-Number(Boolean(left.queryVariantMatch)));
+    return products.sort((left,right)=>Number(Boolean(right.queryVariantMatch))-Number(Boolean(left.queryVariantMatch))||Number(Boolean(right.querySetMatch))-Number(Boolean(left.querySetMatch))||Number(Boolean(right.queryVariantOnlyMatch))-Number(Boolean(left.queryVariantOnlyMatch)));
   };
   if(window.tcgSearchCatalogCards){
     const result=await window.tcgSearchCatalogCards(searchQuery,100);
@@ -3287,7 +3334,7 @@ async function safeCatalogVariantFor(record={}){
   const identity=window.TcgCardSearch?.parseVariantLabel?.(record.name||record.germanName||record.englishName||"");
   const urlIdentity=window.TcgCardSearch?.parseCardmarketProductUrl?.(record.productUrl||"")||{};
   if(!identity?.variantNumber||!(record.setName||record.set||record.expansion||urlIdentity.setSlug))return null;
-  const products=await searchInventoryCardVariants(record.name||record.germanName||record.englishName||"");
+  const products=await searchInventoryCardVariants(record.name||record.germanName||record.englishName||"",record);
   return window.TcgCardSearch?.selectSafeVariant?.(record,products)||null;
 }
 
@@ -3352,7 +3399,7 @@ function renderInventoryProductChoices(products=[],scan=null){
   const incomplete=products.filter(product=>!complete.includes(product));
   inventoryModalVariants=new Map(products.map(product=>[String(product.productId),product]));
   const recognitionHtml=scan?`<div class="scanner-match-note"><strong>${escapeHtml(scan.recognitionMatch?.reason==="set-code"?"Setnummer im Foto erkannt":scan.recognitionMatch?.reason==="remembered"?"Bekannte Karte wiedererkannt":scan.recognitionMatch?.reason==="fuzzy-name"?"Ähnlicher Kartenname gefunden":"Kartenname im Foto erkannt")}</strong><span>${escapeHtml(scan.recognitionMatch?.query||scan.hint||"")} · Bitte Ausgabe, Seltenheit und Edition kontrollieren.</span></div>`:"";
-  const matchNote=product=>product.queryVariantMatch?'<small class="variant-match-note">Passt zur gesuchten Versionsnummer</small>':"";
+  const matchNote=product=>product.queryVariantMatch?'<small class="variant-match-note">Kartenname, Set und Version stimmen überein</small>':product.queryVariantOnlyMatch?'<small class="variant-check-note">Nur gleiche Versionsnummer – Set unbedingt prüfen</small>':"";
   const completeHtml=complete.map(product=>`<button type="button" class="inventory-card-choice ${product.queryVariantMatch?"recommended":""}" data-select-inventory-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName&&normalizeCardName(product.englishName)!==normalizeCardName(inventoryVariantName(product))?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span>${matchNote(product)}<small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join("");
   const incompleteHtml=incomplete.length?`<div class="inventory-incomplete-warning"><strong>${incomplete.length} Cardmarket-Druckvariante${incomplete.length===1?"":"n"} mit unvollständigen Quelldaten</strong><span>Die Versionsnummer macht die CM-IDs unterscheidbar. Prüfe den direkten Cardmarket-Link und bestätige anschließend nur die passende Zeile.</span>${incomplete.slice(0,30).map(product=>`<div class="inventory-product-check ${product.queryVariantMatch?"recommended":""}"><a href="${escapeHtml(cardmarketUrl(product))}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(inventoryVariantName(product))} · ${escapeHtml(inventoryVariantSubtitle(product))}</span>${matchNote(product)}<strong>CM ${escapeHtml(product.productId)} prüfen ↗</strong></a><button type="button" class="secondary compact-button" data-confirm-inventory-product="${escapeHtml(product.productId)}">Diese CM-ID übernehmen</button></div>`).join("")}</div>`:"";
   target.innerHTML=products.length?recognitionHtml+completeHtml+incompleteHtml:'<div class="empty">Keine passende Karte gefunden. Bitte Schreibweise oder Namenssprache prüfen.</div>';
@@ -3383,13 +3430,13 @@ function applyScannerModalRecognition(scan){
   setTimeout(()=>search?.focus(),0);return false;
 }
 
-async function renderInventoryCardSearch(query){
+async function renderInventoryCardSearch(query,expectedRecord={}){
   const target=document.getElementById("inventoryCardResults");if(!target)return;
   const sequence=++inventoryCardSearchSequence;
   if(normalizeCardName(query).length<2){target.innerHTML='<div class="muted">Mindestens zwei Zeichen eingeben.</div>';return;}
   target.innerHTML='<div class="muted">Passende Karten und Druckvarianten werden gesucht …</div>';
   try{
-    const products=await searchInventoryCardVariants(query);if(sequence!==inventoryCardSearchSequence)return;
+    const products=await searchInventoryCardVariants(query,expectedRecord);if(sequence!==inventoryCardSearchSequence)return;
     const exactProductId=/^\d+$/.test(String(query||"").trim())?String(query).trim():"";
     if(exactProductId)products.forEach(product=>{if(String(product.productId)===exactProductId)product.explicitProductIdSelection=true;});
     renderInventoryProductChoices(products);
@@ -3642,10 +3689,10 @@ function repairPurchaseLineIdentity(purchaseId,index){
     return true;
   };
   let searchTimer;
-  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value),220);};
+  wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value,line),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
   inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
-  if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
+  if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name,line),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
 function deletePurchaseLine(purchaseId,index){
@@ -5165,6 +5212,12 @@ async function importBackup(file){return importBackupPayload(JSON.parse(await fi
 
 document.querySelectorAll(".nav-item").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.view)));
 document.querySelectorAll("[data-view-jump]").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.viewJump)));
+document.getElementById("navBackBtn")?.addEventListener("click",navigateBack);
+document.getElementById("navForwardBtn")?.addEventListener("click",navigateForward);
+window.addEventListener("mouseup",event=>{
+  if(event.button===3){event.preventDefault();navigateBack();}
+  else if(event.button===4){event.preventDefault();navigateForward();}
+});
 
 ["inventorySearch","privateSearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
 // Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
@@ -5507,10 +5560,15 @@ document.getElementById("dataRepairContent").addEventListener("click",async even
     try{
       const before=dataRepairRecords().assignmentRows.length;
       await window.tcgBackfillBusinessPrintMetadata?.();
+      const stillMissingNumbers=dataRepairRecords().assignmentRows.some(row=>row.inspection.issues.some(issue=>issue.code==="missing-number"));
+      if(stillMissingNumbers&&window.tcgRefreshBusinessPrintMetadata){
+        button.textContent="Aktuelle Kartendaten werden geladen …";
+        await window.tcgRefreshBusinessPrintMetadata();
+      }
       const changed=Math.max(0,before-dataRepairRecords().assignmentRows.length);
       if(Number(changed||0)>0){addMovement({type:"Datenreparatur",quantity:0,reference:"Kartendatenbank",note:`${Number(changed)} eindeutige Namens- oder Druckdaten ergänzt`});saveState();renderAll();}
       renderDataRepairCenter();
-      alert(Number(changed||0)>0?`${Number(changed)} eindeutige Kartendaten wurden ergänzt. Nicht eindeutige Varianten bleiben bewusst zur manuellen Prüfung offen.`:"Es wurden keine weiteren eindeutigen Kartendaten gefunden. Die verbleibenden Positionen müssen manuell geprüft werden.");
+      alert(Number(changed||0)>0?`${Number(changed)} eindeutige Kartendaten wurden ergänzt. Nicht eindeutige Varianten bleiben bewusst zur manuellen Prüfung offen.`:"Auch in den aktuellsten Kartendaten wurden keine weiteren eindeutigen Setnummern gefunden. Die verbleibenden Positionen bleiben sicher unverändert und können später gezielt geprüft werden.");
     }catch(error){alert(`Kartendaten konnten nicht ergänzt werden: ${error.message}`);renderDataRepairCenter();}
   }
 });

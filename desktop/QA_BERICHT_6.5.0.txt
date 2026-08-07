@@ -1,0 +1,18 @@
+QA-Bericht TCG Business Manager 6.5.0
+
+Prüfbereiche
+- Syntaxprüfung aller JavaScript-Komponenten: BESTANDEN
+- Automatische Funktionstests (71/71): BESTANDEN
+- Deutsche und englische Kartensuche: BESTANDEN
+- Fremdes Set trotz gleicher Versionsnummer wird nicht als passend markiert: BESTANDEN
+- Exaktes Set, Version und Seltenheit werden gemeinsam geprüft: BESTANDEN
+- Fehlende Setnummern werden nur aus eindeutigen aktuellen Kartendaten ergänzt: BESTANDEN
+- Unklare Druckdaten bleiben unverändert: BESTANDEN
+- Bestehende Filter und einklappbare Bereiche bleiben erhalten: BESTANDEN
+- Zurück-/Vorwärtsnavigation und zusätzliche Maustasten: SYNTAX UND EREIGNISLOGIK BESTANDEN
+- Windows-Installer 6.5.0 erfolgreich erstellt: BESTANDEN
+
+Datenintegrität
+- Mengen, Einstandspreise, Inseratspreise, Reservierungen, Besitzart und Verkäufe werden durch Druckdatenabgleiche nicht verändert.
+- Automatische Ergänzungen erfolgen ausschließlich bei eindeutigen Daten und speichern Quelle sowie Zeitpunkt.
+- Bestehende SQLite-Sicherungen und das Änderungsprotokoll bleiben aktiv.

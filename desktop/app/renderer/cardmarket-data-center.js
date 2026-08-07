@@ -2057,6 +2057,14 @@
     finally { cmGermanNamesUpdatePromise=null; }
   }
 
+  window.tcgRefreshBusinessPrintMetadata=async function() {
+    const result=await cmLoadGermanNamesOnline({automatic:false,force:true});
+    const products=await cmGetAll("products");
+    const changed=window.tcgApplyBusinessProductMetadata?.(products)||0;
+    if(changed){saveState();renderAll();}
+    return {...result,businessFieldsChanged:changed};
+  };
+
   async function cmRunGermanNamesAutoUpdate(options={}) {
     const force=Boolean(options?.force);
     const today=todayISO();

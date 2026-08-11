@@ -1,0 +1,17 @@
+TCG Business Manager 6.5.2 – Sicherer Cardmarket-Bestandsabgleich
+
+- Cardmarket-Bestandsexporte verbinden Inserate jetzt zuerst mit freien,
+  exakt passenden Einkaufsexemplaren, statt dieselben Karten erneut anzulegen.
+- Bereits vorhandene Snapshot-Duplikate werden beim ersten Start automatisch
+  mit den Einkaufsexemplaren zusammengeführt. Einstand, Einkaufslos und Datum
+  bleiben erhalten.
+- Ein fehlendes Inserat entfernt keine gekaufte oder manuell erfasste Karte
+  mehr. Die Karte bleibt im Manager und wird lediglich als nicht inseriert
+  markiert.
+- Reservierte, verkaufte, stornierte, beschädigte und in Rückgabe befindliche
+  Exemplare bleiben bei Import und Reparatur geschützt und ihren Vorgängen
+  zugeordnet.
+- Im Bestand gibt es den Filter „Bestandsanzeige“ für aktuellen Bestand,
+  Bestand 0 oder beide Ansichten.
+- Die Mengenspalte zeigt Gesamtbestand, verfügbare und reservierte Exemplare
+  verständlicher an. Historische Varianten mit Bestand 0 bleiben einsehbar.

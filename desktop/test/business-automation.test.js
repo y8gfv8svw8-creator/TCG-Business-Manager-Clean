@@ -553,3 +553,49 @@ test('Warenkorb kennzeichnet eine nur im typischen Price Guide plausible Karte z
   assert.ok(line.pricing.typicalMaxBuy>line.pricing.maxBuy);
   assert.ok(analysis.totals.typicalProjectedRevenue>analysis.totals.projectedRevenue);
 });
+
+test('Bestandssnapshot wird mit freien Einkaufsexemplaren verbunden statt doppelt gezaehlt', () => {
+  const result=automation.planStockPurchaseDuplicateReconciliation([
+    {id:'purchase-1',productId:'883536',language:'DE',condition:'NM',edition:'1',purchaseId:'order-1',purchaseLineKey:'order-1:line-1',status:'Im Bestand',cost:0.34},
+    {id:'snapshot-1',productId:'883536',language:'DE',condition:'NM',edition:'1',articleId:'2121223194',stockIdentity:'article:2121223194',source:'Cardmarket-Bestandsabgleich',status:'Im Bestand'}
+  ]);
+  assert.equal(result.mergedCount,1);
+  assert.deepEqual(result.pairs,[{variantKey:'883536|DE|NM|1',targetId:'purchase-1',duplicateId:'snapshot-1'}]);
+  assert.deepEqual(result.removeIds,['snapshot-1']);
+});
+
+test('Reservierte und verkaufte Karten werden bei der Snapshot-Reparatur nie angefasst', () => {
+  const result=automation.planStockPurchaseDuplicateReconciliation([
+    {id:'purchase-reserved',productId:'1',language:'DE',condition:'NM',purchaseId:'order-1',status:'Reserviert',saleId:'sale-1'},
+    {id:'snapshot-free',productId:'1',language:'DE',condition:'NM',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:1',status:'Im Bestand'},
+    {id:'purchase-sold',productId:'2',language:'DE',condition:'NM',purchaseId:'order-2',status:'Verkauft',saleId:'sale-2'},
+    {id:'snapshot-free-2',productId:'2',language:'DE',condition:'NM',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:2',status:'Im Bestand'}
+  ]);
+  assert.equal(result.mergedCount,0);
+  assert.deepEqual(result.removeIds,[]);
+});
+
+test('Snapshot-Reparatur trennt unterschiedliche Zustaende und Editionen', () => {
+  const result=automation.planStockPurchaseDuplicateReconciliation([
+    {id:'purchase',productId:'10',language:'DE',condition:'NM',edition:'1',purchaseId:'order',status:'Im Bestand'},
+    {id:'wrong-condition',productId:'10',language:'DE',condition:'EX',edition:'1',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:10',status:'Im Bestand'},
+    {id:'wrong-edition',productId:'10',language:'DE',condition:'NM',edition:'0',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:11',status:'Im Bestand'}
+  ]);
+  assert.equal(result.mergedCount,0);
+});
+
+test('Ein Einkauf nach dem Snapshot wird nicht als altes Duplikat entfernt', () => {
+  const result=automation.planStockPurchaseDuplicateReconciliation([
+    {id:'purchase-new',productId:'10',language:'DE',condition:'NM',purchaseId:'order',purchaseDate:'2026-08-10',status:'Im Bestand'},
+    {id:'snapshot-old',productId:'10',language:'DE',condition:'NM',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:10',lastStockSnapshot:'2026-08-07',status:'Im Bestand'}
+  ]);
+  assert.equal(result.mergedCount,0);
+});
+
+test('Unbekannte und leere Edition gelten beim sicheren Snapshot-Abgleich als dieselbe fehlende Angabe', () => {
+  const result=automation.planStockPurchaseDuplicateReconciliation([
+    {id:'purchase',productId:'883536',language:'EN',condition:'NM',edition:'Unbekannt',purchaseId:'order',purchaseDate:'2026-07-19',status:'Im Bestand'},
+    {id:'snapshot',productId:'883536',language:'EN',condition:'NM',edition:'',source:'Cardmarket-Bestandsabgleich',stockIdentity:'article:2121223194',purchaseDate:'2026-08-07',status:'Im Bestand'}
+  ]);
+  assert.equal(result.mergedCount,1);
+});

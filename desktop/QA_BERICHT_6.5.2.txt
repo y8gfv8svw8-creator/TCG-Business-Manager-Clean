@@ -1,0 +1,22 @@
+QA-Bericht TCG Business Manager 6.5.2
+
+Automatische Prüfungen:
+- JavaScript-Syntax aller Haupt-, Renderer-, Scanner- und Hilfsdateien: BESTANDEN
+- 76 automatisierte Fach- und Datenbanktests: BESTANDEN
+- Snapshot-Duplikat wird mit Einkaufsexemplar verbunden: BESTANDEN
+- Einstand und Einkaufslos bleiben beim Zusammenführen erhalten: BESTANDEN
+- Reservierte und verkaufte Karten werden nicht verändert: BESTANDEN
+- Spätere echte Einkäufe werden nicht mit älteren Snapshots verwechselt: BESTANDEN
+- Unterschiedliche Zustände und Editionen werden getrennt behandelt: BESTANDEN
+- Leere und als unbekannt markierte Editionen werden sicher gleichbehandelt: BESTANDEN
+- Lesetest mit der vorhandenen Nutzerdatenbank (9 sichere Zusammenführungen,
+  davon 2 für CM 883536): BESTANDEN
+- Filter für Varianten mit Bestand 0 in der echten Desktop-Oberfläche: BESTANDEN
+- Automatische Migration eines Snapshot-Duplikats in der Desktop-App: BESTANDEN
+- Bestehende Wareneingangs-, Scanner- und Verkaufszuordnungsabläufe: BESTANDEN
+- Dunkelmodus-Kontrast (niedrigster Prüfwert 8,76:1): BESTANDEN
+- Windows-Installer 6.5.2 erfolgreich erstellt: BESTANDEN
+
+Hinweis:
+Der bestehende Nutzerbestand wird beim ersten Programmstart verlustfrei
+migriert. Vor dem Speichern greift weiterhin die vorhandene SQLite-Sicherung.

@@ -1,4 +1,4 @@
-# TCG Business Manager – Analysecenter 6.5.1
+# TCG Business Manager – Analysecenter 6.5.2
 
 Diese Version aktiviert die dauerhafte lokale SQLite-Datenbank.
 

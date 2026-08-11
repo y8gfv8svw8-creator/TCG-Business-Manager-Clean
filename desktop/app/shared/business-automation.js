@@ -1066,6 +1066,74 @@
     };
   }
 
+  // Ein Cardmarket-Bestandssnapshot beschreibt Inserate, nicht neue physische
+  // Karten. Existieren bereits freie Einkaufsexemplare derselben exakten
+  // Variante, werden Snapshot-Kopien deshalb auf diese Exemplare zurueckgefuehrt.
+  // Reservierte, verkaufte und stornierte Karten werden niemals angefasst.
+  function planStockPurchaseDuplicateReconciliation(items = []) {
+    const current = Array.isArray(items) ? items : [];
+    const isProtected = item => {
+      const status = String(item?.status || '');
+      return ['Reserviert', 'Verkauft', 'Storniert'].includes(status)
+        || /^Besch/i.test(status)
+        || /ckgabe unterwegs$/i.test(status)
+        || Boolean(item?.saleId);
+    };
+    const isSnapshot = item => !item?.purchaseId && !item?.purchaseLineKey && (
+      Boolean(item?.stockIdentity) || /^STOCK-/i.test(String(item?.importKey || item?.lotId || '')) || item?.source === 'Cardmarket-Bestandsabgleich'
+    );
+    const keyFor = item => {
+      const productId = String(item?.productId || '').replace(/\D/g, '');
+      if (!productId) return '';
+      const editionText = String(item?.edition || '').trim().toUpperCase();
+      const edition = ['', '-', 'N/A', 'UNKNOWN', 'UNBEKANNT'].includes(editionText) ? '' : editionText;
+      return [
+        productId,
+        String(item?.language || '').trim().toUpperCase(),
+        String(item?.condition || '').trim().toUpperCase(),
+        edition
+      ].join('|');
+    };
+    const snapshotsByVariant = new Map();
+    const purchasesByVariant = new Map();
+    const itemTime = item => Date.parse(item?.lastStockSnapshot || '') || Date.parse(item?.purchaseDate || '') || 0;
+    current.forEach(item => {
+      if (!item?.id || isProtected(item)) return;
+      const key = keyFor(item);
+      if (!key) return;
+      if (isSnapshot(item)) {
+        if (!snapshotsByVariant.has(key)) snapshotsByVariant.set(key, []);
+        snapshotsByVariant.get(key).push(item);
+      } else if (item.purchaseId || item.purchaseLineKey) {
+        if (!purchasesByVariant.has(key)) purchasesByVariant.set(key, []);
+        purchasesByVariant.get(key).push(item);
+      }
+    });
+    const pairs = [];
+    snapshotsByVariant.forEach((snapshotItems, variantKey) => {
+      const purchaseItems = purchasesByVariant.get(variantKey) || [];
+      snapshotItems.sort((a, b) =>
+        itemTime(b) - itemTime(a)
+        || String(a.id).localeCompare(String(b.id))
+      );
+      purchaseItems.sort((a, b) =>
+        itemTime(a) - itemTime(b)
+        || String(a.id).localeCompare(String(b.id))
+      );
+      snapshotItems.forEach(snapshotItem => {
+        const snapshotTime = itemTime(snapshotItem);
+        const purchaseIndex = purchaseItems.findIndex(purchaseItem => {
+          const purchaseTime = itemTime(purchaseItem);
+          return !snapshotTime || !purchaseTime || purchaseTime <= snapshotTime;
+        });
+        if (purchaseIndex < 0) return;
+        const [purchaseItem] = purchaseItems.splice(purchaseIndex, 1);
+        pairs.push({ variantKey, targetId: purchaseItem.id, duplicateId: snapshotItem.id });
+      });
+    });
+    return { pairs, removeIds: pairs.map(pair => pair.duplicateId), mergedCount: pairs.length };
+  }
+
   function planInventoryMovementReversal(items = [], movement = {}) {
     const quantity = Math.trunc(asNumber(movement?.quantity));
     if (!movement?.id || !quantity) return { valid: false, reason: 'Diese Bewegung verändert keinen Bestand.' };
@@ -1461,6 +1529,7 @@
     planInventoryTotalCorrection,
     planAvailableInventorySnapshot,
     planLegacyStockSnapshotCleanup,
+    planStockPurchaseDuplicateReconciliation,
     planInventoryMovementReversal,
     buildPerformanceReport,
     buildDataQualityIssues,

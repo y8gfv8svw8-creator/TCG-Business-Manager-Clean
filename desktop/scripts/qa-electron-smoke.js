@@ -72,6 +72,22 @@ async function main() {
       showView('inventory');
       const inventoryActive=document.getElementById('view-inventory').classList.contains('active');
 
+      const repairProbe=migrateState({settings:{},inventory:[
+        {id:'qa-purchase',productId:'883536',name:'QA Bestand',language:'DE',condition:'NM',edition:'1',purchaseId:'qa-order',purchaseLineKey:'qa-order:1',purchaseDate:'2026-07-19',status:'Im Bestand',cost:0.34},
+        {id:'qa-snapshot',productId:'883536',name:'QA Bestand',language:'DE',condition:'NM',edition:'1',articleId:'2121223194',stockIdentity:'article:2121223194',source:'Cardmarket-Bestandsabgleich',purchaseDate:'2026-08-07',status:'Im Bestand',listingPrice:0.30,listed:true},
+        {id:'qa-reserved',productId:'883536',name:'QA Bestand',language:'DE',condition:'NM',edition:'1',articleId:'2121223194',stockIdentity:'article:2121223194',source:'Cardmarket-Bestandsabgleich',purchaseDate:'2026-08-07',status:'Reserviert',saleId:'qa-sale'}
+      ],purchases:[],sales:[],movements:[]});
+      const repairedPurchase=repairProbe.inventory.find(item=>item.id==='qa-purchase');
+      const snapshotRepairSafe=repairProbe.inventory.length===2&&!repairProbe.inventory.some(item=>item.id==='qa-snapshot')&&repairedPurchase?.articleId==='2121223194'&&repairedPurchase?.cost===0.34&&repairProbe.inventory.some(item=>item.id==='qa-reserved'&&item.saleId==='qa-sale');
+
+      const zeroStockItem={id:'qa-zero-'+Date.now(),productId:'990099',name:'QA Bestand Null',set:'TEST',setName:'Test Set',collectorNumber:'TEST-EN099',rarity:'Common',language:'DE',condition:'NM',status:'Verkauft',saleId:'qa-zero-sale',purchaseDate:'2026-08-01',cost:0.10};
+      state.inventory.push(zeroStockItem);
+      document.getElementById('inventoryStockFilter').value='all';renderInventory();
+      const zeroStockVisible=[...document.querySelectorAll('#inventoryTable tr')].some(row=>row.textContent.includes('QA Bestand Null')&&row.textContent.includes('1 verkauft'));
+      document.getElementById('inventoryStockFilter').value='current';renderInventory();
+      const zeroStockHidden=[...document.querySelectorAll('#inventoryTable tr')].every(row=>!row.textContent.includes('QA Bestand Null'));
+      state.inventory=state.inventory.filter(item=>item.id!==zeroStockItem.id);
+
       const receiptPurchase={id:'qa-receipt-'+Date.now(),orderNo:'QA-DRUCKDATEN',date:'2026-08-11',status:'Unterwegs',cardValue:1,shipping:0,extra:0,refund:0,costAllocationMethod:'value',pendingItems:[{name:'QA Drucktest',quantity:1,unitPrice:1,receivedBusiness:0,receivedPrivate:0,receivedDamaged:0,cancelledQuantity:0}]};
       state.purchases.push(receiptPurchase);openPurchaseReceipt(receiptPurchase.id);
       const receiptRow=document.querySelector('#purchaseReceiptContent [data-receipt-row]');
@@ -156,6 +172,8 @@ async function main() {
         sqliteStatus:document.getElementById('saveStatus')?.textContent||'',
         navigation:document.querySelectorAll('.nav-item').length,
         inventoryActive,
+        snapshotRepairSafe,
+        zeroStockFilter:Boolean(zeroStockVisible&&zeroStockHidden),
         receiptRepairOpened,
         receiptRepairFlow,
         receiptRepairDetails,
@@ -186,7 +204,7 @@ async function main() {
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.snapshotRepairSafe || !result.zeroStockFilter || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

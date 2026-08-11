@@ -1,0 +1,17 @@
+QA-Bericht TCG Business Manager 6.5.1
+
+Prüfbereiche
+- Syntaxprüfung aller JavaScript-Komponenten: BESTANDEN
+- Automatische Funktionstests (71/71): BESTANDEN
+- Direkter Aufruf der Variantenzuordnung aus der Kartenaufteilung: BESTANDEN
+- Rückkehr zur gleichen Bestellung nach Speichern oder Abbrechen: BESTANDEN
+- Erhalt eingegebener Mengen, Inseratspreise und Buchungsnotiz: BESTANDEN
+- Erneute Vollständigkeitsprüfung nach der Zuordnung: BESTANDEN
+- Bestehende deutsche und englische Kartensuche: BESTANDEN
+- Isolierter Oberflächentest des vollständigen Zuordnungsablaufs: BESTANDEN
+- Windows-Installer 6.5.1 erfolgreich erstellt: BESTANDEN
+
+Datenintegrität
+- Die Variantenzuordnung ändert weder Bestellmenge noch bereits gebuchte Bestände.
+- Kosten, Besitzart, Reservierungen und Verkäufe bleiben unverändert.
+- Gespeichert werden ausschließlich die bestätigten Karten- und Druckdaten der gewählten Variante.

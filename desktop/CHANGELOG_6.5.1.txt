@@ -1,0 +1,10 @@
+TCG Business Manager 6.5.1 – Druckvarianten direkt im Wareneingang zuordnen
+
+- „Druckdaten prüfen“ ist in der Kartenaufteilung eines Einkaufs jetzt direkt anklickbar.
+- Die richtige Cardmarket-Druckvariante kann ausgewählt werden, ohne den Wareneingang manuell zu verlassen.
+- Nach Speichern oder Abbrechen öffnet sich wieder dieselbe Kartenaufteilung.
+- Bereits eingetragene Mengen für Geschäft, privat, beschädigt und storniert bleiben dabei erhalten.
+- Inseratspreise, Inserat-Auswahl, Kostenverteilung und Buchungsnotiz bleiben ebenfalls erhalten.
+- Auch bereits eindeutige Druckvarianten können über „Variante ändern“ bewusst korrigiert werden.
+- Nach einer vollständigen Zuordnung kann die Aufteilung ohne die bisherige Druckdaten-Sperre abgeschlossen werden.
+- Bestehende Bestände, Einkaufswerte, Verkäufe und SQLite-Nutzerdaten werden nicht verändert.

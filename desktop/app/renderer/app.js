@@ -3661,7 +3661,7 @@ function editPurchaseLine(purchaseId,index){
   });
 }
 
-function repairPurchaseLineIdentity(purchaseId,index){
+function repairPurchaseLineIdentity(purchaseId,index,options={}){
   const purchase=state.purchases.find(row=>row.id===purchaseId),line=purchase?.pendingItems?.[index];if(!purchase||!line)return;
   inventoryCardSearchSequence++;inventoryPriceSequence++;
   document.getElementById("modalTitle").textContent=`Karte in Einkauf #${purchase.orderNo||"-"} zuordnen`;
@@ -3691,7 +3691,12 @@ function repairPurchaseLineIdentity(purchaseId,index){
   let searchTimer;
   wrap.oninput=event=>{if(event.target.id!=="inventoryCardSearch")return;clearTimeout(searchTimer);inventoryCardSearchSequence++;wrap.dataset.inventorySelection="required";["productId","metacardId","name","germanName","englishName","set","setName","variant","rarity","collectorNumber","productUrl"].forEach(name=>{const field=wrap.querySelector(`[name="${name}"]`);if(field)field.value="";});document.getElementById("inventorySelectedCard").innerHTML="<span>Bitte die richtige Druckvariante auswählen.</span>";searchTimer=setTimeout(()=>renderInventoryCardSearch(event.target.value,line),220);};
   wrap.onclick=event=>{handleInventoryProductChoice(event);};
-  inventoryModalVariants=new Map();configureModalAction();showDialogSafely(document.getElementById("modal"));
+  inventoryModalVariants=new Map();configureModalAction();
+  if(options.returnToReceipt){
+    const modal=document.getElementById("modal");
+    modal.addEventListener("close",()=>setTimeout(()=>openPurchaseReceipt(purchase.id,options.receiptDraft),0),{once:true});
+  }
+  showDialogSafely(document.getElementById("modal"));
   if(line.name)setTimeout(()=>renderInventoryCardSearch(line.name,line),0);else setTimeout(()=>document.getElementById("inventoryCardSearch")?.focus(),0);
 }
 
@@ -3775,7 +3780,7 @@ function purchaseReceiptRows(purchase){
 function renderPurchaseReceipt(purchase){
   const target=document.getElementById("purchaseReceiptContent");
   const rows=purchaseReceiptRows(purchase);
-  const body=rows.map(row=>{
+  const body=rows.map((row,index)=>{
     const r=row.receipt,names=cardDisplayNames(row.item);
     const productId=cleanProductId(row.item.productId),catalog=state.productCatalog?.[productId]||{};
     const pricing=TcgBusinessAutomation.calculateOwnedCardPriceTargets({...catalog,...row.item,cost:Number(row.unitCost||0)},forwardPricingSettings());
@@ -3783,8 +3788,9 @@ function renderPurchaseReceipt(purchase){
     const complete=inventoryPrintComplete(row.item);
     const plannedPrivate=r.assigned?0:Math.min(r.quantity,Number(row.item.plannedPrivate||0));
     const plannedBusiness=r.assigned?0:Math.min(r.quantity-plannedPrivate,Number(row.item.plannedBusiness||0));
+    row.item.receiptLineKey ||= r.key;
     return `<tr data-receipt-row data-receipt-key="${escapeHtml(r.key)}" data-ordered="${r.quantity}" data-min-business="${r.materializedBusiness}" data-min-private="${r.materializedPrivate}" data-min-damaged="${r.materializedDamaged}">
-      <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<small>${escapeHtml([row.item.setName||row.item.set,row.item.collectorNumber,row.item.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")}</small>${complete?'<span class="badge green">Druck eindeutig</span>':'<span class="badge yellow">Druckdaten prüfen</span>'}</td>
+      <td><strong>${escapeHtml(names.primary)}</strong>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<small>${escapeHtml([row.item.setName||row.item.set,row.item.collectorNumber,row.item.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")}</small><button type="button" class="badge ${complete?"green":"yellow"} receipt-print-repair" data-repair-receipt-print="${index}" title="Cardmarket-Druckvariante prüfen und zuordnen">${complete?"Variante ändern":"Druckdaten prüfen"}</button></td>
       <td><strong>${r.quantity}</strong></td>
       ${["business","private","damaged","cancelled"].map(key=>{const planned=key==="business"?plannedBusiness:key==="private"?plannedPrivate:0;return `<td><input class="receipt-quantity" data-receipt-value="${key}" type="number" min="${key==="business"?r.materializedBusiness:key==="private"?r.materializedPrivate:key==="damaged"?r.materializedDamaged:0}" max="${r.quantity}" step="1" value="${r[key]||planned||0}"></td>`;}).join("")}
       <td data-receipt-open><strong>${Math.max(0,r.open-plannedBusiness-plannedPrivate)}</strong></td><td><strong>${money(row.unitCost)}</strong><small>Karte, Versand und Zusatzkosten</small></td>
@@ -3802,13 +3808,36 @@ function updateReceiptOpenValues(){
   });
 }
 
-function openPurchaseReceipt(purchaseId){
+function restorePurchaseReceiptDraft(draft){
+  if(!draft)return;
+  const requests=new Map((draft.requests||[]).map(row=>[String(row.key),row]));
+  document.querySelectorAll("#purchaseReceiptContent [data-receipt-row]").forEach(row=>{
+    const request=requests.get(String(row.dataset.receiptKey));if(!request)return;
+    row.querySelectorAll("[data-receipt-value]").forEach(input=>{input.value=Math.max(0,Math.round(Number(request[input.dataset.receiptValue]||0)));});
+    const listed=row.querySelector("[data-receipt-list]");if(listed)listed.checked=Boolean(request.listBusiness);
+    const price=row.querySelector("[data-receipt-listing-price]");if(price)price.value=Number(request.listingPrice||0)>0?Number(request.listingPrice).toFixed(2):"";
+    const suggested=row.querySelector("[data-receipt-suggested]");if(suggested)suggested.value=Math.max(0,Number(request.suggestedSell||0));
+  });
+  document.getElementById("purchaseReceiptNote").value=String(draft.note||"");
+  updateReceiptOpenValues();
+}
+
+function purchaseReceiptDraft(){
+  return {
+    method:document.getElementById("purchaseCostAllocation").value,
+    note:document.getElementById("purchaseReceiptNote").value,
+    requests:readPurchaseReceiptRequest()
+  };
+}
+
+function openPurchaseReceipt(purchaseId,draft=null){
   const purchase=state.purchases.find(row=>row.id===purchaseId);if(!purchase)return;
   const dialog=document.getElementById("purchaseReceiptDialog");dialog.dataset.purchaseId=purchase.id;
   document.getElementById("purchaseReceiptTitle").textContent=`Wareneingang #${purchase.orderNo||"-"} aufteilen`;
-  document.getElementById("purchaseCostAllocation").value=purchase.costAllocationMethod||"value";
+  document.getElementById("purchaseCostAllocation").value=draft?.method||purchase.costAllocationMethod||"value";
   document.getElementById("purchaseReceiptNote").value="";
   renderPurchaseReceipt(purchase);
+  restorePurchaseReceiptDraft(draft);
   showDialogSafely(dialog);
 }
 
@@ -5421,9 +5450,15 @@ const closePurchaseReceipt=()=>{purchaseReceiptDialog.close();};
 document.getElementById("purchaseReceiptClose").onclick=closePurchaseReceipt;
 document.getElementById("purchaseReceiptCancel").onclick=closePurchaseReceipt;
 document.getElementById("purchaseReceiptContent").addEventListener("input",event=>{if(event.target.matches("[data-receipt-value]"))updateReceiptOpenValues();});
+document.getElementById("purchaseReceiptContent").addEventListener("click",event=>{
+  const button=event.target.closest("[data-repair-receipt-print]");if(!button)return;
+  const purchase=state.purchases.find(row=>row.id===purchaseReceiptDialog.dataset.purchaseId);if(!purchase)return;
+  const draft=purchaseReceiptDraft();purchase.costAllocationMethod=draft.method;
+  repairPurchaseLineIdentity(purchase.id,Number(button.dataset.repairReceiptPrint),{returnToReceipt:true,receiptDraft:draft});
+});
 document.getElementById("purchaseCostAllocation").addEventListener("change",event=>{
   const purchase=state.purchases.find(row=>row.id===purchaseReceiptDialog.dataset.purchaseId);if(!purchase)return;
-  purchase.costAllocationMethod=event.target.value;renderPurchaseReceipt(purchase);
+  const draft=purchaseReceiptDraft();purchase.costAllocationMethod=event.target.value;draft.method=event.target.value;renderPurchaseReceipt(purchase);restorePurchaseReceiptDraft(draft);
 });
 const assignAllOpenReceiptUnits=targetKey=>{
   document.querySelectorAll("#purchaseReceiptContent [data-receipt-row]").forEach(row=>{

@@ -71,6 +71,26 @@ async function main() {
       const input=document.createElement('input');input.readOnly=true;const form=document.createElement('div');form.className='form-grid';form.appendChild(input);document.body.appendChild(form);const inputStyle=getComputedStyle(input);samples.push({className:'readonly',ratio:contrast(inputStyle.color,inputStyle.backgroundColor)});form.remove();
       showView('inventory');
       const inventoryActive=document.getElementById('view-inventory').classList.contains('active');
+
+      const receiptPurchase={id:'qa-receipt-'+Date.now(),orderNo:'QA-DRUCKDATEN',date:'2026-08-11',status:'Unterwegs',cardValue:1,shipping:0,extra:0,refund:0,costAllocationMethod:'value',pendingItems:[{name:'QA Drucktest',quantity:1,unitPrice:1,receivedBusiness:0,receivedPrivate:0,receivedDamaged:0,cancelledQuantity:0}]};
+      state.purchases.push(receiptPurchase);openPurchaseReceipt(receiptPurchase.id);
+      const receiptRow=document.querySelector('#purchaseReceiptContent [data-receipt-row]');
+      receiptRow.querySelector('[data-receipt-value="business"]').value='1';
+      receiptRow.querySelector('[data-receipt-list]').checked=true;
+      receiptRow.querySelector('[data-receipt-listing-price]').value='1.25';
+      document.getElementById('purchaseReceiptNote').value='QA-Eingaben erhalten';
+      receiptRow.querySelector('[data-repair-receipt-print]').click();
+      await new Promise(resolve=>setTimeout(resolve,40));
+      const receiptRepairOpened=document.getElementById('modal').open&&document.getElementById('modalTitle').textContent.includes('QA-DRUCKDATEN');
+      const receiptIdentity={productId:'990010',metacardId:'990010',name:'QA Drucktest',germanName:'QA Drucktest',englishName:'QA Print Test',set:'TEST',setName:'Test Set',variant:'V.1 - Ultra Rare',rarity:'Ultra Rare',collectorNumber:'TEST-EN010',productUrl:'https://example.invalid/qa-print',cardPasscode:'12345678'};
+      Object.entries(receiptIdentity).forEach(([field,value])=>{const input=document.querySelector('#modalFields [name="'+field+'"]');if(input)input.value=value;});
+      document.getElementById('modalForm').requestSubmit();
+      await new Promise(resolve=>setTimeout(resolve,80));
+      const restoredReceiptRow=document.querySelector('#purchaseReceiptContent [data-receipt-row]');
+      const receiptRepairDetails={dialogOpen:document.getElementById('purchaseReceiptDialog').open,green:Boolean(restoredReceiptRow?.querySelector('.receipt-print-repair.green')),business:restoredReceiptRow?.querySelector('[data-receipt-value="business"]')?.value||'',listed:Boolean(restoredReceiptRow?.querySelector('[data-receipt-list]')?.checked),price:restoredReceiptRow?.querySelector('[data-receipt-listing-price]')?.value||'',note:document.getElementById('purchaseReceiptNote').value,productId:receiptPurchase.pendingItems[0].productId||''};
+      const receiptRepairFlow=Boolean(receiptRepairDetails.dialogOpen&&receiptRepairDetails.green&&receiptRepairDetails.business==='1'&&receiptRepairDetails.listed&&receiptRepairDetails.price==='1.25'&&receiptRepairDetails.note==='QA-Eingaben erhalten'&&receiptRepairDetails.productId==='990010');
+      document.getElementById('purchaseReceiptDialog').close();state.purchases=state.purchases.filter(purchase=>purchase.id!==receiptPurchase.id);
+
       addInventory({},'business');
       renderInventoryProductChoices([{productId:'990003',name:'Direkte CM-ID Testkarte',set:'TEST',setName:'Test Set',collectorNumber:'TEST-EN001',rarity:''}]);
       document.querySelector('[data-confirm-inventory-product="990003"]')?.click();
@@ -136,6 +156,9 @@ async function main() {
         sqliteStatus:document.getElementById('saveStatus')?.textContent||'',
         navigation:document.querySelectorAll('.nav-item').length,
         inventoryActive,
+        receiptRepairOpened,
+        receiptRepairFlow,
+        receiptRepairDetails,
         directProductIdAssignment,
         batchQueued,
         batchInventoryCreated,
@@ -163,7 +186,7 @@ async function main() {
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

@@ -1,0 +1,19 @@
+TCG Business Manager 6.7.1 – Robuste Price-Guide-Referenzwerte
+
+- Die Price-Guide-Referenz erkennt extreme Low-Ausreißer jetzt robust.
+- Low wird mit dem Median der verfügbaren Werte aus AVG1, AVG7, AVG30 und
+  Trend verglichen. Erst bei mindestens zwei Vergleichswerten wird ein
+  Ausreißer sicher gekennzeichnet.
+- Ein plausibler Low-Wert bleibt Bestandteil der vorsichtigen Referenz.
+- Wird Low als Ausreißer erkannt, kann ein vorhandener und plausibler
+  Low-EX+-Wert die kurzfristige Low-Komponente übernehmen.
+- Fehlende Low-EX+-Werte werden nicht ergänzt, geschätzt oder erfunden.
+- Referenzquelle und erkannter Low-Ausreißer werden in den Kartendetails
+  nachvollziehbar angezeigt.
+- Bei unbekanntem EK und zusätzlich fehlendem Kaufdatum, Inseratsalter und
+  Ziel-VK wird ohne stärkeres Marktsignal keine scheinbar sichere
+  HALTEN-Empfehlung mehr ausgegeben, sondern UNZUREICHENDE HANDELSDATEN.
+- Gewinn, ROI und Break-even bleiben bei unbekanntem EK weiterhin offen.
+- Die automatische Preislogik bleibt unverändert sicher: Es erfolgt weiterhin
+  keine automatische Preisänderung.
+- SQLite-Schema 9 bleibt unverändert.

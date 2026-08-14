@@ -1,0 +1,33 @@
+QA-Bericht TCG Business Manager 6.7.1 – Robuste Price-Guide-Referenzwerte
+
+Automatische Prüfungen vor dem Build:
+- JavaScript-Syntax aller Haupt-, Renderer-, Scanner- und Hilfsdateien: BESTANDEN
+- 116 automatisierte Fach- und Datenbanktests: BESTANDEN
+- Abhängigkeitsbaum und Paketinhalt für Version 6.7.1: BESTANDEN
+- Keine automatische Preisänderung: BESTANDEN
+
+Windows-Installer:
+- TCG Business Manager-Setup-6.7.1.exe separat erstellt: BESTANDEN
+- Vorhandener Installer 6.7.0 blieb erhalten: BESTANDEN
+- SHA-256: 99FA02FDED981EC2D337BFAC5F7C8A876F36EA1700395E27B4C7C237786FB4F5
+
+Smoke-Test der regulär installierten Anwendung auf Datenbankkopie:
+- Version 6.7.1, Dashboard, Bestand und Einzelkartendetails: BESTANDEN
+- Langsamdreher, Kapital und 18 Marktspalten: BESTANDEN
+- Deutsche und englische Kartensuche: BESTANDEN
+- Price Guide, Markttrend, Preisposition und Empfehlung: BESTANDEN
+- Keine Renderer-, JavaScript- oder SQLite-Fehler: BESTANDEN
+
+Gezielte Kartenprüfung:
+- CM 260727: Referenz 2,33 €, Low 0,02 € als Ausreißer erkannt,
+  eigener VK 3,00 €, Abweichung +28,76 %, unbekannter EK ohne erfundenen
+  Gewinn/ROI/Break-even, Empfehlung UNZUREICHENDE HANDELSDATEN: BESTANDEN
+- CM 741695: Referenz 2,30 €, FALLEND, PREIS PRÜFEN: BESTANDEN
+- CM 251780: Referenz 6,99 €, STARK STEIGEND,
+  VK ERHÖHUNG PRÜFEN: BESTANDEN
+
+Datensicherheit:
+- Echte Datenbank ausschließlich gelesen; Analyse auf temporärer Kopie
+- SQLite-Schema 9 und Integrität ok
+- 890 Bestandskarten, 14 private Karten, 9 Einkäufe, 49 Verkäufe
+- Originaldatenbank unverändert; temporäre Kopien entfernt

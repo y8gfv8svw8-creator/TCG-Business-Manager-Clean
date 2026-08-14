@@ -1,0 +1,19 @@
+QA-Bericht TCG Business Manager 6.5.3
+
+Automatische Prüfungen:
+- JavaScript-Syntax aller Haupt-, Renderer-, Scanner- und Hilfsdateien: BESTANDEN
+- 82 automatisierte Fach- und Datenbanktests: BESTANDEN
+- Migration SQLite-Schema 8 auf Schema 9: BESTANDEN
+- Rollback und Sicherung vor einer Migration: BESTANDEN
+- Kapitaljournal und Umbuchungen ohne Doppelzählung: BESTANDEN
+- Unbekannter EK bleibt unbekannt und wird nicht als 0 Euro berechnet: BESTANDEN
+- Folgeimporte schützen EK, Kaufdatum, Ziel-VK und Preisverlauf: BESTANDEN
+- Inseratspreis-Historie sowie unterschiedliche EKs desselben Prints: BESTANDEN
+- Deutsche und englische Kartensuche sowie Price-Guide-Import: BESTANDEN
+- Windows-Installer 6.5.3 erfolgreich erstellt: BESTANDEN
+
+Reale Datenbank-Testkopie:
+- Schema 8 auf Schema 9 erfolgreich migriert
+- SQLite-Integrität in Ordnung
+- 891 Bestandskarten, 14 private Karten, 9 Einkäufe und 49 Verkäufe erhalten
+- Originaldatenbank nicht verändert

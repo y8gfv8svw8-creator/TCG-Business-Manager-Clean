@@ -1,0 +1,12 @@
+TCG Business Manager 6.5.3 – Phase 1 Handelsdatenmodell
+
+- SQLite-Schema 9 mit sicherer Migration und vorheriger Sicherung.
+- Kapital-Konten für Cardmarket, Bank, Kasse und sonstige Handelskonten.
+- Journal für Anfangsbestand, Ein- und Auszahlung, Einkauf, Verkauf, Gebühren,
+  Erstattungen, Korrekturen und Umbuchungen.
+- Eindeutige Trennung von unbekanntem EK, bestätigten 0 Euro und bekanntem EK.
+- Ursprüngliches VK-Ziel, aktueller Inseratspreis und Preisänderungsverlauf.
+- Folgeimporte schützen EK, Kaufdatum, Ziel-VK, Reservierungen und Verkäufe.
+- Mindestgewinn in Euro und Mindest-ROI werden gemeinsam berücksichtigt.
+- Grundlagen für Halteprofil und langfristig zu haltende Karten.
+- 82 automatisierte Fach- und Datenbanktests bestanden.

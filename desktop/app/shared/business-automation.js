@@ -240,43 +240,60 @@
     };
   }
 
+  const MARKET_REFERENCE_THRESHOLDS = Object.freeze({
+    lowOutlierMinimumRatio: 0.25,
+    lowOutlierMaximumRatio: 4,
+    minimumComparisonValues: 2
+  });
+
   function calculateAutomaticPriceTargets(prices = {}, settings = {}) {
     const liveOffer = optionalNumber(prices.liveOffer ?? prices.offerLow ?? prices.currentOffer);
     const low = optionalNumber(prices.low ?? prices.currentBuy);
+    const lowEx = optionalNumber(prices.lowEx ?? prices.lowExPlus ?? prices.lowExPrice ?? prices['LOWEX+']);
     const trend = optionalNumber(prices.trend);
     const avg1 = optionalNumber(prices.avg1);
     const avg7 = optionalNumber(prices.avg7);
     const avg30 = optionalNumber(prices.avg30);
-    const pricePointCount = [liveOffer, low, trend, avg1, avg7, avg30].filter(value => value !== null).length;
+    const pricePointCount = [liveOffer, low, lowEx, trend, avg1, avg7, avg30].filter(value => value !== null).length;
     // Trend sowie 7-/30-Tage-Werte beschreiben die Vergangenheit und sind
     // kein heute sicher erreichbarer Verkaufspreis. Ein echtes Angebotsniveau
     // hat Vorrang; ohne API wird Low vorsichtig mit dem 1-Tages-Wert geglättet.
     let marketReference = 0;
     let marketReferenceSource = 'Keine kurzfristige Preisreferenz';
     let lowOutlier = false;
+    let lowExUsed = false;
+    let lowOutlierExplanation = '';
+    const comparisonValues = [avg1, avg7, avg30, trend].filter(value => value !== null);
+    const robustComparison = median(comparisonValues);
+    const lowRatio = low !== null && robustComparison > 0 ? low / robustComparison : null;
+    if (low !== null && comparisonValues.length >= MARKET_REFERENCE_THRESHOLDS.minimumComparisonValues) {
+      lowOutlier = lowRatio < MARKET_REFERENCE_THRESHOLDS.lowOutlierMinimumRatio
+        || lowRatio > MARKET_REFERENCE_THRESHOLDS.lowOutlierMaximumRatio;
+    }
+    const lowExRatio = lowEx !== null && robustComparison > 0 ? lowEx / robustComparison : null;
+    const lowExPlausible = lowEx !== null && (
+      comparisonValues.length < MARKET_REFERENCE_THRESHOLDS.minimumComparisonValues
+      || (lowExRatio >= MARKET_REFERENCE_THRESHOLDS.lowOutlierMinimumRatio
+        && lowExRatio <= MARKET_REFERENCE_THRESHOLDS.lowOutlierMaximumRatio)
+    );
+    const effectiveLow = lowOutlier ? (lowExPlausible ? lowEx : null) : low;
     if (liveOffer !== null) {
       marketReference = liveOffer;
       marketReferenceSource = 'Gespeicherte Angebotsbeobachtung';
-    } else if (low !== null && avg1 !== null) {
-      const ratio = avg1 > 0 ? low / avg1 : 1;
-      lowOutlier = ratio < 0.35 || ratio > 2.85;
-      if (lowOutlier) {
-        const recentValues = [avg1, avg7, avg30].filter(value => value !== null).sort((a, b) => a - b);
-        const recentMedian = recentValues[Math.floor((recentValues.length - 1) / 2)] || avg1;
-        // Bei Cent-Karten ist ein einzelnes 0,02-EUR-Angebot normal und darf
-        // nicht durch den deutlich hoeheren Tagesdurchschnitt ersetzt werden.
-        // Bei hoeherpreisigen Karten ist ein sehr kleines Low dagegen oft eine
-        // andere Sprache/ein anderer Zustand oder ein bereits veraltetes Angebot.
-        marketReference = low < 0.25
-          ? Math.min(recentMedian, low + Math.min(0.20, recentMedian * 0.35))
-          : recentMedian;
-        marketReferenceSource = low < 0.25
-          ? 'Vorsichtige Price-Guide-Spanne (Cent-Ausreißer begrenzt)'
-          : 'Kurzfristige Durchschnittswerte (Low-Ausreißer erkannt)';
+    } else if (lowOutlier) {
+      const recentMedian = median([avg1, avg7, avg30]) || robustComparison;
+      if (lowExPlausible) {
+        marketReference = avg1 !== null ? lowEx * 0.90 + avg1 * 0.10 : lowEx;
+        marketReferenceSource = 'Price Guide Low EX+ mit kleinem 1-Tages-Puffer (Low-Ausreißer ausgeschlossen)';
+        lowExUsed = true;
       } else {
-        marketReference = low * 0.90 + avg1 * 0.10;
-        marketReferenceSource = 'Price Guide Low mit kleinem 1-Tages-Puffer';
+        marketReference = recentMedian;
+        marketReferenceSource = 'Robuster Median der kurzfristigen Price-Guide-Werte (Low-Ausreißer ausgeschlossen)';
       }
+      lowOutlierExplanation = `Price Guide Low als Ausreißer erkannt: ${roundMoney(low).toFixed(2)} € liegt deutlich außerhalb des robusten Vergleichsniveaus ${roundMoney(robustComparison).toFixed(2)} € und wurde nicht als Preisreferenz verwendet.`;
+    } else if (low !== null && avg1 !== null) {
+      marketReference = low * 0.90 + avg1 * 0.10;
+      marketReferenceSource = 'Price Guide Low mit kleinem 1-Tages-Puffer';
     } else if (avg1 !== null) {
       marketReference = avg1;
       marketReferenceSource = 'Cardmarket 1-Tages-Wert';
@@ -332,7 +349,7 @@
       : 0;
     const priceFloor = ownedCost > 0 ? Math.ceil(targetRoiPrice * 100) / 100 : 0;
     const quickSell = recommendedSell > 0
-      ? Math.ceil(Math.max(0, Math.min(low ?? recommendedSell, recommendedSell)) * 100) / 100
+      ? Math.ceil(Math.max(0, Math.min(effectiveLow ?? recommendedSell, recommendedSell)) * 100) / 100
       : 0;
     const confidenceScore = Math.min(100,
       pricePointCount * 10 +
@@ -341,7 +358,8 @@
     );
     const confidenceLevel = confidenceScore >= 75 ? 'high' : confidenceScore >= 45 ? 'medium' : 'low';
     return {
-      liveOffer, low, trend, avg1, avg7, avg30, pricePointCount, lowOutlier,
+      liveOffer, low, lowEx, effectiveLow, trend, avg1, avg7, avg30, pricePointCount,
+      lowOutlier, lowExUsed, robustComparison: roundMoney(robustComparison), lowRatio, lowOutlierExplanation,
       marketReference: recommendedSell, marketReferenceSource, historicalReference,
       recommendedSell, typicalSell, safeSell, typicalSafeSell, feeRate, packaging, feeAmount, typicalFeeAmount, netBeforeBuy, typicalNetBeforeBuy,
       minProfit, minRoi, targetRoi, maxByProfit, maxByRoi, maxBuy,
@@ -1775,6 +1793,7 @@
     if (trend.outlierCount && dataQuality === 'AUSREICHEND') dataQuality = 'EINGESCHRÄNKT';
     const purchaseDate = inventoryStartDate(item);
     const firstListingAt = listingStartDate(item);
+    const listingAgeDays = ageInDays(firstListingAt, asOf);
     const datedChange = date => marketChange(currentReference, nearestHistoricalPoint(points, date, { latestStamp: currentStamp, maxGapDays: thresholdConfig.historyMaxGapDays }));
     const sincePurchase = purchaseDate ? datedChange(purchaseDate) : { available: false, absolute: null, percent: null, point: null };
     const sinceListing = firstListingAt ? datedChange(firstListingAt) : { available: false, absolute: null, percent: null, point: null };
@@ -1803,15 +1822,25 @@
       `Gespeicherter Price-Guide-Trend: ${trend.status.toLocaleLowerCase('de-DE')}`
     ];
     if (pricePosition.percent != null) reasons.push(`Eigener VK ${pricePosition.percent >= 0 ? '+' : ''}${pricePosition.percent.toFixed(1)} % zur gespeicherten Referenz`);
+    if (currentCalculated.lowOutlierExplanation) reasons.push(currentCalculated.lowOutlierExplanation);
+    if (!costThresholds.calculable) reasons.push('Vollständiger EK: unbekannt');
+    if (!(originalTarget > 0)) reasons.push('Ursprüngliches Gewinnziel: nicht hinterlegt');
     reasons.push(`Gewinnziel: ${profitTargetStatus.toLocaleLowerCase('de-DE')}`);
     if (sincePurchase.available) reasons.push(`Markt seit Einkauf ${sincePurchase.percent >= 0 ? '+' : ''}${sincePurchase.percent.toFixed(1)} %`);
     if (dataQuality !== 'AUSREICHEND') reasons.push(`Datenqualität: ${dataQuality.toLocaleLowerCase('de-DE')}`);
     let recommendation = 'HALTEN';
     const falling = ['FALLEND', 'STARK FALLEND'].includes(trend.status);
     const rising = ['STEIGEND', 'STARK STEIGEND'].includes(trend.status);
+    const strongMarketSignal = ['STARK FALLEND', 'STARK STEIGEND'].includes(trend.status);
+    const essentialTradingDataMissing = !costThresholds.calculable
+      && !(originalTarget > 0)
+      && inventoryAgeDays == null
+      && listingAgeDays == null;
+    const tradingDataStatus = essentialTradingDataMissing ? 'UNZUREICHENDE HANDELSDATEN' : 'AUSREICHEND';
     const fastProfile = ['META / STAPLE', 'DECK / ENGINE'].includes(profile);
     if (longTerm) recommendation = 'LANGFRISTIG HALTEN';
     else if (dataQuality === 'UNZUREICHEND') recommendation = 'UNZUREICHENDE DATEN';
+    else if (essentialTradingDataMissing && !strongMarketSignal) recommendation = 'UNZUREICHENDE HANDELSDATEN';
     else if (costThresholds.calculable && currentPrice > 0 && currentPrice < costThresholds.breakEven) recommendation = 'BREAK-EVEN PRÜFEN';
     else if (inventoryAgeDays != null && inventoryAgeDays > Number(settings.agingCapitalMaxDays ?? 60) && fastProfile && falling) recommendation = 'KAPITALBINDUNG PRÜFEN';
     else if (inventoryAgeDays != null && inventoryAgeDays > Number(settings.agingSlowMaxDays ?? 90) && falling) recommendation = 'KAPITALBINDUNG PRÜFEN';
@@ -1831,10 +1860,12 @@
       productId, printExact: Boolean(productId), currentDate, currentReference: roundMoney(currentReference),
       referenceSource: currentCalculated.marketReferenceSource || latestPoint?.referenceSource || 'Keine Price-Guide-Referenz',
       priceGuide: { low: optionalNumber(market.low), lowEx: optionalNumber(market.lowEx), trend: optionalNumber(market.trend), avg1: optionalNumber(market.avg1), avg7: optionalNumber(market.avg7), avg30: optionalNumber(market.avg30) },
-      historyPointCount: points.length, historyCoverage: roundMoney(coverage * 100), dataQuality, changes, trend,
+      historyPointCount: points.length, historyCoverage: roundMoney(coverage * 100), dataQuality, tradingDataStatus, changes, trend,
       purchaseReference: sincePurchase.point?.reference || null, listingReference: sinceListing.point?.reference || null,
       sincePurchase, sinceListing, currentPrice, pricePosition, thresholds: costThresholds,
       originalTarget, profitTargetStatus, scenarios, recommendation, reasons,
+      lowOutlier: currentCalculated.lowOutlier,
+      lowOutlierExplanation: currentCalculated.lowOutlierExplanation,
       priceAction: 'KEINE AUTOMATISCHE PREISÄNDERUNG', profile, longTerm
     };
   }
@@ -1996,6 +2027,7 @@
     agingBucket,
     priceGroup,
     marketReferenceValue,
+    MARKET_REFERENCE_THRESHOLDS,
     MARKET_DECISION_THRESHOLDS,
     marketDecisionThresholds,
     normalizeMarketHistory,

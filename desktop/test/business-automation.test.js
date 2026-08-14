@@ -400,8 +400,9 @@ test('günstige Karten erhalten keinen künstlichen VK durch einen festen Mindes
     {low:0.02,trend:0.44,avg1:0.38,avg7:0.40,avg30:0.41,cost:0.337649},
     {feePercent:5,packaging:0.04,minRoi:25,targetRoi:30,safetyPercent:5,minProfit:0.75}
   );
-  assert.equal(result.suggestedSell,0.16);
+  assert.equal(result.suggestedSell,0.40);
   assert.equal(result.lowOutlier,true);
+  assert.match(result.marketReferenceSource,/robuster Median/i);
   assert.equal(result.targetRoiPrice,0.51);
   assert.equal(result.profitableAtMarket,false);
 });

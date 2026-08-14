@@ -21,6 +21,28 @@ function sourceSignature(file) {
   return { size:stats.size, mtimeMs:stats.mtimeMs, updatedAt:String(state?.updated_at||''), stateJson:String(state?.state_json||''), integrity };
 }
 
+function legacyReference(market = {}) {
+  const value = key => Number(market[key]) > 0 ? Number(market[key]) : null;
+  const liveOffer = value('liveOffer');
+  const low = value('low');
+  const avg1 = value('avg1');
+  const avg7 = value('avg7');
+  const avg30 = value('avg30');
+  if (liveOffer !== null) return liveOffer;
+  if (low !== null && avg1 !== null) {
+    const ratio = low / avg1;
+    if (ratio < 0.35 || ratio > 2.85) {
+      const recent = [avg1, avg7, avg30].filter(entry => entry !== null).sort((a, b) => a - b);
+      const recentMedian = recent[Math.floor((recent.length - 1) / 2)] || avg1;
+      return low < 0.25 ? Math.min(recentMedian, low + Math.min(0.20, recentMedian * 0.35)) : recentMedian;
+    }
+    return low * 0.90 + avg1 * 0.10;
+  }
+  if (avg1 !== null) return avg1;
+  if (low !== null) return low;
+  return [value('avg7'), value('avg30'), value('trend')].filter(entry => entry !== null).sort((a, b) => a - b)[0] || 0;
+}
+
 if (!fs.existsSync(sourcePath)) throw new Error(`Echte Datenbank nicht gefunden: ${sourcePath}`);
 const before = sourceSignature(sourcePath);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-phase3-real-db-'));
@@ -53,13 +75,40 @@ try {
     if(result.dataQuality==='UNZUREICHEND')insufficient += 1;
   });
   const analysisMs = performance.now() - analyzedStarted;
+  const practiceIds = ['260727', '251780', '741695'];
+  const practice = practiceIds.map(productId => {
+    const card = current.find(item => String(item.productId || '').replace(/\D/g, '') === productId);
+    const market = state.productCatalog?.[productId] || {};
+    if (!card) throw new Error(`Praxis-Prüfkarte CM ${productId} fehlt im Bestand der Datenbankkopie.`);
+    const beforeReference = legacyReference(market);
+    const beforeDecision = automation.analyzeMarketDecision(card, { ...market, liveOffer:beforeReference }, batch.histories[productId] || [], settings, new Date('2026-08-14T12:00:00.000Z'));
+    const afterDecision = automation.analyzeMarketDecision(card, market, batch.histories[productId] || [], settings, new Date('2026-08-14T12:00:00.000Z'));
+    return {
+      productId,
+      name:card.name,
+      referenceBefore:Number(beforeReference.toFixed(2)),
+      referenceAfter:afterDecision.currentReference,
+      trend:afterDecision.trend.status,
+      pricePositionBefore:beforeDecision.pricePosition.status,
+      pricePositionAfter:afterDecision.pricePosition.status,
+      recommendationBefore:beforeDecision.recommendation,
+      recommendationAfter:afterDecision.recommendation,
+      reasonsAfter:afterDecision.reasons
+    };
+  });
+  const arkane = practice.find(row => row.productId === '260727');
+  const laquari = practice.find(row => row.productId === '251780');
+  const blitz = practice.find(row => row.productId === '741695');
+  if (arkane.referenceBefore !== 0.22 || arkane.referenceAfter !== 2.33 || arkane.recommendationAfter !== 'UNZUREICHENDE HANDELSDATEN') throw new Error(`Arkane-Macht-Praxisfall liefert nicht den erwarteten robusten Referenzfix: ${JSON.stringify(arkane)}`);
+  if (laquari.referenceAfter !== 6.99 || laquari.recommendationAfter !== laquari.recommendationBefore) throw new Error(`Laquari-Kontrollfall hat sich unerwartet verändert: ${JSON.stringify(laquari)}`);
+  if (blitz.referenceAfter !== 2.30 || blitz.recommendationAfter !== blitz.recommendationBefore) throw new Error(`Blitzsturm-Kontrollfall hat sich unerwartet verändert: ${JSON.stringify(blitz)}`);
   const status=database.getStatus();
   const integrity=database.db.prepare('PRAGMA integrity_check').get()?.integrity_check||'';
   const output={
     sourcePath,copyPath,schemaVersion:status.schemaVersion,integrity,
     counts:{inventory:(state.inventory||[]).length,privateCards:(state.privateCollection||[]).length,purchases:(state.purchases||[]).length,sales:(state.sales||[]).length},
     marketPriceRows:status.marketPriceCount,snapshots:status.snapshotCount,exactProductIds:productIds.length,
-    analyzed,insufficient,historyQueryMs:Number(queryMs.toFixed(1)),decisionAnalysisMs:Number(analysisMs.toFixed(1))
+    analyzed,insufficient,historyQueryMs:Number(queryMs.toFixed(1)),decisionAnalysisMs:Number(analysisMs.toFixed(1)),practice
   };
   console.log(JSON.stringify(output,null,2));
 } finally {

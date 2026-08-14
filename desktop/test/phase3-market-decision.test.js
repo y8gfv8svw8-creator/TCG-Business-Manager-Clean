@@ -143,3 +143,77 @@ test('Empfehlung erklärt sich regelbasiert und enthält keine Live-Marktbehaupt
   assert.doesNotMatch(JSON.stringify(result), /LIVE-MARKTPREIS|AKTUELL BILLIGSTES ANGEBOT|VERKAUFSWAHRSCHEINLICHKEIT/i);
   assert.equal(result.priceAction, 'KEINE AUTOMATISCHE PREISÄNDERUNG');
 });
+
+test('A: extremer Price-Guide-Low wird gegen mehrere robuste Vergleichswerte ausgeschlossen', () => {
+  const result = automation.calculateAutomaticPriceTargets({ low: 0.02, avg1: 2.49, avg7: 2.10, avg30: 2.33, trend: 1.96 }, settings);
+  assert.equal(result.lowOutlier, true);
+  assert.equal(result.marketReference, 2.33);
+  assert.equal(result.quickSell, 2.33);
+  assert.match(result.marketReferenceSource, /Robuster Median/);
+  assert.match(result.lowOutlierExplanation, /Ausreißer erkannt.*0\.02.*2\.22/);
+});
+
+test('B: plausibler Low bleibt Bestandteil der vorsichtigen kurzfristigen Referenz', () => {
+  const result = automation.calculateAutomaticPriceTargets({ low: 2, avg1: 2.20, avg7: 2.10, avg30: 2.30, trend: 2.25 }, settings);
+  assert.equal(result.lowOutlier, false);
+  assert.equal(result.marketReference, 2.02);
+  assert.match(result.marketReferenceSource, /Low mit kleinem 1-Tages-Puffer/);
+});
+
+test('B2: plausibler Low EX+ darf einen erkannten Low-Ausreißer ersetzen', () => {
+  const result = automation.calculateAutomaticPriceTargets({ low: 0.02, lowEx: 2.05, avg1: 2.20, avg7: 2.15, avg30: 2.30, trend: 2.18 }, settings);
+  assert.equal(result.lowOutlier, true);
+  assert.equal(result.lowExUsed, true);
+  assert.equal(result.marketReference, 2.07);
+  assert.match(result.marketReferenceSource, /Low EX\+/);
+});
+
+test('C: bei nur einem Vergleichswert wird kein Ausreißer scheinpräzise behauptet', () => {
+  const result = automation.calculateAutomaticPriceTargets({ low: 0.02, avg1: 2.49 }, settings);
+  assert.equal(result.lowOutlier, false);
+  assert.equal(result.marketReference, 0.27);
+  assert.equal(result.lowOutlierExplanation, '');
+});
+
+test('D: bei ausschließlich vorhandenem Low bleibt Low die offen benannte Referenz', () => {
+  const result = automation.calculateAutomaticPriceTargets({ low: 1.23 }, settings);
+  assert.equal(result.marketReference, 1.23);
+  assert.equal(result.marketReferenceSource, 'Cardmarket Low');
+  assert.equal(result.lowOutlier, false);
+});
+
+test('E: unbekannter EK erzeugt weder Gewinn noch ROI noch Break-even', () => {
+  const result = decision({ cost: 0, costStatus: 'unknown' });
+  const current = result.scenarios.find(row => row.key === 'current').result;
+  assert.equal(result.thresholds.breakEven, null);
+  assert.equal(current.expectedProfit, null);
+  assert.equal(current.roi, null);
+  assert.equal(result.profitTargetStatus, 'NICHT BERECHENBAR');
+});
+
+test('F: ohne EK Kaufdatum Inseratsdatum und Ziel-VK entsteht keine sichere Halten-Empfehlung', () => {
+  const result = decision({
+    cost: 0, costStatus: 'unknown', purchaseDate: '', inventoryDateQuality: 'unknown',
+    originalTargetSell: null, targetSell: null, listingHistory: [{ eventType: 'baseline', changedAt: '2026-08-01' }]
+  });
+  assert.equal(result.tradingDataStatus, 'UNZUREICHENDE HANDELSDATEN');
+  assert.equal(result.recommendation, 'UNZUREICHENDE HANDELSDATEN');
+  assert.equal(result.originalTarget, null);
+});
+
+test('G: Praxis-Kontrollfälle Laquari und Blitzsturm behalten ihre sinnvollen Entscheidungen', () => {
+  const laquari = automation.analyzeMarketDecision(
+    item({ productId: '251780', purchaseDate: '2026-08-08', listingPrice: 6, originalTargetSell: null, cost: 3.872195 }),
+    { low: 1, trend: 6.40, avg1: 6.99, avg7: 8.29, avg30: 5.63, priceDate: '2026-08-14' },
+    history(6.99, 6.99), settings, asOf
+  );
+  const blitz = automation.analyzeMarketDecision(
+    item({ productId: '741695', purchaseDate: '2026-07-20', listingPrice: 3.50, originalTargetSell: null, cost: 3.0516479 }),
+    { low: 2, trend: 3.85, avg1: 4.98, avg7: 5.10, avg30: 4.62, priceDate: '2026-08-14' },
+    history(4.6, 2.3), settings, asOf
+  );
+  assert.equal(laquari.currentReference, 6.99);
+  assert.equal(laquari.recommendation, 'HALTEN');
+  assert.equal(blitz.currentReference, 2.30);
+  assert.equal(blitz.recommendation, 'PREIS PRÜFEN');
+});

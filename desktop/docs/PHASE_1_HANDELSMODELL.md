@@ -70,6 +70,16 @@ Der maximale EK wird durch beide Regeln begrenzt: eingestellter Mindestgewinn in
 Euro und Mindest-ROI in Prozent. Der VK wird dadurch nicht künstlich über den
 Marktpreis angehoben.
 
+## Spätere Entscheidungs-/Grenzkosten (nicht Teil des Phase-3-Referenzfixes)
+
+Für eine spätere Einkaufsentscheidung soll zwischen Kartenpreis, vollständigem
+Vollkosten-EK und reinen Entscheidungs-/Grenzkosten unterschieden werden. Das
+kann insbesondere bei günstigen Warenkorbfüllern helfen. Der vollständige EK
+bleibt dabei unverändert die verbindliche Grundlage für Bestand, realisierten
+Gewinn und ROI. Ein späterer Entscheidungswert darf ihn weder überschreiben noch
+rückwirkend verändern. In diesem Referenzpreis-Fix wird noch kein solcher Wert
+berechnet oder gespeichert.
+
 ## Inseratspreis-Verlauf und Halteprofil
 
 Gespeichert werden ursprüngliches VK-Ziel, Erstinserat, aktueller Preis,

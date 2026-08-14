@@ -492,7 +492,13 @@ CREATE TABLE IF NOT EXISTS inventory_assets (
   language TEXT NOT NULL DEFAULT '',
   card_condition TEXT NOT NULL DEFAULT '',
   acquisition_cost REAL NOT NULL DEFAULT 0,
+  acquisition_cost_status TEXT NOT NULL DEFAULT 'unknown',
   acquisition_date TEXT NOT NULL DEFAULT '',
+  original_target_sell REAL,
+  current_listing_price REAL,
+  is_listed INTEGER NOT NULL DEFAULT 0,
+  holding_profile TEXT NOT NULL DEFAULT '',
+  long_term_hold INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT '',
   location TEXT NOT NULL DEFAULT '',
   archived INTEGER NOT NULL DEFAULT 0,
@@ -505,6 +511,68 @@ ON inventory_assets(product_id, ownership, status, archived);
 
 CREATE INDEX IF NOT EXISTS idx_inventory_assets_purchase
 ON inventory_assets(purchase_id, ownership, archived);
+
+-- Schema 9: Die JSON-Struktur in app_state bleibt die fuehrende Quelle fuer
+-- bearbeitbare App-Daten. Diese Spalten und Tabellen sind die normalisierte,
+-- transaktional neu aufbaubare Sicht fuer Auswertungen und spaetere APIs.
+CREATE TABLE IF NOT EXISTS capital_accounts (
+  account_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  account_type TEXT NOT NULL CHECK(account_type IN ('cardmarket', 'bank', 'cash', 'other')),
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  active INTEGER NOT NULL DEFAULT 1,
+  notes TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS capital_ledger_entries (
+  entry_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  transfer_id TEXT NOT NULL DEFAULT '',
+  entry_type TEXT NOT NULL CHECK(entry_type IN (
+    'opening', 'deposit', 'withdrawal', 'purchase', 'sale',
+    'fee', 'refund', 'correction', 'transfer'
+  )),
+  occurred_at TEXT NOT NULL,
+  amount REAL NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  reference_type TEXT NOT NULL DEFAULT '',
+  reference_id TEXT NOT NULL DEFAULT '',
+  source_id TEXT NOT NULL DEFAULT 'manual',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(account_id) REFERENCES capital_accounts(account_id),
+  FOREIGN KEY(source_id) REFERENCES data_sources(source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capital_ledger_account_date
+ON capital_ledger_entries(account_id, occurred_at DESC, archived);
+
+CREATE INDEX IF NOT EXISTS idx_capital_ledger_reference
+ON capital_ledger_entries(reference_type, reference_id, archived);
+
+CREATE TABLE IF NOT EXISTS inventory_listing_history (
+  history_id TEXT PRIMARY KEY,
+  inventory_id TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK(event_type IN (
+    'original_target', 'first_listing', 'price_change', 'unlisted', 'baseline'
+  )),
+  changed_at TEXT NOT NULL,
+  old_price REAL,
+  new_price REAL,
+  change_mode TEXT NOT NULL CHECK(change_mode IN ('manual', 'suggested', 'import', 'legacy')),
+  reason TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(inventory_id) REFERENCES inventory_assets(inventory_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_listing_history_asset
+ON inventory_listing_history(inventory_id, changed_at DESC, archived);
 
 -- Tagesgenaue Vorhersagen werden nicht ueberschrieben. Dadurch kann spaeter
 -- gegen den tatsaechlichen Verkaufspreis und die Haltedauer getestet werden.

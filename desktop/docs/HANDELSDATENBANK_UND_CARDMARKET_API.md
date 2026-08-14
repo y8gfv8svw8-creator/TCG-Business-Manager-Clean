@@ -3,7 +3,7 @@
 ## Was automatisch gespeichert wird
 
 Der vollständige Programmstand bleibt wie bisher in SQLite erhalten. Zusätzlich
-speichert Schema v6 bei jedem Speichern in derselben Transaktion:
+speichert Schema v9 bei jedem Speichern in derselben Transaktion:
 
 - Erstellen, Bearbeiten und Löschen von Einkäufen, Verkäufen und Bestandskarten
   als unveränderliche Ereignisse (`business_events`).
@@ -18,6 +18,10 @@ speichert Schema v6 bei jedem Speichern in derselben Transaktion:
 - Importierte Cardmarket-Abrechnungen und ihre zugeordneten Einzelbuchungen
   (`settlement_imports`, `settlement_entries`). Getrennte Gebühren- und
   Gutschriftzeilen derselben Bestellung werden vor dem Vergleich summiert.
+- Kapital-Konten und ein Journal mit Startständen, Ein-/Auszahlungen,
+  Käufen, Verkäufen, Gebühren, Erstattungen, Korrekturen und Umbuchungen.
+- Ursprüngliches VK-Ziel, aktuellen Inseratspreis und jede bestätigte
+  Preisänderung pro physischem Exemplar.
 
 Vor der automatischen Migration wird eine exakte SQLite-Sicherung unter
 `Dokumente\TCG Business Manager\Backups\Migrationen` erstellt. Die vorhandenen

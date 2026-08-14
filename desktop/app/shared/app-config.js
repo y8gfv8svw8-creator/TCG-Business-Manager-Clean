@@ -10,7 +10,7 @@
     minRoi: 25,
     targetRoi: 30,
     expectedCardsPerOrder: 3,
-    pricingModelVersion: 'market-roi-v1',
+    pricingModelVersion: 'market-roi-v2-minprofit',
     priceAgeDays: 7,
     condition: 'NM',
     languages: 'DE/EN',

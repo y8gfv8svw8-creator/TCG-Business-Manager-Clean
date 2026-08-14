@@ -4,7 +4,7 @@ const path = require('path');
 const cardSearch = require('../shared/card-search');
 const businessAutomation = require('../shared/business-automation');
 
-const CURRENT_SCHEMA_VERSION = 8;
+const CURRENT_SCHEMA_VERSION = 9;
 
 function isoNow() {
   return new Date().toISOString();
@@ -87,6 +87,56 @@ function isRealizedSaleStatus(status) {
   const value = String(status || '').trim();
   if (!value || isCancelledStatus(value)) return false;
   return /abgeschlossen|completed|received|angekommen|abgerechnet|settled/i.test(value);
+}
+
+function nullableMoney(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100) / 100) : null;
+}
+
+function legacyCostStatus(item = {}) {
+  if (['known', 'confirmed_zero', 'unknown'].includes(item.costStatus)) return item.costStatus;
+  const cost = nullableMoney(item.cost);
+  if (cost !== null && cost > 0) return 'known';
+  if (item.purchaseId && (item.purchaseLineKey || item.costConfirmed === true)) return 'confirmed_zero';
+  return 'unknown';
+}
+
+function upgradeInventoryItemToVersion9(item = {}, index = 0, now = isoNow()) {
+  const result = { ...item };
+  result.costStatus = legacyCostStatus(item);
+  result.holdingProfile = String(item.holdingProfile || 'standard');
+  result.longTermHold = Boolean(item.longTermHold);
+  result.originalTargetSell = nullableMoney(item.originalTargetSell);
+  result.listingHistory = Array.isArray(item.listingHistory)
+    ? item.listingHistory.map(entry => ({ ...entry }))
+    : [];
+  const inventoryId = recordId(result, index);
+  const listingPrice = nullableMoney(item.listingPrice);
+  if (listingPrice !== null && listingPrice > 0 && result.listingHistory.length === 0) {
+    result.listingHistory.push({
+      id: `legacy-listing:${inventoryId}`,
+      eventType: 'baseline',
+      changedAt: String(item.listedAt || item.purchaseDate || now),
+      oldPrice: null,
+      newPrice: listingPrice,
+      changeMode: 'legacy',
+      reason: 'Beim Schema-9-Umstieg uebernommener Inseratspreis'
+    });
+  }
+  return result;
+}
+
+function upgradeStateToVersion9(state = {}, now = isoNow()) {
+  const result = { ...state };
+  result.capitalAccounts = Array.isArray(state.capitalAccounts) ? state.capitalAccounts : [];
+  result.capitalEntries = Array.isArray(state.capitalEntries) ? state.capitalEntries : [];
+  result.inventory = (Array.isArray(state.inventory) ? state.inventory : [])
+    .map((item, index) => upgradeInventoryItemToVersion9(item, index, now));
+  result.privateCollection = (Array.isArray(state.privateCollection) ? state.privateCollection : [])
+    .map((item, index) => upgradeInventoryItemToVersion9(item, index, now));
+  return result;
 }
 
 class TcgDatabase {
@@ -179,6 +229,7 @@ class TcgDatabase {
       if (currentVersion < 5) this.migrateToVersion5();
       if (currentVersion < 6) this.migrateToVersion6();
       if (currentVersion < 7) this.migrateToVersion7();
+      if (currentVersion < 9) this.migrateToVersion9();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -333,6 +384,23 @@ class TcgDatabase {
     this.materializeState(state, row.updated_at || isoNow());
   }
 
+  migrateToVersion9() {
+    this.ensureDataSources();
+    this.addColumnIfMissing('inventory_assets', 'acquisition_cost_status', "TEXT NOT NULL DEFAULT 'unknown'");
+    this.addColumnIfMissing('inventory_assets', 'original_target_sell', 'REAL');
+    this.addColumnIfMissing('inventory_assets', 'current_listing_price', 'REAL');
+    this.addColumnIfMissing('inventory_assets', 'is_listed', 'INTEGER NOT NULL DEFAULT 0');
+    this.addColumnIfMissing('inventory_assets', 'holding_profile', "TEXT NOT NULL DEFAULT ''");
+    this.addColumnIfMissing('inventory_assets', 'long_term_hold', 'INTEGER NOT NULL DEFAULT 0');
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (!row?.state_json) return;
+    const updatedAt = row.updated_at || isoNow();
+    const state = upgradeStateToVersion9(JSON.parse(row.state_json), updatedAt);
+    this.materializeState(state, updatedAt);
+    this.db.prepare('UPDATE app_state SET state_json = ?, updated_at = ? WHERE id = 1')
+      .run(JSON.stringify(state), updatedAt);
+  }
+
   close() {
     if (!this.db) return;
     this.db.close();
@@ -440,6 +508,7 @@ class TcgDatabase {
       throw new TypeError('Der Programmstand ist ungültig.');
     }
 
+    state = upgradeStateToVersion9(state);
     const updatedAt = isoNow();
     const json = JSON.stringify(state);
     const previousRow = this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get();
@@ -486,7 +555,9 @@ class TcgDatabase {
       ['sale', 'sales'],
       ['inventory', 'inventory'],
       ['private_inventory', 'privateCollection'],
-      ['settlement', 'reconciliations']
+      ['settlement', 'reconciliations'],
+      ['capital_account', 'capitalAccounts'],
+      ['capital_entry', 'capitalEntries']
     ];
     const insert = this.db.prepare(`
       INSERT INTO business_events (
@@ -545,6 +616,8 @@ class TcgDatabase {
     const sales = Array.isArray(state?.sales) ? state.sales : [];
     const inventory = Array.isArray(state?.inventory) ? state.inventory : [];
     const privateCollection = Array.isArray(state?.privateCollection) ? state.privateCollection : [];
+    const capitalAccounts = Array.isArray(state?.capitalAccounts) ? state.capitalAccounts : [];
+    const capitalEntries = Array.isArray(state?.capitalEntries) ? state.capitalEntries : [];
     const settings = state?.settings || {};
     const inventoryById = new Map(inventory.map((row, index) => [recordId(row, index), row]));
 
@@ -555,6 +628,9 @@ class TcgDatabase {
       WHERE materialized_from = 'app_state' AND archived = 0;
       UPDATE purchase_receipt_lines SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE inventory_assets SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE inventory_listing_history SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE capital_ledger_entries SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE capital_accounts SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
     `);
 
     const upsertOrder = this.db.prepare(`
@@ -639,9 +715,10 @@ class TcgDatabase {
       INSERT INTO inventory_assets (
         inventory_id, ownership, purchase_id, purchase_line_key, sale_id,
         product_id, card_name, set_name, collector_number, rarity, language,
-        card_condition, acquisition_cost, acquisition_date, status, location,
-        archived, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        card_condition, acquisition_cost, acquisition_cost_status, acquisition_date,
+        original_target_sell, current_listing_price, is_listed, holding_profile,
+        long_term_hold, status, location, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(inventory_id) DO UPDATE SET
         ownership=excluded.ownership, purchase_id=excluded.purchase_id,
         purchase_line_key=excluded.purchase_line_key, sale_id=excluded.sale_id,
@@ -649,7 +726,12 @@ class TcgDatabase {
         set_name=excluded.set_name, collector_number=excluded.collector_number,
         rarity=excluded.rarity, language=excluded.language,
         card_condition=excluded.card_condition, acquisition_cost=excluded.acquisition_cost,
-        acquisition_date=excluded.acquisition_date, status=excluded.status,
+        acquisition_cost_status=excluded.acquisition_cost_status,
+        acquisition_date=excluded.acquisition_date,
+        original_target_sell=excluded.original_target_sell,
+        current_listing_price=excluded.current_listing_price,
+        is_listed=excluded.is_listed, holding_profile=excluded.holding_profile,
+        long_term_hold=excluded.long_term_hold, status=excluded.status,
         location=excluded.location, archived=0, raw_json=excluded.raw_json,
         updated_at=excluded.updated_at
     `);
@@ -661,11 +743,85 @@ class TcgDatabase {
       String(item.name || ''), String(item.setName || item.set || ''),
       String(item.collectorNumber || ''), String(item.rarity || item.version || ''),
       String(item.language || ''), String(item.condition || ''), numberValue(item.cost),
-      String(item.purchaseDate || ''), String(item.status || ''), String(item.location || ''),
+      legacyCostStatus(item), String(item.purchaseDate || ''), nullableMoney(item.originalTargetSell),
+      nullableMoney(item.listingPrice), item.listed ? 1 : 0,
+      String(item.holdingProfile || 'standard'), item.longTermHold ? 1 : 0,
+      String(item.status || ''), String(item.location || ''),
       JSON.stringify(item), updatedAt
     );
     inventory.forEach((item, index) => writeAsset(item, index, 'business'));
     privateCollection.forEach((item, index) => writeAsset(item, index, 'private'));
+
+    const upsertListingHistory = this.db.prepare(`
+      INSERT INTO inventory_listing_history (
+        history_id, inventory_id, event_type, changed_at, old_price, new_price,
+        change_mode, reason, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(history_id) DO UPDATE SET
+        inventory_id=excluded.inventory_id, event_type=excluded.event_type,
+        changed_at=excluded.changed_at, old_price=excluded.old_price,
+        new_price=excluded.new_price, change_mode=excluded.change_mode,
+        reason=excluded.reason, archived=0, raw_json=excluded.raw_json,
+        updated_at=excluded.updated_at
+    `);
+    const writeListingHistory = (item, index) => {
+      const inventoryId = recordId(item, index);
+      (Array.isArray(item.listingHistory) ? item.listingHistory : []).forEach((entry, historyIndex) => {
+        const eventType = ['original_target', 'first_listing', 'price_change', 'unlisted', 'baseline'].includes(entry.eventType)
+          ? entry.eventType : 'price_change';
+        const changeMode = ['manual', 'suggested', 'import', 'legacy'].includes(entry.changeMode)
+          ? entry.changeMode : 'manual';
+        upsertListingHistory.run(
+          String(entry.id || `${inventoryId}:listing:${historyIndex}`), inventoryId, eventType,
+          String(entry.changedAt || updatedAt), nullableMoney(entry.oldPrice), nullableMoney(entry.newPrice),
+          changeMode, String(entry.reason || ''), JSON.stringify(entry), updatedAt
+        );
+      });
+    };
+    inventory.forEach(writeListingHistory);
+    privateCollection.forEach(writeListingHistory);
+
+    const upsertCapitalAccount = this.db.prepare(`
+      INSERT INTO capital_accounts (
+        account_id, name, account_type, currency, active, notes, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET
+        name=excluded.name, account_type=excluded.account_type,
+        currency=excluded.currency, active=excluded.active, notes=excluded.notes,
+        archived=0, raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    capitalAccounts.forEach((account, index) => upsertCapitalAccount.run(
+      recordId(account, index), String(account.name || 'Handelskonto'),
+      ['cardmarket', 'bank', 'cash', 'other'].includes(account.type) ? account.type : 'other',
+      String(account.currency || 'EUR'), account.active === false ? 0 : 1,
+      String(account.notes || ''), JSON.stringify(account), updatedAt
+    ));
+    const accountIds = new Set(capitalAccounts.map((account, index) => recordId(account, index)));
+    const upsertCapitalEntry = this.db.prepare(`
+      INSERT INTO capital_ledger_entries (
+        entry_id, account_id, transfer_id, entry_type, occurred_at, amount,
+        description, reference_type, reference_id, source_id, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(entry_id) DO UPDATE SET
+        account_id=excluded.account_id, transfer_id=excluded.transfer_id,
+        entry_type=excluded.entry_type, occurred_at=excluded.occurred_at,
+        amount=excluded.amount, description=excluded.description,
+        reference_type=excluded.reference_type, reference_id=excluded.reference_id,
+        source_id=excluded.source_id, archived=0, raw_json=excluded.raw_json,
+        updated_at=excluded.updated_at
+    `);
+    capitalEntries.forEach((entry, index) => {
+      const accountId = String(entry.accountId || '');
+      if (!accountIds.has(accountId)) return;
+      const entryType = ['opening', 'deposit', 'withdrawal', 'purchase', 'sale', 'fee', 'refund', 'correction', 'transfer'].includes(entry.type)
+        ? entry.type : 'correction';
+      upsertCapitalEntry.run(
+        recordId(entry, index), accountId, String(entry.transferId || ''), entryType,
+        String(entry.date || entry.occurredAt || updatedAt), numberValue(entry.amount),
+        String(entry.description || ''), String(entry.referenceType || ''),
+        String(entry.referenceId || ''), recordSource(entry), JSON.stringify(entry), updatedAt
+      );
+    });
 
     const insertLine = (order, item, index, values = {}) => {
       const rawProductId = String(values.productId ?? item?.productId ?? '').trim();
@@ -892,6 +1048,10 @@ class TcgDatabase {
         (SELECT COUNT(*) FROM purchase_receipt_lines WHERE archived = 0) AS receipt_line_count,
         (SELECT COUNT(*) FROM inventory_assets WHERE archived = 0 AND ownership = 'business') AS business_asset_count,
         (SELECT COUNT(*) FROM inventory_assets WHERE archived = 0 AND ownership = 'private') AS private_asset_count,
+        (SELECT COUNT(*) FROM inventory_listing_history WHERE archived = 0) AS listing_history_count,
+        (SELECT COUNT(*) FROM capital_accounts WHERE archived = 0) AS capital_account_count,
+        (SELECT COUNT(*) FROM capital_ledger_entries WHERE archived = 0) AS capital_entry_count,
+        (SELECT COALESCE(SUM(amount), 0) FROM capital_ledger_entries WHERE archived = 0) AS liquid_capital,
         (SELECT COUNT(*) FROM market_observations) AS observation_count,
         (SELECT COUNT(*) FROM pricing_recommendations) AS recommendation_count,
         (SELECT COUNT(*) FROM settlement_imports) AS settlement_count,
@@ -922,6 +1082,10 @@ class TcgDatabase {
       purchaseReceiptLineCount: Number(counts?.receipt_line_count || 0),
       businessAssetCount: Number(counts?.business_asset_count || 0),
       privateAssetCount: Number(counts?.private_asset_count || 0),
+      listingHistoryCount: Number(counts?.listing_history_count || 0),
+      capitalAccountCount: Number(counts?.capital_account_count || 0),
+      capitalEntryCount: Number(counts?.capital_entry_count || 0),
+      liquidCapital: Number(counts?.liquid_capital || 0),
       marketObservationCount: Number(counts?.observation_count || 0),
       recommendationCount: Number(counts?.recommendation_count || 0),
       settlementCount: Number(counts?.settlement_count || 0),
@@ -1010,6 +1174,7 @@ class TcgDatabase {
     const feeRate = Math.max(0, numberValue(settings.feePercent)) / 100;
     const packagingAllocation = businessAutomation.estimatePackagingPerCard(appState, settings);
     const packaging = Math.max(0, numberValue(packagingAllocation.perCard));
+    const minProfit = Math.max(0, numberValue(settings.minProfit));
     const minRoi = Math.max(0, numberValue(settings.minRoi ?? 25)) / 100;
     const targetRoi = Math.max(minRoi, numberValue(settings.targetRoi ?? 30) / 100);
     const safetyRate = Math.max(0, numberValue(settings.safetyPercent ?? 5)) / 100;
@@ -1100,7 +1265,7 @@ class TcgDatabase {
           avg1: row.avg_1,
           avg7: row.avg_7,
           avg30: row.avg_30
-        }, {...settings, packaging, minProfit:0}).recommendedSell;
+        }, {...settings, packaging, minProfit}).recommendedSell;
       };
       const latestTargets = businessAutomation.calculateAutomaticPriceTargets({
         liveOffer: latestMarket.source_id === 'cardmarket_api' ? latestMarket.low_price : null,
@@ -1109,7 +1274,7 @@ class TcgDatabase {
         avg1: latestMarket.avg_1,
         avg7: latestMarket.avg_7,
         avg30: latestMarket.avg_30
-      }, {...settings, packaging, minProfit:0});
+      }, {...settings, packaging, minProfit});
       const marketReference = latestTargets.recommendedSell;
       const dailyReferences = [];
       const seenDates = new Set();
@@ -1135,7 +1300,8 @@ class TcgDatabase {
       const safeSell = recommendedSell * Math.max(0, 1 - dynamicSafetyRate);
       const availableBeforeBuy = safeSell * Math.max(0, 1 - feeRate) - packaging;
       const byRoi = availableBeforeBuy / Math.max(1, 1 + minRoi);
-      const recommendedBuy = recommendedSell > 0 ? Math.max(0, byRoi) : 0;
+      const byProfit = availableBeforeBuy - minProfit;
+      const recommendedBuy = recommendedSell > 0 ? Math.max(0, Math.min(byRoi, byProfit)) : 0;
       const priceFloor = ownBuyAverage > 0 && feeRate < 1
         ? (ownBuyAverage * (1 + targetRoi) + packaging) / Math.max(0.01, 1 - feeRate)
         : 0;

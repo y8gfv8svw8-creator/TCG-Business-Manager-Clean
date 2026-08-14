@@ -75,7 +75,7 @@ test('protokolliert Handelsänderungen append-only und normalisiert Käufe und V
   assert.equal(recommendation.ownSellAverage, 15);
   assert.equal(recommendation.buySampleCount, 1, 'Nur tatsächlich in den Geschäftsbestand übernommene Exemplare zählen als eigener EK');
   assert.equal(recommendation.sellSampleCount, 1);
-  assert.ok(recommendation.recommendedBuy > 0);
+  assert.equal(recommendation.recommendedBuy, 0, 'Der konfigurierte Mindestgewinn begrenzt den Max-EK');
   assert.equal(recommendation.recommendedSell, 2, 'SQLite nutzt dieselbe kurzfristige Marktreferenz wie Bestand und Datencenter');
   assert.ok(recommendation.recommendedSell < recommendation.priceFloor, 'Der Markt-VK wird nicht auf den ROI-Zielpreis angehoben');
   assert.equal(recommendation.profitableAtMarket, false);
@@ -157,7 +157,7 @@ test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das ak
   });
   database.open();
   const status = database.getTradeDatabaseStatus();
-  assert.equal(database.getStatus().schemaVersion, 8);
+  assert.equal(database.getStatus().schemaVersion, 9);
   assert.equal(status.orderCount, 2);
   assert.equal(status.marketObservationCount, 1);
   assert.equal(status.eventCount, 3);

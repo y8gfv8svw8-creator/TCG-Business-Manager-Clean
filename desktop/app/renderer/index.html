@@ -731,6 +731,7 @@
               <label>Standardgebühr, falls unbekannt (%)<input id="settingFee" type="number" min="0" max="100" step="0.1" /></label>
               <label>Verpackung pro Bestellung, falls unbekannt (€)<input id="settingPackaging" type="number" min="0" step="0.01" /></label>
               <label>Erwartete Karten pro Bestellung<input id="settingExpectedCardsPerOrder" type="number" min="1" step="0.1" /></label>
+              <label>Mindestgewinn pro Karte (€)<input id="settingMinProfit" type="number" min="0" step="0.01" /></label>
               <label>Mindest-ROI (%)<input id="settingMinRoi" type="number" min="0" step="1" /></label>
               <label>Ziel-ROI (%)<input id="settingTargetRoi" type="number" min="0" step="1" /></label>
               <label>Sicherheitsabschlag Marktpreis (%)<input id="settingSafetyPercent" type="number" min="0" max="50" step="0.5" /></label>
@@ -738,6 +739,17 @@
               <label>Preiswarnung nach Tagen<input id="settingPriceAge" type="number" min="1" step="1" /></label>
             </div>
             <div id="settingsCalculationPreview" class="settings-preview"></div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Kapital &amp; Handelskonten</h2><small>Kontostände entstehen nur aus dem Buchungsjournal. Einkäufe und Verkäufe werden nicht ein zweites Mal automatisch addiert.</small></div></div>
+            <div id="capitalSummary" class="settings-status-grid"></div>
+            <div class="settings-actions">
+              <button id="addCapitalAccountBtn" class="secondary" type="button">Konto anlegen</button>
+              <button id="addCapitalEntryBtn" class="secondary" type="button">Buchung erfassen</button>
+              <button id="addCapitalTransferBtn" class="secondary" type="button">Umbuchung</button>
+            </div>
+            <div id="capitalAccountList"></div>
           </article>
 
           <article class="panel settings-section">

@@ -309,18 +309,20 @@
     const safeSell = floorMoney(recommendedSell * (1 - safety));
     const feeAmount = safeSell * feeRate;
     const netBeforeBuy = safeSell - feeAmount - packaging;
-    const minProfit = 0;
+    const minProfit = Math.max(0, asNumber(settings.minProfit));
     const minRoi = Math.max(0, asNumber(settings.minRoi ?? 25)) / 100;
     const targetRoi = Math.max(minRoi, asNumber(settings.targetRoi ?? 30) / 100);
-    const maxByProfit = netBeforeBuy > 0 ? floorMoney(netBeforeBuy) : 0;
+    const maxByProfit = netBeforeBuy > minProfit ? floorMoney(netBeforeBuy - minProfit) : 0;
     const maxByRoi = netBeforeBuy > 0 ? floorMoney(minRoi > 0 ? netBeforeBuy / (1 + minRoi) : netBeforeBuy) : 0;
-    const maxBuy = recommendedSell > 0 ? maxByRoi : 0;
+    const maxBuy = recommendedSell > 0 ? Math.min(maxByProfit, maxByRoi) : 0;
     const typicalSafeSell = floorMoney(typicalSell * (1 - safety));
     const typicalFeeAmount = typicalSafeSell * feeRate;
     const typicalNetBeforeBuy = typicalSafeSell - typicalFeeAmount - packaging;
-    const typicalMaxBuy = typicalSell > 0 && typicalNetBeforeBuy > 0
-      ? floorMoney(minRoi > 0 ? typicalNetBeforeBuy / (1 + minRoi) : typicalNetBeforeBuy)
-      : 0;
+    const typicalMaxByProfit = typicalNetBeforeBuy > minProfit
+      ? floorMoney(typicalNetBeforeBuy - minProfit) : 0;
+    const typicalMaxByRoi = typicalNetBeforeBuy > 0
+      ? floorMoney(minRoi > 0 ? typicalNetBeforeBuy / (1 + minRoi) : typicalNetBeforeBuy) : 0;
+    const typicalMaxBuy = typicalSell > 0 ? Math.min(typicalMaxByProfit, typicalMaxByRoi) : 0;
     const ownedCost = Math.max(0, asNumber(prices.cost ?? prices.ownBuyAverage));
     const breakEvenPrice = feeRate < 1
       ? (ownedCost + packaging) / Math.max(0.01, 1 - feeRate)
@@ -1496,6 +1498,20 @@
     return { entries, rows: rows.length, matched, unmatched, difference };
   }
 
+  function mergeInventorySnapshot(existing = {}, snapshot = {}) {
+    const merged = { ...existing, ...snapshot };
+    // Bestandsimporte duerfen Markt-/Druckdaten aktualisieren, aber niemals
+    // betriebliche Herkunft, EK oder die manuell gepflegte Preisstrategie.
+    [
+      'id', 'purchaseId', 'purchaseLineKey', 'purchaseDate', 'saleId', 'saleOrderNo', 'saleDate',
+      'cost', 'costStatus', 'originalTargetSell', 'holdingProfile', 'longTermHold',
+      'listingHistory', 'ownership', 'movementRecorded'
+    ].forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(existing, field)) merged[field] = existing[field];
+    });
+    return merged;
+  }
+
   return {
     asNumber,
     normalizeField,
@@ -1530,6 +1546,7 @@
     planAvailableInventorySnapshot,
     planLegacyStockSnapshotCleanup,
     planStockPurchaseDuplicateReconciliation,
+    mergeInventorySnapshot,
     planInventoryMovementReversal,
     buildPerformanceReport,
     buildDataQualityIssues,

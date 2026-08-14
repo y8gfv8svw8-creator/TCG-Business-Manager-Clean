@@ -5,7 +5,7 @@ const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.5.3';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.7.0';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
@@ -77,6 +77,7 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-card-name-backup', () => database.getCardNameBackup());
   ipcMain.handle('data:upsert-market-prices', (_event, payload) => database.upsertMarketPrices(payload));
   ipcMain.handle('data:get-market-history', (_event, payload) => database.getMarketHistory(payload));
+  ipcMain.handle('data:get-market-decision-history', (_event, payload) => database.getMarketDecisionHistory(payload));
   ipcMain.handle('data:get-market-overview', (_event, payload) => database.getMarketOverview(payload));
   ipcMain.handle('data:get-snapshot-dates', (_event, payload) => database.getSnapshotDates(payload));
   ipcMain.handle('data:clear-market-data', () => database.clearMarketData());

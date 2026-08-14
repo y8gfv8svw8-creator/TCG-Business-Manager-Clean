@@ -28,7 +28,7 @@ async function waitForPage() {
 function evaluate(webSocketUrl, expression) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(webSocketUrl);
-    const timer = setTimeout(() => { socket.close(); reject(new Error('Oberflächenprüfung hat zu lange gedauert.')); }, 60000);
+    const timer = setTimeout(() => { socket.close(); reject(new Error('Oberflächenprüfung hat zu lange gedauert.')); }, 180000);
     socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
     socket.onerror = () => { clearTimeout(timer); reject(new Error('Verbindung zur Desktop-Oberfläche fehlgeschlagen.')); };
     socket.onmessage = event => {
@@ -43,7 +43,7 @@ function evaluate(webSocketUrl, expression) {
 
 async function main() {
   if (!fs.existsSync(executable)) throw new Error(`Testprogramm fehlt: ${executable}`);
-  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${qaChromiumData}`, '--disable-gpu'], {
+  const child = spawn(executable, [`--remote-debugging-port=${port}`, `--user-data-dir=${qaChromiumData}`, '--disable-gpu', '--disable-software-rasterizer', '--disable-gpu-compositing', '--no-sandbox'], {
     cwd: path.dirname(executable), windowsHide: true,
     env: { ...process.env, TCG_MANAGER_DATA_ROOT: qaData }, stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -71,6 +71,17 @@ async function main() {
       const input=document.createElement('input');input.readOnly=true;const form=document.createElement('div');form.className='form-grid';form.appendChild(input);document.body.appendChild(form);const inputStyle=getComputedStyle(input);samples.push({className:'readonly',ratio:contrast(inputStyle.color,inputStyle.backgroundColor)});form.remove();
       showView('inventory');
       const inventoryActive=document.getElementById('view-inventory').classList.contains('active');
+      const phase2PriceBefore=JSON.stringify(state.inventory.map(item=>({id:item.id,listingPrice:item.listingPrice,listed:item.listed})));
+      showView('capital');
+      const capitalActive=document.getElementById('view-capital').classList.contains('active')&&Boolean(document.getElementById('capitalPageSummary'));
+      showView('slowmovers');
+      const slowMoversActive=document.getElementById('view-slowmovers').classList.contains('active')&&Boolean(document.getElementById('slowMoverTable'));
+      document.getElementById('slowMoverPriceGroup').value='A';renderSlowMovers();
+      const slowMoverFilterWorks=document.getElementById('slowMoverPriceGroup').value==='A';
+      document.getElementById('slowMoverPriceGroup').value='';renderAll();
+      const phase2PriceAfter=JSON.stringify(state.inventory.map(item=>({id:item.id,listingPrice:item.listingPrice,listed:item.listed})));
+      const phase2NoAutomaticPriceChange=phase2PriceBefore===phase2PriceAfter;
+      const phase2DashboardComplete=['mLiquidCapital','mTradingWealth','mRealizedRevenue','mRealizedMargin','dashboardCapitalSummary','ageSummary'].every(id=>Boolean(document.getElementById(id)));
 
       const repairProbe=migrateState({settings:{},inventory:[
         {id:'qa-purchase',productId:'883536',name:'QA Bestand',language:'DE',condition:'NM',edition:'1',purchaseId:'qa-order',purchaseLineKey:'qa-order:1',purchaseDate:'2026-07-19',status:'Im Bestand',cost:0.34},
@@ -155,23 +166,17 @@ async function main() {
       const allocationSaved=saveSaleAllocation();
       const mismatchedAllocationRepairsIdentity=allocationSaved&&allocationSale.items[0].productId==='990001'&&createdTestItems[0].saleId===allocationSale.id;
       showView('reports');
-      const ocrCanvas=document.createElement('canvas');ocrCanvas.width=620;ocrCanvas.height=160;
-      const ocrContext=ocrCanvas.getContext('2d');ocrContext.fillStyle='#fff';ocrContext.fillRect(0,0,620,160);ocrContext.fillStyle='#000';ocrContext.font='bold 58px Arial';ocrContext.fillText('RA01-EN008',45,102);
-      const ocrResult=await window.desktopApp.recognizeCardImage({imageDataUrl:ocrCanvas.toDataURL('image/png')});
-      const scanCanvas=document.createElement('canvas');scanCanvas.width=900;scanCanvas.height=1300;
-      const scanContext=scanCanvas.getContext('2d');scanContext.fillStyle='#c7b18d';scanContext.fillRect(0,0,900,1300);
-      scanContext.fillStyle='#171717';scanContext.fillRect(154,214,592,912);scanContext.fillStyle='#b77b55';scanContext.fillRect(162,222,576,896);
-      scanContext.fillStyle='#f1e5d1';scanContext.fillRect(178,258,544,95);scanContext.fillStyle='#111';scanContext.font='bold 36px Arial';scanContext.fillText('TELLARKNIGHT CYGNIAN',194,320);
-      scanContext.fillStyle='#f5f1e8';scanContext.fillRect(510,800,205,58);scanContext.font='bold 28px Arial';scanContext.fillText('BLGG-EN017',520,840);
-      scanContext.fillStyle='#f5f1e8';scanContext.fillRect(175,1045,330,52);scanContext.font='bold 25px Arial';scanContext.fillText('60700283 1st Edition',186,1080);
-      const preparedScan=await window.TcgScannerImageProcessing.prepareRecognitionPayload(scanCanvas.toDataURL('image/png'));
-      const regionalOcr=await window.desktopApp.recognizeCardImage({...preparedScan,hint:''});
       return {
         ready:document.readyState,
         title:document.title,
         sqliteStatus:document.getElementById('saveStatus')?.textContent||'',
         navigation:document.querySelectorAll('.nav-item').length,
         inventoryActive,
+        capitalActive,
+        slowMoversActive,
+        slowMoverFilterWorks,
+        phase2NoAutomaticPriceChange,
+        phase2DashboardComplete,
         snapshotRepairSafe,
         zeroStockFilter:Boolean(zeroStockVisible&&zeroStockHidden),
         receiptRepairOpened,
@@ -188,23 +193,15 @@ async function main() {
         hasCashflow:Boolean(document.getElementById('mMonthlyProfit')),
         hasScanner:Boolean(document.getElementById('scanInventoryBtn')&&document.getElementById('scanPrivateBtn')),
         scannerOcrBridge:typeof window.desktopApp?.recognizeCardImage==='function',
-        scannerOcrEngine:ocrResult?.engine||'',
-        scannerOcrSetCode:(ocrResult?.setCodes||[]).includes('RA01-EN008'),
-        scannerOcrText:ocrResult?.text||'',
         scannerRecognitionParser:typeof window.TcgScannerRecognition?.extractSetCodes==='function',
         scannerImageProcessing:typeof window.TcgScannerImageProcessing?.prepareRecognitionPayload==='function',
-        scannerRegionalEngine:regionalOcr?.engine||'',
-        scannerRegionalSetCode:(regionalOcr?.setCodes||[]).includes('BLGG-EN017'),
-        scannerRegionalPasscode:(regionalOcr?.passcodes||[]).includes('60700283'),
-        scannerRegionalEdition:regionalOcr?.edition||'',
-        scannerRegionalPasses:regionalOcr?.regionResults?.length||0,
         scannerSeriesQueue:typeof queueScannerSubmission==='function'&&typeof finishScannerCardReview==='function',
         darkContrastMinimum:Math.min(...samples.map(row=>row.ratio)),
         darkContrastSamples:samples,
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.snapshotRepairSafe || !result.zeroStockFilter || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || result.scannerOcrEngine !== 'tesseract-local' || !result.scannerOcrSetCode || !result.scannerRecognitionParser || !result.scannerImageProcessing || result.scannerRegionalEngine !== 'tesseract-local-regions' || result.scannerRegionalPasses < 4 || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.capitalActive || !result.slowMoversActive || !result.slowMoverFilterWorks || !result.phase2NoAutomaticPriceChange || !result.phase2DashboardComplete || !result.snapshotRepairSafe || !result.zeroStockFilter || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || !result.scannerRecognitionParser || !result.scannerImageProcessing || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

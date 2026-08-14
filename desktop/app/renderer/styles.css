@@ -574,3 +574,15 @@ html[data-theme="dark"] .wantlist-import-note{background:#2c3b49;color:#d9ecfb;b
 html[data-theme="dark"] .wantlist-archived td{background:#292929}
 .variant-check-note{color:#d39b13!important;font-weight:800!important}
 @media(max-width:760px){.purchasing-center-panel .panel-head{align-items:flex-start;flex-direction:column}.purchasing-center-panel .panel-head-actions{width:100%}.purchasing-center-panel .panel-head-actions>*{width:100%}.wantlist-table-wrap{max-height:none}}
+
+/* PHASE 3 – Markt-, Preistrend- und Verkaufsentscheidungen */
+.market-decision-summary>button{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);text-align:left;cursor:pointer}
+.market-decision-summary>button:hover,.market-decision-summary>button:focus-visible{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 24%,transparent)}
+.market-decision-summary>button small,.market-decision-summary>button span{color:var(--muted)}
+.market-decision-summary>button strong{font-size:20px}
+.market-decision-block{margin:16px 0;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.market-decision-block>.panel-head{align-items:flex-start;margin-bottom:12px}.market-decision-block>.panel-head h3{margin:0 0 4px}.market-decision-block>.panel-head small{display:block;max-width:980px;line-height:1.45;color:var(--muted)}
+.market-decision-reasons{margin:12px 0;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.market-decision-reasons ul{margin:8px 0 0;padding-left:20px}.market-decision-reasons li{margin:4px 0;color:var(--muted)}
+#slowMoverTable td{vertical-align:top}#slowMoverTable small{display:block;margin-top:3px;color:var(--muted)}
+html[data-theme="dark"] .market-decision-block,html[data-theme="dark"] .market-decision-reasons{color:var(--text);border-color:var(--border)}

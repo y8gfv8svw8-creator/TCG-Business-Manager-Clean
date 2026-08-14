@@ -2177,6 +2177,50 @@ class TcgDatabase {
     return rows.reverse();
   }
 
+  getMarketDecisionHistory({ productIds = [], targetDates = {}, recentDays = 45 } = {}) {
+    this.open();
+    const ids = [...new Set((productIds || []).map(normalizedProductId).filter(Boolean))].slice(0, 5000);
+    const safeRecentDays = boundedInteger(recentDays, 31, 180, 45);
+    const selectColumns = `
+      captured_date AS date,
+      avg_price AS avg,
+      low_price AS low,
+      trend_price AS trend,
+      avg_1 AS avg1,
+      avg_7 AS avg7,
+      avg_30 AS avg30,
+      source_id AS sourceId,
+      data_quality AS dataQuality
+    `;
+    const recentStatement = this.db.prepare(`
+      SELECT ${selectColumns}
+      FROM market_prices
+      WHERE product_id = ?
+      ORDER BY captured_date DESC
+      LIMIT ?
+    `);
+    const nearestStatement = this.db.prepare(`
+      SELECT ${selectColumns}
+      FROM market_prices
+      WHERE product_id = ?
+      ORDER BY ABS(julianday(captured_date) - julianday(?)), captured_date ASC
+      LIMIT 1
+    `);
+    const histories = {};
+    for (const productId of ids) {
+      const rows = recentStatement.all(productId, safeRecentDays);
+      const requestedDates = Array.isArray(targetDates?.[productId]) ? targetDates[productId] : [];
+      for (const requestedDate of requestedDates) {
+        if (!/^\d{4}-\d{2}-\d{2}/.test(String(requestedDate || ''))) continue;
+        const nearest = nearestStatement.get(productId, String(requestedDate).slice(0, 10));
+        if (nearest) rows.push(nearest);
+      }
+      const byDate = new Map(rows.map(row => [row.date, row]));
+      histories[productId] = [...byDate.values()].sort((left, right) => String(left.date).localeCompare(String(right.date)));
+    }
+    return { histories, productCount: ids.length, recentDays: safeRecentDays };
+  }
+
   getSnapshotDates({ limit = 365 } = {}) {
     this.open();
     const safeLimit = boundedInteger(limit, 1, 2000, 365);

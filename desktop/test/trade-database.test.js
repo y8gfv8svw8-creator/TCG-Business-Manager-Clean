@@ -223,3 +223,21 @@ test('Cardmarket-API-Adapter ist standardmäßig sicher deaktiviert und erhält 
   assert.equal(order.articles[0].externalArticleId, '654');
   assert.equal(order.articles[0].productId, '123456');
 });
+
+test('lädt PHASE-3-Historien printgenau und begrenzt statt die gesamte Preistabelle zu scannen', t => {
+  const {database} = temporaryDatabase(t);
+  for (let day = 1; day <= 60; day += 1) {
+    const date = new Date(Date.UTC(2026, 5, day)).toISOString().slice(0, 10);
+    database.upsertMarketPrices({ snapshotDate:date, rows:[
+      {productId:'123456', date, low:day, avg1:day, avg7:day, avg30:day, trend:day},
+      {productId:'999999', date, low:99, avg1:99, avg7:99, avg30:99, trend:99}
+    ]});
+  }
+  const result = database.getMarketDecisionHistory({
+    productIds:['123456'], targetDates:{'123456':['2026-06-05']}, recentDays:45
+  });
+  assert.deepEqual(Object.keys(result.histories), ['123456']);
+  assert.equal(result.histories['123456'].some(row=>row.date==='2026-06-05'), true);
+  assert.ok(result.histories['123456'].length <= 46);
+  assert.equal(result.histories['123456'].some(row=>Number(row.low)===99), false);
+});

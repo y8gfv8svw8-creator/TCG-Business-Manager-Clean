@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.5.3</title>
+  <title>TCG Business Manager 6.7.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.5.3 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.7.0 · SQLite</div>
         </div>
       </div>
 
@@ -25,6 +25,8 @@
         <button class="nav-item" data-view="sales">Verkäufe</button>
         <button class="nav-item" data-view="materials">Versandmaterial</button>
         <button class="nav-item" data-view="expenses">Ausgaben</button>
+        <button class="nav-item" data-view="capital">Kapital</button>
+        <button class="nav-item" data-view="slowmovers">Langsamdreher</button>
         <button class="nav-item" data-view="watchlist">Marktbeobachtung</button>
         <button class="nav-item" data-view="buying">Einkaufsplanung & Nachfrage</button>
         <button class="nav-item" data-view="cardmarket">Cardmarket-Datencenter</button>
@@ -73,6 +75,11 @@
           <article class="metric-card"><span>Betriebsergebnis</span><strong id="mOperatingResult">0,00 €</strong><small>Realisierter Gewinn minus allgemeine Betriebsausgaben</small></article>
           <article class="metric-card"><span>Offene Einkäufe</span><strong id="mOpenPurchases">0</strong><small>bestellt / unterwegs</small></article>
           <article class="metric-card"><span>Kaufchancen</span><strong id="mBuyOpportunities">0</strong><small>Watchlist: Kaufen / Top Deal</small></article>
+          <article class="metric-card"><span>Liquides Kapital</span><strong id="mLiquidCapital">0,00 €</strong><small>Cardmarket, Bank, Kasse und Sonstiges</small></article>
+          <article class="metric-card"><span>Handelsvermögen zum EK</span><strong id="mTradingWealth">0,00 €</strong><small>Liquidität + bekannter aktueller Karten-EK</small></article>
+          <article class="metric-card"><span>Realisierter Umsatz</span><strong id="mRealizedRevenue">0,00 €</strong><small>abgeschlossene und abgerechnete Verkäufe</small></article>
+          <article class="metric-card"><span>Realisierte Marge</span><strong id="mRealizedMargin">–</strong><small>nur mit bekanntem Wareneinsatz</small></article>
+          <article class="metric-card"><span>Realisierte Verkäufe</span><strong id="mRealizedSalesCount">0</strong><small>abgeschlossen oder abgerechnet</small></article>
         </div>
 
         <div class="dashboard-grid">
@@ -108,6 +115,16 @@
           </article>
 
           <article class="panel panel-wide">
+            <div class="panel-head"><div><h2>Kapitalübersicht</h2><small>Inseratswert und Price Guide sind Vergleichswerte, keine Liquidität.</small></div><button class="link-button" data-view-jump="capital">Kapital öffnen</button></div>
+            <div id="dashboardCapitalSummary" class="collection-summary"></div>
+          </article>
+
+          <article class="panel panel-wide">
+            <div class="panel-head"><div><h2>Markt- &amp; Preisentscheidungen</h2><small>Regelbasiert aus gespeicherten Cardmarket-Price-Guide-Tagesständen. Keine Live-Angebotsdaten, keine automatische Preisänderung.</small></div><button class="link-button" data-view-jump="slowmovers">Preisentscheidungen öffnen</button></div>
+            <div id="dashboardMarketDecisionSummary" class="collection-summary market-decision-summary"></div>
+          </article>
+
+          <article class="panel panel-wide">
             <div class="panel-head">
               <h2>Monatsübersicht</h2>
               <span class="muted">letzte 12 Monate</span>
@@ -128,6 +145,35 @@
             <div id="recentSales"></div>
           </article>
         </div>
+      </section>
+
+      <section id="view-capital" class="view">
+        <div class="toolbar"><button id="capitalAddAccountBtn" class="primary" type="button">+ Konto anlegen</button><button id="capitalAddEntryBtn" class="secondary" type="button">Buchung erfassen</button><button id="capitalAddTransferBtn" class="secondary" type="button">Umbuchung</button></div>
+        <div id="capitalPageSummary" class="collection-summary"></div>
+        <article class="panel"><div class="panel-head"><div><h2>Konten &amp; Guthaben</h2><small>Cardmarket, Bank, Kasse und sonstige Handelskonten.</small></div></div><div id="capitalPageAccounts"></div></article>
+        <article class="panel"><div class="panel-head"><div><h2>Buchungsverlauf</h2><small>Startstände, Einzahlungen, Auszahlungen, Korrekturen und Umbuchungen.</small></div></div><div id="capitalPageHistory"></div></article>
+      </section>
+
+      <section id="view-slowmovers" class="view">
+        <div class="toolbar"><input id="slowMoverSearch" class="search" placeholder="Karte, Set oder Produkt-ID suchen …" /></div>
+        <div class="filter-panel" aria-label="Langsamdreher filtern">
+          <label>Alter<select id="slowMoverAgeFilter"><option value="">Alle Altersstufen</option><option value="31-45">31–45 Tage</option><option value="46-60">46–60 Tage</option><option value="61-90">61–90 Tage</option><option value="90+">Über 90 Tage</option><option value="unknown">Alter unbekannt</option></select></label>
+          <label>Preisgruppe<select id="slowMoverPriceGroup"><option value="">Alle Preisgruppen</option><option>A</option><option>B</option><option>C</option><option>D</option></select></label>
+          <label>Halteprofil<select id="slowMoverProfile"><option value="">Alle Profile</option></select></label>
+          <label>EK-Status<select id="slowMoverCost"><option value="">EK bekannt und unbekannt</option><option value="known">EK bekannt</option><option value="unknown">EK unbekannt</option></select></label>
+          <label>Langfristig<select id="slowMoverLongTerm"><option value="">Alle</option><option value="yes">Ja</option><option value="no">Nein</option></select></label>
+          <label>Sprache<select id="slowMoverLanguage"><option value="">Alle Sprachen</option></select></label>
+          <label>Zustand<select id="slowMoverCondition"><option value="">Alle Zustände</option></select></label>
+          <label>Markttrend<select id="slowMoverTrend"><option value="">Alle Markttrends</option><option value="rising">Steigend</option><option value="stable">Stabil</option><option value="falling">Fallend</option><option value="insufficient">Unzureichende Daten</option></select></label>
+          <label>Preisempfehlung<select id="slowMoverRecommendation"><option value="">Alle Empfehlungen</option><option value="review">Alle Prüfhinweise</option><option>HALTEN</option><option>BEOBACHTEN</option><option>PREIS PRÜFEN</option><option>VK ERHÖHUNG PRÜFEN</option><option>MARKT GEFALLEN</option><option>MARKT GESTIEGEN</option><option>GEWINNZIEL GEFÄHRDET</option><option>KAPITALBINDUNG PRÜFEN</option><option>BREAK-EVEN PRÜFEN</option><option>LANGFRISTIG HALTEN</option><option>UNZUREICHENDE DATEN</option></select></label>
+          <label>Gewinnziel<select id="slowMoverProfitTarget"><option value="">Alle Gewinnzielstatus</option><option value="risk">Gefährdet oder nicht realistisch</option><option>GEWINNZIEL WEITERHIN REALISTISCH</option><option>GEWINNZIEL GEFÄHRDET</option><option>GEWINNZIEL AKTUELL NICHT REALISTISCH</option><option>GEWINNZIEL ÜBERTROFFEN / MARKT GESTIEGEN</option><option>NICHT BERECHENBAR</option></select></label>
+          <label>Preis von (€)<input id="slowMoverPriceMin" type="number" min="0" step="0.01" /></label>
+          <label>Preis bis (€)<input id="slowMoverPriceMax" type="number" min="0" step="0.01" /></label>
+          <label>Sortierung<select id="slowMoverSort"><option value="age-desc">Älteste zuerst</option><option value="value-desc">Höchster Inseratswert</option><option value="cost-desc">Höchster EK</option><option value="name">Kartenname</option></select></label>
+          <button type="button" class="secondary filter-reset" id="slowMoverFilterReset">Filter zurücksetzen</button>
+        </div>
+        <div id="slowMoverSummary" class="collection-summary"></div>
+        <div class="table-wrap"><table><thead><tr><th>Karte / Druck</th><th>Sprache / Zustand</th><th>Bestand</th><th>Ø EK / Status</th><th>Aktueller VK</th><th>Rohmarge / ROI</th><th>Price-Guide-Referenz</th><th>Markttrend</th><th>30 Tage</th><th>Seit Einkauf</th><th>Preisposition</th><th>Gewinnziel</th><th>Bestandsalter</th><th>Inseratsalter</th><th>Aging-Status</th><th>Preisgruppe</th><th>Halteprofil</th><th>Empfehlung</th></tr></thead><tbody id="slowMoverTable"></tbody></table></div>
       </section>
 
       <section id="view-inventory" class="view">
@@ -163,7 +209,7 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Karte</th><th>Set</th><th>Seltenheit</th><th>Menge</th><th>Ø EK</th><th>Inseratspreis</th><th>VK-Vorschlag</th><th>Marktänderung</th><th>Status</th><th>Lagerdauer</th><th></th>
+              <th>Karte</th><th>Set</th><th>Seltenheit</th><th>Menge</th><th>Ø EK</th><th>Inseratspreis</th><th>Rohmarge / ROI</th><th>VK-Vorschlag</th><th>Marktänderung</th><th>Preisgruppe</th><th>Halteprofil</th><th>Alter Bestand / Inserat</th><th>Empfehlung</th><th>Status</th><th></th>
             </tr></thead>
             <tbody id="inventoryTable"></tbody>
           </table>
@@ -720,7 +766,7 @@
                 <select id="settingDensity"><option value="comfortable">Komfortabel</option><option value="compact">Kompakt</option></select>
               </label>
               <label>Startseite
-                <select id="settingStartView"><option value="dashboard">Dashboard</option><option value="inventory">Bestand</option><option value="purchases">Einkäufe</option><option value="sales">Verkäufe</option><option value="watchlist">Marktbeobachtung</option></select>
+                <select id="settingStartView"><option value="dashboard">Dashboard</option><option value="inventory">Bestand</option><option value="capital">Kapital</option><option value="slowmovers">Langsamdreher</option><option value="purchases">Einkäufe</option><option value="sales">Verkäufe</option><option value="watchlist">Marktbeobachtung</option></select>
               </label>
             </div>
           </article>
@@ -761,6 +807,25 @@
               <label>Automatische Verkaufszuordnung<select id="settingSaleAllocationStrategy"><option value="fifo">FIFO · ältester Einkauf zuerst</option><option value="lowest-cost">Niedrigster EK zuerst</option><option value="highest-cost">Höchster EK zuerst</option><option value="manual">Immer manuell bestätigen</option></select></label>
               <label>Lagerhüter-Warnung nach Tagen<input id="settingStockAgeWarning" type="number" min="1" step="1" /></label>
               <label>Kritisches Lageralter nach Tagen<input id="settingStockAgeCritical" type="number" min="1" step="1" /></label>
+            </div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Preisgruppen &amp; Altersstufen</h2><small>Die Grenzen werden beim Speichern automatisch logisch aufsteigend abgesichert.</small></div></div>
+            <div class="settings-grid">
+              <label>Preisgruppe A ab (€)<input id="settingPriceGroupA" type="number" min="0" step="0.01" /></label>
+              <label>Preisgruppe B ab (€)<input id="settingPriceGroupB" type="number" min="0" step="0.01" /></label>
+              <label>Preisgruppe C ab (€)<input id="settingPriceGroupC" type="number" min="0" step="0.01" /></label>
+              <label>FRISCH bis Tage<input id="settingAgingFresh" type="number" min="0" step="1" /></label>
+              <label>BEOBACHTEN bis Tage<input id="settingAgingObserve" type="number" min="1" step="1" /></label>
+              <label>PRÜFEN bis Tage<input id="settingAgingReview" type="number" min="2" step="1" /></label>
+              <label>KAPITALBINDUNG bis Tage<input id="settingAgingCapital" type="number" min="3" step="1" /></label>
+              <label>LANGSAMDREHER bis Tage<input id="settingAgingSlow" type="number" min="4" step="1" /></label>
+              <label>Trend stabil innerhalb ± (%)<input id="settingMarketTrendStable" type="number" min="0" step="0.5" /></label>
+              <label>Trend steigend/fallend ab (%)<input id="settingMarketTrendDirectional" type="number" min="0" step="0.5" /></label>
+              <label>Trend stark ab (%)<input id="settingMarketTrendStrong" type="number" min="0" step="0.5" /></label>
+              <label>Referenzbereich innerhalb ± (%)<input id="settingMarketPriceNear" type="number" min="0" step="0.5" /></label>
+              <label>Deutliche Referenzabweichung ab (%)<input id="settingMarketPriceFar" type="number" min="0" step="0.5" /></label>
             </div>
           </article>
 

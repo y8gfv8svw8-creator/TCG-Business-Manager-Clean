@@ -256,7 +256,7 @@
     let lowOutlier = false;
     if (liveOffer !== null) {
       marketReference = liveOffer;
-      marketReferenceSource = 'Live-Angebot';
+      marketReferenceSource = 'Gespeicherte Angebotsbeobachtung';
     } else if (low !== null && avg1 !== null) {
       const ratio = avg1 > 0 ? low / avg1 : 1;
       lowOutlier = ratio < 0.35 || ratio > 2.85;
@@ -1512,6 +1512,447 @@
     return merged;
   }
 
+  const HOLDING_PROFILES = Object.freeze([
+    'META / STAPLE', 'DECK / ENGINE', 'RETRO', 'COLLECTOR / ICONIC',
+    'HIGH RARITY', 'VINTAGE', 'NICHE', 'BULK', 'UNKLASSIFIZIERT'
+  ]);
+
+  function normalizeHoldingProfile(value) {
+    const input = String(value || '').trim().toLocaleUpperCase('de-DE');
+    const aliases = {
+      META: 'META / STAPLE', STAPLE: 'META / STAPLE', QUICK: 'META / STAPLE',
+      DECK: 'DECK / ENGINE', ENGINE: 'DECK / ENGINE',
+      COLLECTOR: 'COLLECTOR / ICONIC', ICONIC: 'COLLECTOR / ICONIC',
+      LONG_TERM: 'UNKLASSIFIZIERT', STANDARD: 'UNKLASSIFIZIERT'
+    };
+    const candidate = aliases[input] || input;
+    return HOLDING_PROFILES.includes(candidate) ? candidate : 'UNKLASSIFIZIERT';
+  }
+
+  function ageInDays(value, asOf = new Date()) {
+    if (!value) return null;
+    const calendarStamp = input => {
+      if (typeof input === 'string') {
+        const match = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      }
+      const date = new Date(input);
+      if (Number.isNaN(date.getTime())) return null;
+      return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+    };
+    const startStamp = calendarStamp(value);
+    const endStamp = calendarStamp(asOf);
+    if (startStamp == null || endStamp == null) return null;
+    // Kalenderalter statt Stundenalter: Sommer-/Winterzeit darf keinen Tag abziehen.
+    return Math.max(0, Math.floor((endStamp - startStamp) / 86400000));
+  }
+
+  function listingStartDate(item = {}) {
+    // Baselines und Importzeitpunkte sind keine belegte Erstinserierung.
+    const dates = (item.listingHistory || [])
+      .filter(row => row && row.eventType === 'first_listing' && row.changedAt)
+      .map(row => new Date(row.changedAt))
+      .filter(date => !Number.isNaN(date.getTime()))
+      .sort((a, b) => a - b);
+    return dates[0] ? dates[0].toISOString() : null;
+  }
+
+  function inventoryStartDate(item = {}) {
+    if (item.receivedAt) return item.receivedAt;
+    if (!item.purchaseDate || item.inventoryDateQuality === 'unknown') return null;
+    const source = `${item.source || ''} ${item.importKey || ''} ${item.lotId || ''}`;
+    const snapshotOnly = !item.purchaseId && /bestandsabgleich|cardmarket[-_ ]?stock|bestandssnapshot|stock-snapshot|\bSTOCK-/i.test(source);
+    return snapshotOnly ? null : item.purchaseDate;
+  }
+
+  function agingBucket(days, settings = {}) {
+    if (days == null || !Number.isFinite(Number(days))) return { key: 'unknown', label: 'Alter unbekannt', status: 'ALTER UNBEKANNT' };
+    const fresh = Number(settings.agingFreshMaxDays ?? 14);
+    const observe = Number(settings.agingObserveMaxDays ?? 30);
+    const review = Number(settings.agingReviewMaxDays ?? 45);
+    const capital = Number(settings.agingCapitalMaxDays ?? 60);
+    const slow = Number(settings.agingSlowMaxDays ?? 90);
+    if (days <= fresh) return { key: '0-14', label: `0–${fresh} Tage`, status: 'FRISCH' };
+    if (days <= observe) return { key: '15-30', label: `${fresh + 1}–${observe} Tage`, status: 'BEOBACHTEN' };
+    if (days <= review) return { key: '31-45', label: `${observe + 1}–${review} Tage`, status: 'PRÜFEN' };
+    if (days <= capital) return { key: '46-60', label: `${review + 1}–${capital} Tage`, status: 'KAPITALBINDUNG' };
+    if (days <= slow) return { key: '61-90', label: `${capital + 1}–${slow} Tage`, status: 'LANGSAMDREHER' };
+    return { key: '90+', label: `Über ${slow} Tage`, status: 'ENTSCHEIDUNG ERFORDERLICH' };
+  }
+
+  function priceGroup(value, settings = {}) {
+    const price = Math.max(0, asNumber(value));
+    const a = Number(settings.priceGroupAFrom ?? 5);
+    const b = Number(settings.priceGroupBFrom ?? 1);
+    const c = Number(settings.priceGroupCFrom ?? 0.20);
+    if (price >= a) return { key: 'A', label: `A · ab ${a.toFixed(2)} €` };
+    if (price >= b) return { key: 'B', label: `B · ${b.toFixed(2)}–${(a - 0.01).toFixed(2)} €` };
+    if (price >= c) return { key: 'C', label: `C · ${c.toFixed(2)}–${(b - 0.01).toFixed(2)} €` };
+    return { key: 'D', label: `D · unter ${c.toFixed(2)} €` };
+  }
+
+  function marketReferenceValue(market = {}) {
+    return calculateAutomaticPriceTargets(market, {}).marketReference || 0;
+  }
+
+  const MARKET_DECISION_THRESHOLDS = Object.freeze({
+    trendStablePercent: 3,
+    trendDirectionalPercent: 6,
+    trendStrongPercent: 15,
+    priceNearPercent: 5,
+    priceFarPercent: 20,
+    historyMinPoints: 3,
+    historyMaxGapDays: 7,
+    outlierPercent: 250
+  });
+
+  function marketDecisionThresholds(settings = {}) {
+    const stable = Math.max(0, asNumber(settings.marketTrendStablePercent ?? MARKET_DECISION_THRESHOLDS.trendStablePercent));
+    const directional = Math.max(stable, asNumber(settings.marketTrendDirectionalPercent ?? MARKET_DECISION_THRESHOLDS.trendDirectionalPercent));
+    const strong = Math.max(directional, asNumber(settings.marketTrendStrongPercent ?? MARKET_DECISION_THRESHOLDS.trendStrongPercent));
+    const near = Math.max(0, asNumber(settings.marketPriceNearPercent ?? MARKET_DECISION_THRESHOLDS.priceNearPercent));
+    return {
+      trendStablePercent: stable,
+      trendDirectionalPercent: directional,
+      trendStrongPercent: strong,
+      priceNearPercent: near,
+      priceFarPercent: Math.max(near, asNumber(settings.marketPriceFarPercent ?? MARKET_DECISION_THRESHOLDS.priceFarPercent)),
+      historyMinPoints: Math.max(2, Math.round(asNumber(settings.marketHistoryMinPoints ?? MARKET_DECISION_THRESHOLDS.historyMinPoints))),
+      historyMaxGapDays: Math.max(0, Math.round(asNumber(settings.marketHistoryMaxGapDays ?? MARKET_DECISION_THRESHOLDS.historyMaxGapDays))),
+      outlierPercent: MARKET_DECISION_THRESHOLDS.outlierPercent
+    };
+  }
+
+  function marketCalendarStamp(value) {
+    if (!value) return null;
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  function historyReference(row = {}, settings = {}) {
+    const calculated = calculateAutomaticPriceTargets(row, settings);
+    return { value: calculated.marketReference || 0, source: calculated.marketReferenceSource };
+  }
+
+  function normalizeMarketHistory(history = [], settings = {}) {
+    const byDate = new Map();
+    (history || []).forEach(row => {
+      const date = String(row?.date || row?.capturedDate || row?.captured_date || '').slice(0, 10);
+      const stamp = marketCalendarStamp(date);
+      if (stamp == null) return;
+      const reference = historyReference(row, settings);
+      if (!(reference.value > 0)) return;
+      byDate.set(date, { ...row, date, stamp, reference: reference.value, referenceSource: reference.source });
+    });
+    return [...byDate.values()].sort((a, b) => a.stamp - b.stamp);
+  }
+
+  function nearestHistoricalPoint(points = [], targetDate, options = {}) {
+    const targetStamp = marketCalendarStamp(targetDate);
+    if (targetStamp == null || !points.length) return null;
+    const latestStamp = options.latestStamp == null ? Number.POSITIVE_INFINITY : options.latestStamp;
+    const candidates = points.filter(point => point.stamp <= latestStamp);
+    if (!candidates.length) return null;
+    let nearest = candidates[0];
+    let distance = Math.abs(nearest.stamp - targetStamp);
+    candidates.slice(1).forEach(point => {
+      const nextDistance = Math.abs(point.stamp - targetStamp);
+      if (nextDistance < distance || (nextDistance === distance && point.stamp < nearest.stamp)) {
+        nearest = point;
+        distance = nextDistance;
+      }
+    });
+    const gapDays = Math.round(distance / 86400000);
+    if (options.maxGapDays != null && gapDays > options.maxGapDays) return null;
+    return { ...nearest, targetDate: new Date(targetStamp).toISOString().slice(0, 10), gapDays, exact: gapDays === 0 };
+  }
+
+  function marketChange(currentValue, historicalPoint) {
+    const current = optionalNumber(currentValue);
+    const previous = optionalNumber(historicalPoint?.reference);
+    if (!(current > 0) || !(previous > 0)) return { available: false, absolute: null, percent: null, point: historicalPoint || null };
+    const absolute = roundMoney(current - previous);
+    return { available: true, absolute, percent: roundMoney(absolute / previous * 100), point: historicalPoint };
+  }
+
+  function classifyMarketTrend(changes = {}, dataQuality = 'UNZUREICHEND', settings = {}) {
+    const thresholds = marketDecisionThresholds(settings);
+    const periods = [
+      { key: 'day1', weight: 0.15 },
+      { key: 'day7', weight: 0.35 },
+      { key: 'day30', weight: 0.50 }
+    ].map(period => ({ ...period, value: changes[period.key]?.percent }))
+      .filter(period => Number.isFinite(period.value));
+    const usable = periods.filter(period => Math.abs(period.value) <= thresholds.outlierPercent);
+    const outlierCount = periods.length - usable.length;
+    if (dataQuality === 'UNZUREICHEND' || usable.length < 2) {
+      return { status: 'UNZUREICHENDE DATEN', weightedPercent: null, periods: usable.length, outlierCount };
+    }
+    const totalWeight = usable.reduce((sum, period) => sum + period.weight, 0);
+    const weightedPercent = usable.reduce((sum, period) => sum + period.value * period.weight, 0) / totalWeight;
+    const rising = usable.filter(period => period.value > thresholds.trendStablePercent).length;
+    const falling = usable.filter(period => period.value < -thresholds.trendStablePercent).length;
+    let status = 'STABIL';
+    if (weightedPercent >= thresholds.trendStrongPercent && rising >= 2) status = 'STARK STEIGEND';
+    else if (weightedPercent <= -thresholds.trendStrongPercent && falling >= 2) status = 'STARK FALLEND';
+    else if (weightedPercent >= thresholds.trendDirectionalPercent || rising >= 2) status = 'STEIGEND';
+    else if (weightedPercent <= -thresholds.trendDirectionalPercent || falling >= 2) status = 'FALLEND';
+    return { status, weightedPercent: roundMoney(weightedPercent), periods: usable.length, outlierCount };
+  }
+
+  function classifyPricePosition(currentPrice, referencePrice, settings = {}) {
+    const current = optionalNumber(currentPrice);
+    const reference = optionalNumber(referencePrice);
+    if (!(current > 0) || !(reference > 0)) return { status: 'NICHT BERECHENBAR', difference: null, percent: null };
+    const thresholds = marketDecisionThresholds(settings);
+    const difference = roundMoney(current - reference);
+    const percent = roundMoney(difference / reference * 100);
+    let status = 'IM REFERENZBEREICH';
+    if (percent < -thresholds.priceFarPercent) status = 'DEUTLICH UNTER REFERENZ';
+    else if (percent < -thresholds.priceNearPercent) status = 'UNTER REFERENZ';
+    else if (percent > thresholds.priceFarPercent) status = 'DEUTLICH ÜBER REFERENZ';
+    else if (percent > thresholds.priceNearPercent) status = 'ÜBER REFERENZ';
+    return { status, difference, percent };
+  }
+
+  function calculateSaleScenario(price, item = {}, settings = {}) {
+    const salePrice = optionalNumber(price);
+    const costKnown = ['known', 'confirmed_zero'].includes(item.costStatus) || (item.costStatus == null && optionalNumber(item.cost) > 0);
+    const cost = costKnown ? Math.max(0, asNumber(item.cost)) : null;
+    if (!(salePrice > 0) || !costKnown) return { price: salePrice, calculable: false, grossMargin: null, expectedProfit: null, roi: null };
+    const feeRate = clamp(settings.feePercent, 0, 100) / 100;
+    const packaging = Math.max(0, asNumber(settings.packaging));
+    const directCosts = salePrice * feeRate + packaging;
+    const grossMargin = roundMoney(salePrice - cost);
+    const expectedProfit = roundMoney(salePrice - directCosts - cost);
+    return {
+      price: roundMoney(salePrice), calculable: true, cost, fee: roundMoney(salePrice * feeRate),
+      packaging: roundMoney(packaging), directCosts: roundMoney(directCosts), grossMargin, expectedProfit,
+      roi: cost > 0 ? roundMoney(expectedProfit / cost * 100) : null
+    };
+  }
+
+  function profitThresholds(item = {}, settings = {}) {
+    const costKnown = ['known', 'confirmed_zero'].includes(item.costStatus) || (item.costStatus == null && optionalNumber(item.cost) > 0);
+    if (!costKnown) return { calculable: false, cost: null, breakEven: null, minimumProfitPrice: null, minimumRoiPrice: null, sustainablePrice: null };
+    const cost = Math.max(0, asNumber(item.cost));
+    const packaging = Math.max(0, asNumber(settings.packaging));
+    const feeRate = clamp(settings.feePercent, 0, 100) / 100;
+    if (feeRate >= 1) return { calculable: false, cost, breakEven: null, minimumProfitPrice: null, minimumRoiPrice: null, sustainablePrice: null };
+    const denominator = 1 - feeRate;
+    const breakEven = roundMoney((cost + packaging) / denominator);
+    const minimumProfitPrice = roundMoney((cost + packaging + Math.max(0, asNumber(settings.minProfit))) / denominator);
+    const minimumRoiPrice = roundMoney((cost * (1 + Math.max(0, asNumber(settings.minRoi)) / 100) + packaging) / denominator);
+    return { calculable: true, cost, breakEven, minimumProfitPrice, minimumRoiPrice, sustainablePrice: Math.max(breakEven, minimumProfitPrice, minimumRoiPrice) };
+  }
+
+  function analyzeMarketDecision(item = {}, market = {}, history = [], settings = {}, asOf = new Date()) {
+    const rawProductId = String(item.productId || '').trim();
+    const productId = /^\d+$/.test(rawProductId) ? rawProductId : '';
+    const thresholdConfig = marketDecisionThresholds(settings);
+    const points = normalizeMarketHistory(history, settings);
+    const currentCalculated = calculateAutomaticPriceTargets(market, settings);
+    const latestPoint = points.at(-1) || null;
+    const currentReference = currentCalculated.marketReference || latestPoint?.reference || 0;
+    const currentDate = String(market.priceDate || latestPoint?.date || new Date(asOf).toISOString().slice(0, 10)).slice(0, 10);
+    const currentStamp = marketCalendarStamp(currentDate);
+    const datedPoint = days => nearestHistoricalPoint(points, new Date(currentStamp - days * 86400000), { latestStamp: currentStamp, maxGapDays: thresholdConfig.historyMaxGapDays });
+    const changes = {
+      day1: marketChange(currentReference, currentStamp == null ? null : datedPoint(1)),
+      day7: marketChange(currentReference, currentStamp == null ? null : datedPoint(7)),
+      day30: marketChange(currentReference, currentStamp == null ? null : datedPoint(30))
+    };
+    const recentCutoff = points.length ? points.at(-1).stamp - 44 * 86400000 : 0;
+    const recentPoints = points.filter(point => point.stamp >= recentCutoff);
+    const expectedSnapshots = recentPoints.length > 1 ? Math.max(1, Math.round((recentPoints.at(-1).stamp - recentPoints[0].stamp) / 86400000) + 1) : 1;
+    const coverage = Math.min(1, recentPoints.length / expectedSnapshots);
+    const availablePeriods = Object.values(changes).filter(change => change.available).length;
+    let dataQuality = !productId || !(currentReference > 0) || recentPoints.length < 2 ? 'UNZUREICHEND'
+      : recentPoints.length < thresholdConfig.historyMinPoints || availablePeriods < 2 || coverage < 0.35 ? 'EINGESCHRÄNKT' : 'AUSREICHEND';
+    const trend = classifyMarketTrend(changes, dataQuality, settings);
+    if (trend.outlierCount && dataQuality === 'AUSREICHEND') dataQuality = 'EINGESCHRÄNKT';
+    const purchaseDate = inventoryStartDate(item);
+    const firstListingAt = listingStartDate(item);
+    const datedChange = date => marketChange(currentReference, nearestHistoricalPoint(points, date, { latestStamp: currentStamp, maxGapDays: thresholdConfig.historyMaxGapDays }));
+    const sincePurchase = purchaseDate ? datedChange(purchaseDate) : { available: false, absolute: null, percent: null, point: null };
+    const sinceListing = firstListingAt ? datedChange(firstListingAt) : { available: false, absolute: null, percent: null, point: null };
+    const currentPrice = item.listed ? optionalNumber(item.listingPrice) : optionalNumber(item.desiredSalePrice || item.listingPrice);
+    const pricePosition = classifyPricePosition(currentPrice, currentReference, settings);
+    const costThresholds = profitThresholds(item, settings);
+    const originalTarget = optionalNumber(item.originalTargetSell ?? item.targetSell);
+    const targetScenario = calculateSaleScenario(originalTarget, item, settings);
+    const currentScenario = calculateSaleScenario(currentPrice, item, settings);
+    const referenceScenario = calculateSaleScenario(currentReference, item, settings);
+    let profitTargetStatus = 'NICHT BERECHENBAR';
+    if (costThresholds.calculable && originalTarget > 0 && currentReference > 0) {
+      const marketGap = (originalTarget - currentReference) / currentReference * 100;
+      if (currentReference > originalTarget * (1 + thresholdConfig.priceNearPercent / 100)) profitTargetStatus = 'GEWINNZIEL ÜBERTROFFEN / MARKT GESTIEGEN';
+      else if (!targetScenario.calculable || targetScenario.expectedProfit < Math.max(0, asNumber(settings.minProfit)) || (targetScenario.roi != null && targetScenario.roi < Math.max(0, asNumber(settings.minRoi)))) profitTargetStatus = 'GEWINNZIEL AKTUELL NICHT REALISTISCH';
+      else if (marketGap <= thresholdConfig.priceNearPercent) profitTargetStatus = 'GEWINNZIEL WEITERHIN REALISTISCH';
+      else if (marketGap <= thresholdConfig.priceFarPercent) profitTargetStatus = 'GEWINNZIEL GEFÄHRDET';
+      else profitTargetStatus = 'GEWINNZIEL AKTUELL NICHT REALISTISCH';
+    }
+    const inventoryAgeDays = ageInDays(purchaseDate, asOf);
+    const profile = normalizeHoldingProfile(item.holdingProfile);
+    const longTerm = Boolean(item.longTermHold);
+    const reasons = [
+      `Konkrete Druckvariante: ${productId ? `CM ${productId}` : 'Produkt-ID fehlt'}`,
+      `Bestandsalter: ${inventoryAgeDays == null ? 'unbekannt' : `${inventoryAgeDays} Tage`}`,
+      `Gespeicherter Price-Guide-Trend: ${trend.status.toLocaleLowerCase('de-DE')}`
+    ];
+    if (pricePosition.percent != null) reasons.push(`Eigener VK ${pricePosition.percent >= 0 ? '+' : ''}${pricePosition.percent.toFixed(1)} % zur gespeicherten Referenz`);
+    reasons.push(`Gewinnziel: ${profitTargetStatus.toLocaleLowerCase('de-DE')}`);
+    if (sincePurchase.available) reasons.push(`Markt seit Einkauf ${sincePurchase.percent >= 0 ? '+' : ''}${sincePurchase.percent.toFixed(1)} %`);
+    if (dataQuality !== 'AUSREICHEND') reasons.push(`Datenqualität: ${dataQuality.toLocaleLowerCase('de-DE')}`);
+    let recommendation = 'HALTEN';
+    const falling = ['FALLEND', 'STARK FALLEND'].includes(trend.status);
+    const rising = ['STEIGEND', 'STARK STEIGEND'].includes(trend.status);
+    const fastProfile = ['META / STAPLE', 'DECK / ENGINE'].includes(profile);
+    if (longTerm) recommendation = 'LANGFRISTIG HALTEN';
+    else if (dataQuality === 'UNZUREICHEND') recommendation = 'UNZUREICHENDE DATEN';
+    else if (costThresholds.calculable && currentPrice > 0 && currentPrice < costThresholds.breakEven) recommendation = 'BREAK-EVEN PRÜFEN';
+    else if (inventoryAgeDays != null && inventoryAgeDays > Number(settings.agingCapitalMaxDays ?? 60) && fastProfile && falling) recommendation = 'KAPITALBINDUNG PRÜFEN';
+    else if (inventoryAgeDays != null && inventoryAgeDays > Number(settings.agingSlowMaxDays ?? 90) && falling) recommendation = 'KAPITALBINDUNG PRÜFEN';
+    else if (falling && ['DEUTLICH ÜBER REFERENZ', 'ÜBER REFERENZ'].includes(pricePosition.status)) recommendation = 'PREIS PRÜFEN';
+    else if (trend.status === 'STARK FALLEND') recommendation = 'MARKT GEFALLEN';
+    else if (profitTargetStatus === 'GEWINNZIEL AKTUELL NICHT REALISTISCH' || profitTargetStatus === 'GEWINNZIEL GEFÄHRDET') recommendation = 'GEWINNZIEL GEFÄHRDET';
+    else if (rising && ['DEUTLICH UNTER REFERENZ', 'UNTER REFERENZ'].includes(pricePosition.status)) recommendation = 'VK ERHÖHUNG PRÜFEN';
+    else if (rising) recommendation = 'MARKT GESTIEGEN';
+    else if (inventoryAgeDays != null && inventoryAgeDays >= 15 && inventoryAgeDays <= 30) recommendation = 'BEOBACHTEN';
+    const scenarios = [
+      { key: 'current', label: 'Aktueller VK', result: currentScenario },
+      { key: 'reference', label: 'Price-Guide-Referenz', result: referenceScenario },
+      { key: 'breakEven', label: 'Break-even', result: calculateSaleScenario(costThresholds.breakEven, item, settings) },
+      { key: 'target', label: 'Ziel-VK', result: targetScenario }
+    ];
+    return {
+      productId, printExact: Boolean(productId), currentDate, currentReference: roundMoney(currentReference),
+      referenceSource: currentCalculated.marketReferenceSource || latestPoint?.referenceSource || 'Keine Price-Guide-Referenz',
+      priceGuide: { low: optionalNumber(market.low), lowEx: optionalNumber(market.lowEx), trend: optionalNumber(market.trend), avg1: optionalNumber(market.avg1), avg7: optionalNumber(market.avg7), avg30: optionalNumber(market.avg30) },
+      historyPointCount: points.length, historyCoverage: roundMoney(coverage * 100), dataQuality, changes, trend,
+      purchaseReference: sincePurchase.point?.reference || null, listingReference: sinceListing.point?.reference || null,
+      sincePurchase, sinceListing, currentPrice, pricePosition, thresholds: costThresholds,
+      originalTarget, profitTargetStatus, scenarios, recommendation, reasons,
+      priceAction: 'KEINE AUTOMATISCHE PREISÄNDERUNG', profile, longTerm
+    };
+  }
+
+  function analyzeInventoryItem(item = {}, market = {}, settings = {}, asOf = new Date(), history = []) {
+    const inventoryDate = inventoryStartDate(item);
+    const inventoryAgeDays = ageInDays(inventoryDate, asOf);
+    const firstListingAt = listingStartDate(item);
+    const listingAgeDays = firstListingAt ? ageInDays(firstListingAt, asOf) : null;
+    const profile = normalizeHoldingProfile(item.holdingProfile);
+    const longTerm = Boolean(item.longTermHold);
+    const costKnown = ['known', 'confirmed_zero'].includes(item.costStatus) || (item.costStatus == null && asNumber(item.cost) > 0);
+    const cost = costKnown ? asNumber(item.cost) : null;
+    const currentPrice = item.listed ? asNumber(item.listingPrice) : asNumber(item.desiredSalePrice || item.listingPrice);
+    const referencePrice = marketReferenceValue(market);
+    const margin = costKnown ? currentPrice - cost : null;
+    const roi = costKnown && cost > 0 ? margin / cost * 100 : null;
+    const bucket = agingBucket(inventoryAgeDays, settings);
+    const listingBucket = agingBucket(listingAgeDays, settings);
+    const pg = priceGroup(currentPrice || referencePrice, settings);
+    const factors = [];
+    factors.push(`Bestandsalter: ${inventoryAgeDays == null ? 'unbekannt' : `${inventoryAgeDays} Tage`}`);
+    factors.push(`Inseratsalter: ${listingAgeDays == null ? 'unbekannt' : `${listingAgeDays} Tage`}`);
+    factors.push(`Profil: ${profile}${longTerm ? ' · langfristig' : ''}`);
+    factors.push(costKnown ? `EK: ${cost.toFixed(2)} €` : 'EK: unbekannt');
+    factors.push(`Mindestgewinn: ${asNumber(settings.minProfit).toFixed(2)} € · Mindest-ROI: ${asNumber(settings.minRoi).toFixed(1)} %`);
+    if (referencePrice > 0 && currentPrice > 0) {
+      const relation = currentPrice > referencePrice ? 'über' : currentPrice < referencePrice ? 'unter' : 'auf';
+      factors.push(`Inserat ${currentPrice.toFixed(2)} € liegt ${relation} der Price-Guide-Referenz ${referencePrice.toFixed(2)} €`);
+    }
+
+    const marketDecision = analyzeMarketDecision(item, market, history, settings, asOf);
+    let recommendation = marketDecision.recommendation || 'HALTEN';
+    if (!history.length && longTerm) recommendation = 'LANGFRISTIG HALTEN';
+    else if (!history.length) {
+      const fast = ['META / STAPLE', 'DECK / ENGINE'].includes(profile);
+      const patient = ['COLLECTOR / ICONIC', 'HIGH RARITY', 'VINTAGE'].includes(profile);
+      if (inventoryAgeDays == null) recommendation = 'BEOBACHTEN';
+      else if (fast && inventoryAgeDays > Number(settings.agingCapitalMaxDays ?? 60)) recommendation = 'ENTSCHEIDUNG ERFORDERLICH';
+      else if (fast && inventoryAgeDays > Number(settings.agingReviewMaxDays ?? 45)) recommendation = 'LANGSAMDREHER';
+      else if (patient && inventoryAgeDays > Math.max(120, Number(settings.agingSlowMaxDays ?? 90))) recommendation = 'KAPITALBINDUNG PRÜFEN';
+      else if (bucket.status === 'PRÜFEN') recommendation = 'PREIS PRÜFEN';
+      else if (bucket.status === 'KAPITALBINDUNG') recommendation = 'KAPITALBINDUNG PRÜFEN';
+      else if (bucket.status === 'LANGSAMDREHER') recommendation = 'LANGSAMDREHER';
+      else if (bucket.status === 'ENTSCHEIDUNG ERFORDERLICH') recommendation = 'ENTSCHEIDUNG ERFORDERLICH';
+      else if (bucket.status === 'BEOBACHTEN' || bucket.status === 'ALTER UNBEKANNT') recommendation = 'BEOBACHTEN';
+    }
+    if (!history.length && !longTerm && referencePrice > 0 && currentPrice > 0 && Math.abs(currentPrice - referencePrice) >= Math.max(0.05, referencePrice * 0.20)) recommendation = 'PREIS PRÜFEN';
+    const change = asNumber(market.dailyChange || market.priceChange);
+    const marketSignal = change > 0 ? 'MARKT GESTIEGEN' : change < 0 ? 'MARKT GEFALLEN' : '';
+    if (marketSignal) factors.push(`${marketSignal}: ${change > 0 ? '+' : ''}${change.toFixed(2)} € laut gespeicherter Price-Guide-Historie`);
+    return { inventoryDate, inventoryAgeDays, listingAgeDays, firstListingAt, inventoryBucket: bucket, listingBucket, priceGroup: pg, profile, longTerm, costKnown, cost, currentPrice, referencePrice, margin, roi, recommendation, marketSignal, factors, marketDecision };
+  }
+
+  function buildCapitalOverview(state = {}, marketByProduct = {}) {
+    const accounts = (state.capitalAccounts || []).filter(row => !row.archived);
+    const balances = new Map(accounts.map(row => [row.id, 0]));
+    (state.capitalEntries || []).filter(row => !row.archived && balances.has(row.accountId)).forEach(row => balances.set(row.accountId, balances.get(row.accountId) + asNumber(row.amount)));
+    const byType = { cardmarket: 0, bank: 0, cash: 0, other: 0 };
+    accounts.forEach(account => { const type = Object.prototype.hasOwnProperty.call(byType, account.type) ? account.type : 'other'; byType[type] += balances.get(account.id) || 0; });
+    const entries = (state.capitalEntries || []).filter(row => !row.archived);
+    const entryTotals = { opening: 0, deposit: 0, withdrawal: 0, purchase: 0, sale: 0, fee: 0, refund: 0, correction: 0, transfer: 0 };
+    const seenTransfers = new Set();
+    entries.forEach(row => {
+      const type = Object.prototype.hasOwnProperty.call(entryTotals, row.type) ? row.type : 'correction';
+      if (type === 'transfer') {
+        const key = row.transferId || row.id;
+        if (!seenTransfers.has(key) && asNumber(row.amount) > 0) {
+          entryTotals.transfer += Math.abs(asNumber(row.amount));
+          seenTransfers.add(key);
+        }
+      } else {
+        entryTotals[type] += asNumber(row.amount);
+      }
+    });
+    const current = (state.inventory || []).filter(item => item.ownership !== 'private' && !['Verkauft', 'Privat', 'Abgegeben'].includes(item.status));
+    const known = current.filter(item => ['known', 'confirmed_zero'].includes(item.costStatus) || (item.costStatus == null && asNumber(item.cost) > 0));
+    const knownStockCost = known.reduce((sum, item) => sum + asNumber(item.cost), 0);
+    const listingValue = current.filter(item => item.listed).reduce((sum, item) => sum + asNumber(item.listingPrice), 0);
+    const unknownListingValue = current.filter(item => item.listed && !known.includes(item)).reduce((sum, item) => sum + asNumber(item.listingPrice), 0);
+    const referenceValue = current.reduce((sum, item) => sum + marketReferenceValue(marketByProduct[String(item.productId || '')] || {}), 0);
+    const liquid = Object.values(byType).reduce((sum, value) => sum + value, 0);
+    const positions = new Set(current.map(item => stockSnapshotIdentity(item))).size;
+    return { accounts: accounts.map(account => ({ ...account, balance: balances.get(account.id) || 0 })), byType, entryTotals, liquid, knownStockCost, listingValue, unknownListingValue, referenceValue, tradingWealthAtCost: liquid + knownStockCost, physicalCards: current.length, positions, knownCostCount: known.length, unknownCostCount: current.length - known.length };
+  }
+
+  function buildAgingSummary(items = [], marketByProduct = {}, settings = {}, asOf = new Date()) {
+    const order = ['0-14', '15-30', '31-45', '46-60', '61-90', '90+', 'unknown'];
+    const rows = Object.fromEntries(order.map(key => [key, { key, label: '', status: '', count: 0, knownCost: 0, listingValue: 0, referenceValue: 0 }]));
+    items.forEach(item => {
+      const analysis = analyzeInventoryItem(item, marketByProduct[String(item.productId || '')] || {}, settings, asOf);
+      const row = rows[analysis.inventoryBucket.key] || rows.unknown;
+      row.label = analysis.inventoryBucket.label;
+      row.status = analysis.inventoryBucket.status;
+      row.count += 1;
+      if (analysis.costKnown) row.knownCost += asNumber(item.cost);
+      if (item.listed) row.listingValue += asNumber(item.listingPrice);
+      row.referenceValue += analysis.referencePrice;
+    });
+    return order.map(key => rows[key]).filter(row => row.count > 0);
+  }
+
+  function matchesSlowMoverFilters(analysis = {}, item = {}, filters = {}) {
+    const value = asNumber(filters.value ?? analysis.currentPrice ?? analysis.referencePrice);
+    if (filters.ageKey && analysis.inventoryBucket?.key !== filters.ageKey) return false;
+    if (filters.priceGroup && analysis.priceGroup?.key !== filters.priceGroup) return false;
+    if (filters.profile && normalizeHoldingProfile(analysis.profile || item.holdingProfile) !== filters.profile) return false;
+    if (filters.cost === 'known' && !analysis.costKnown) return false;
+    if (filters.cost === 'unknown' && analysis.costKnown) return false;
+    if (filters.longTerm === 'yes' && !analysis.longTerm) return false;
+    if (filters.longTerm === 'no' && analysis.longTerm) return false;
+    if (filters.language && String(item.language || '') !== filters.language) return false;
+    if (filters.condition && String(item.condition || '') !== filters.condition) return false;
+    if (filters.minPrice !== null && filters.minPrice !== undefined && filters.minPrice !== '' && value < asNumber(filters.minPrice)) return false;
+    if (filters.maxPrice !== null && filters.maxPrice !== undefined && filters.maxPrice !== '' && value > asNumber(filters.maxPrice)) return false;
+    return true;
+  }
+
   return {
     asNumber,
     normalizeField,
@@ -1547,6 +1988,28 @@
     planLegacyStockSnapshotCleanup,
     planStockPurchaseDuplicateReconciliation,
     mergeInventorySnapshot,
+    HOLDING_PROFILES,
+    normalizeHoldingProfile,
+    ageInDays,
+    listingStartDate,
+    inventoryStartDate,
+    agingBucket,
+    priceGroup,
+    marketReferenceValue,
+    MARKET_DECISION_THRESHOLDS,
+    marketDecisionThresholds,
+    normalizeMarketHistory,
+    nearestHistoricalPoint,
+    marketChange,
+    classifyMarketTrend,
+    classifyPricePosition,
+    calculateSaleScenario,
+    profitThresholds,
+    analyzeMarketDecision,
+    analyzeInventoryItem,
+    buildCapitalOverview,
+    buildAgingSummary,
+    matchesSlowMoverFilters,
     planInventoryMovementReversal,
     buildPerformanceReport,
     buildDataQualityIssues,

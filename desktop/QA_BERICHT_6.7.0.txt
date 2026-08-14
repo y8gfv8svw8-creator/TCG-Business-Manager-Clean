@@ -1,0 +1,42 @@
+QA-Bericht TCG Business Manager 6.7.0 – Phase 3
+
+Automatische Prüfungen:
+- JavaScript-Syntax aller Haupt-, Renderer-, Scanner- und Hilfsdateien: BESTANDEN
+- 108 automatisierte Fach- und Datenbanktests: BESTANDEN
+- Alle 91 vorhandenen Tests aus Phase 2 weiterhin erfolgreich: BESTANDEN
+- Deutsche/englische Suche und Price-Guide-Import unverändert: BESTANDEN
+- Steigender, fallender und stabiler Mehrperioden-Trend: BESTANDEN
+- Unzureichende und lückenhafte Historie ohne Scheingenauigkeit: BESTANDEN
+- 1-/7-/30-Tage-Werte sowie Einkauf und Erstinserierung: BESTANDEN
+- Preisposition, Gewinnziel, Break-even, Mindestgewinn und Mindest-ROI: BESTANDEN
+- Unbekannter EK wird nicht als 0 Euro behandelt: BESTANDEN
+- Aging-, Meta-, Collector-, Vintage- und Langfristprofile: BESTANDEN
+- Unterschiedliche EKs desselben Prints bleiben exemplarbezogen: BESTANDEN
+- Keine Live-Marktbehauptung und keine automatische Preisänderung: BESTANDEN
+
+Reale Datenbank-Testkopie:
+- Originaldatenbank ausschließlich gelesen; automatisierte Auswertung auf Kopie
+- SQLite-Integrität: ok
+- Schema: 9, unverändert
+- 890 Bestandskarten, 14 private Karten, 9 Einkäufe, 49 Verkäufe
+- 2.122.895 historische Price-Guide-Zeilen und 24 Tagesstände
+- 491 exakte Produkt-IDs; 742 aktuelle Bestandsartikel analysiert
+- Begrenzte Historienabfrage: 47,3 ms
+- Regelbasierte Analyse: 82,8 ms
+- Originaldatenbank unverändert; temporäre Datenbankkopie entfernt
+
+Windows-Anwendung:
+- Installer TCG Business Manager-Setup-6.7.0.exe erstellt: BESTANDEN
+- Gepackte Anwendung startet mit Version 6.7.0: BESTANDEN
+- Dashboard-Marktkennzahlen und anklickbare Zielbereiche: BESTANDEN
+- Langsamdreher mit 18 Spalten und neuen Marktfiltern: BESTANDEN
+- Zentrale Trend- und Preispositionsschwellen in Einstellungen: BESTANDEN
+- Exakte Produkt-ID, 7-/30-Tage-Werte und Einkaufvergleich: BESTANDEN
+- Vier Verkaufsszenarien und ausdrücklicher Schutz vor Auto-Preisänderung: BESTANDEN
+- Verbotene Live-Marktbehauptungen nicht vorhanden: BESTANDEN
+- Temporärer Oberflächentest-Datenordner entfernt: BESTANDEN
+
+Bekannte fachliche Einschränkung:
+- Ohne Cardmarket-API bleiben alle Marktwerte gespeicherte, ungefilterte
+  Price-Guide-Referenzen. Sprache, Zustand, Verkäuferland und aktuelle Angebote
+  können daher nicht als Live-Angebotsfilter ausgewertet werden.

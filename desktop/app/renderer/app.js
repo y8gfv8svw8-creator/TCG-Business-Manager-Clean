@@ -79,6 +79,8 @@ const views = {
   sales: ["Verkäufe", "Verkaufsbestellungen, Gebühren und tatsächlicher Gewinn."],
   materials: ["Versandmaterial", "Materialbestand, Stückkosten, Mindestbestände und eigene Versandvorlagen."],
   expenses: ["Ausgaben", "Sonstige Betriebsausgaben und Materialeinkäufe nachvollziehbar erfassen."],
+  capital: ["Kapital", "Liquide Handelskonten, Kontostände und nachvollziehbarer Buchungsverlauf."],
+  slowmovers: ["Langsamdreher", "Gebundenes Kapital nach Alter, Profil und Preisgruppe gezielt prüfen."],
     watchlist: ["Marktbeobachtung", "Wantlisten, Kaufgrenzen, Marktpreise und Preisprüfungen."],
   buying: ["Einkaufsplanung & Nachfrage", "Warenkorb prüfen, Einkaufsentwürfe speichern und gefragte Karten erkennen."],
   partners: ["Händler & Kunden", "Kontakte, Bewertungen, Bestellungen und Umsatz."],
@@ -446,7 +448,8 @@ function migrateState(data) {
     i.listingPrice = Number(i.listingPrice||0);
     if (i.listed === undefined) i.listed = i.listingPrice > 0;
     i.originalTargetSell=i.originalTargetSell===""||i.originalTargetSell==null?null:Number(i.originalTargetSell);
-    i.holdingProfile=String(i.holdingProfile||"standard");
+    if(String(i.holdingProfile||"").toLowerCase()==="long_term")i.longTermHold=true;
+    i.holdingProfile=window.TcgBusinessAutomation?.normalizeHoldingProfile?.(i.holdingProfile)||"UNKLASSIFIZIERT";
     i.longTermHold=Boolean(i.longTermHold);
     i.listingHistory=Array.isArray(i.listingHistory)?i.listingHistory:[];
     if(i.listingPrice>0&&!i.listingHistory.length){
@@ -625,7 +628,8 @@ function migrateState(data) {
     item.cost=Number(item.cost||0);
     item.listingPrice=Number(item.listingPrice||0);
     item.originalTargetSell=item.originalTargetSell===""||item.originalTargetSell==null?null:Number(item.originalTargetSell);
-    item.holdingProfile=String(item.holdingProfile||"standard");
+    if(String(item.holdingProfile||"").toLowerCase()==="long_term")item.longTermHold=true;
+    item.holdingProfile=window.TcgBusinessAutomation?.normalizeHoldingProfile?.(item.holdingProfile)||"UNKLASSIFIZIERT";
     item.longTermHold=Boolean(item.longTermHold);
     item.listingHistory=Array.isArray(item.listingHistory)?item.listingHistory:[];
     if(item.listingPrice>0&&!item.listingHistory.length)item.listingHistory.push({id:`legacy-listing:${item.id||crypto.randomUUID()}`,eventType:"baseline",changedAt:item.listedAt||item.purchaseDate||new Date().toISOString(),oldPrice:null,newPrice:item.listingPrice,changeMode:"legacy",reason:"Bestehender Inseratspreis bei Datenmodell-Umstieg"});
@@ -650,6 +654,47 @@ function loadState() {
 
 let tradeInsightsCache = null;
 let tradeInsightsPromise = null;
+let marketDecisionHistoryByProduct = {};
+let marketDecisionHistoryPromise = null;
+let marketDecisionHistorySignature = '';
+
+function marketDecisionHistoryRequest() {
+  const targetDates = {};
+  const productIds = [];
+  phase2CurrentInventory().forEach(item => {
+    const productId = cleanProductId(item.productId);
+    if (!productId) return;
+    productIds.push(productId);
+    targetDates[productId] ||= [];
+    const purchaseDate = window.TcgBusinessAutomation?.inventoryStartDate?.(item);
+    const listingDate = window.TcgBusinessAutomation?.listingStartDate?.(item);
+    [purchaseDate, listingDate].filter(Boolean).forEach(date => targetDates[productId].push(String(date).slice(0, 10)));
+  });
+  Object.keys(targetDates).forEach(productId => { targetDates[productId] = [...new Set(targetDates[productId])]; });
+  return { productIds: [...new Set(productIds)], targetDates, recentDays: 45 };
+}
+
+function refreshMarketDecisionHistory(force = false) {
+  if (!window.desktopApp?.getMarketDecisionHistory || marketDecisionHistoryPromise) return marketDecisionHistoryPromise;
+  const request = marketDecisionHistoryRequest();
+  const signature = JSON.stringify(request);
+  if (!force && signature === marketDecisionHistorySignature) return Promise.resolve(marketDecisionHistoryByProduct);
+  marketDecisionHistoryPromise = window.desktopApp.getMarketDecisionHistory(request).then(result => {
+    marketDecisionHistoryByProduct = result?.histories || {};
+    marketDecisionHistorySignature = signature;
+    renderAll();
+    return marketDecisionHistoryByProduct;
+  }).catch(error => {
+    console.error('Price-Guide-Historie für PHASE 3 konnte nicht geladen werden:', error);
+    return marketDecisionHistoryByProduct;
+  }).finally(() => { marketDecisionHistoryPromise = null; });
+  return marketDecisionHistoryPromise;
+}
+
+function scheduleMarketDecisionHistoryRefresh() {
+  clearTimeout(scheduleMarketDecisionHistoryRefresh.timer);
+  scheduleMarketDecisionHistoryRefresh.timer = setTimeout(() => refreshMarketDecisionHistory(false), 120);
+}
 
 function saveState() {
   const savedAt = new Date().toISOString();
@@ -657,6 +702,7 @@ function saveState() {
   localStorage.setItem(DB_KEY, serialized);
   localStorage.setItem(DESKTOP_UPDATED_KEY, savedAt);
   scheduleCardNameLookupRefresh();
+  scheduleMarketDecisionHistoryRefresh();
 
   const el = document.getElementById("saveStatus");
   const sequence = (saveState.sequence || 0) + 1;
@@ -695,9 +741,9 @@ const uid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `tcg-${
 function statusBadge(status) {
   const s = String(status||"");
   let c = "blue";
-  if (["TOP DEAL","KAUFEN","Stark kaufen","Kaufgrenze passend","Sehr guter EK","Lohnt sich","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen","Verkaufsbereit","Gebucht"].includes(s)) c="green";
-  if (["BEOBACHTEN","KEINE PREISDATEN","Preis prüfen","Marktpreis prüfen","Preisdaten fehlen","Preisstand erneuern","Druckvariante prüfen","Keine Preisdaten","Privater Bedarf","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen","Teilweise erstattet","Vielleicht"].includes(s)) c="yellow";
-  if (["STOP","NICHT KAUFEN","Nicht kaufen","Preisgrenze senken","FALLEND","Storniert","Beschädigt","Verlustverkauf","Erstattet"].includes(s)) c="red";
+  if (["FRISCH","AUSREICHEND","STABIL","STEIGEND","STARK STEIGEND","GEWINNZIEL WEITERHIN REALISTISCH","GEWINNZIEL ÜBERTROFFEN / MARKT GESTIEGEN","TOP DEAL","KAUFEN","Stark kaufen","Kaufgrenze passend","Sehr guter EK","Lohnt sich","HALTEN","LANGFRISTIG HALTEN","MARKT GESTIEGEN","Verkauft","Abgeschlossen","Abgerechnet","Eingetroffen","Rückgabe eingetroffen","Verkaufsbereit","Gebucht"].includes(s)) c="green";
+  if (["EINGESCHRÄNKT","BEOBACHTEN","PRÜFEN","KAPITALBINDUNG","PREIS PRÜFEN","VK ERHÖHUNG PRÜFEN","KAPITALBINDUNG PRÜFEN","BREAK-EVEN PRÜFEN","GEWINNZIEL GEFÄHRDET","LANGSAMDREHER","ALTER UNBEKANNT","KEINE PREISDATEN","Preis prüfen","Marktpreis prüfen","Preisdaten fehlen","Preisstand erneuern","Druckvariante prüfen","Keine Preisdaten","Privater Bedarf","Im Bestand","Offen","Unterwegs","Bestellt","Teilweise eingetroffen","Teilweise erstattet","Vielleicht"].includes(s)) c="yellow";
+  if (["UNZUREICHEND","UNZUREICHENDE DATEN","GEWINNZIEL AKTUELL NICHT REALISTISCH","ENTSCHEIDUNG ERFORDERLICH","MARKT GEFALLEN","STOP","NICHT KAUFEN","Nicht kaufen","Preisgrenze senken","FALLEND","STARK FALLEND","Storniert","Beschädigt","Verlustverkauf","Erstattet"].includes(s)) c="red";
   if (["Reserviert","Bezahlt","Kommissioniert","Verpackt","Versendet","Rückgabe offen","Rückgabe unterwegs","Nicht verkaufen"].includes(s)) c="purple";
   return `<span class="badge ${c}">${escapeHtml(s||"-")}</span>`;
 }
@@ -1044,6 +1090,8 @@ function renderAll() {
   renderSales();
   renderMaterials();
   renderExpenses();
+  renderCapitalView();
+  renderSlowMovers();
   renderWatchlist();
   renderBuyingPlanner();
   renderPartners();
@@ -1202,13 +1250,38 @@ function openMonthlyFinanceDetails(type){
     </table></div>`;
   showDialogSafely(dialog);
 }
+function phase2CurrentInventory(){
+  return (state.inventory||[]).filter(item=>item.ownership!=="private"&&!['Verkauft','Privat','Abgegeben','Storniert'].includes(item.status));
+}
+
+function phase2CapitalOverview(){
+  return window.TcgBusinessAutomation?.buildCapitalOverview?.(state,state.productCatalog||{})||{byType:{cardmarket:0,bank:0,cash:0,other:0},liquid:0,knownStockCost:0,listingValue:0,unknownListingValue:0,referenceValue:0,tradingWealthAtCost:0,physicalCards:0,positions:0,knownCostCount:0,unknownCostCount:0,accounts:[]};
+}
+
+function phase2InventoryAnalysis(item){
+  const productId=cleanProductId(item.productId);
+  return window.TcgBusinessAutomation?.analyzeInventoryItem?.(item,state.productCatalog?.[productId]||{},forwardPricingSettings(),new Date(),marketDecisionHistoryByProduct[productId]||[])||{};
+}
+
+function marketChangeText(change){
+  if(!change?.available)return "–";
+  const sign=Number(change.absolute)>=0?"+":"";
+  const gap=change.point?.gapDays?` · nächster Stand ${fmtDate(change.point.date)}`:"";
+  return `${sign}${money(change.absolute)} · ${sign}${pct(change.percent)}${gap}`;
+}
+
+function marketChangeClass(change){
+  return !change?.available?"muted":Number(change.percent)>0?"money-positive":Number(change.percent)<0?"money-negative":"muted";
+}
+
 function renderDashboard() {
-  const activeInv = state.inventory.filter(i=>["Im Bestand","Inseriert"].includes(i.status) || (i.status==="Im Bestand" && i.listed));
+  const activeInv = phase2CurrentInventory();
+  const capital=phase2CapitalOverview();
   const now = new Date();
   const month = now.getMonth(), year = now.getFullYear();
   const figures=monthlyBusinessFigures(year,month);
-  const inventoryListingValue = activeInv.reduce((a,i)=>a+(i.listed ? Number(i.listingPrice||0) : 0),0);
-  const investedCapital = activeInv.reduce((a,i)=>a+Number(i.cost||0),0);
+  const inventoryListingValue = capital.listingValue;
+  const investedCapital = capital.knownStockCost;
   const openPurchases = state.purchases.filter(p=>!["Eingetroffen","Storniert"].includes(p.status)).length;
   const opp = state.watchlist.filter(w=>!w.archived && ["TOP DEAL","KAUFEN"].includes(calculateWatch(w).status)).length;
 
@@ -1225,6 +1298,43 @@ function renderDashboard() {
   document.getElementById("mOperatingResult").className = figures.operatingResult >= 0 ? "money-positive" : "money-negative";
   document.getElementById("mOpenPurchases").textContent = openPurchases;
   document.getElementById("mBuyOpportunities").textContent = opp;
+  const realizedSales=(state.sales||[]).filter(sale=>["Abgeschlossen","Abgerechnet"].includes(sale.status));
+  const realizedRows=realizedSales.map(calculateSaleProfit);
+  const realizedRevenue=realizedRows.reduce((sum,row)=>sum+Number(row.netRevenue??row.gross??0),0);
+  const knownRealized=realizedRows.filter(row=>row.profitKnown!==false);
+  const knownRevenue=knownRealized.reduce((sum,row)=>sum+Number(row.netRevenue??row.gross??0),0);
+  const knownProfit=knownRealized.reduce((sum,row)=>sum+Number(row.profit||0),0);
+  document.getElementById("mLiquidCapital").textContent=money(capital.liquid);
+  document.getElementById("mTradingWealth").textContent=money(capital.tradingWealthAtCost);
+  document.getElementById("mRealizedRevenue").textContent=money(realizedRevenue);
+  document.getElementById("mRealizedMargin").textContent=knownRevenue>0?pct(knownProfit/knownRevenue*100):"–";
+  document.getElementById("mRealizedSalesCount").textContent=realizedSales.length;
+  const dashboardCapital=document.getElementById("dashboardCapitalSummary");
+  if(dashboardCapital)dashboardCapital.innerHTML=`
+    <div><small>Cardmarket</small><strong>${money(capital.byType.cardmarket)}</strong></div>
+    <div><small>Bank</small><strong>${money(capital.byType.bank)}</strong></div>
+    <div><small>Kasse</small><strong>${money(capital.byType.cash)}</strong></div>
+    <div><small>Sonstiges</small><strong>${money(capital.byType.other)}</strong></div>
+    <div><small>Bekannter Bestands-EK</small><strong>${money(capital.knownStockCost)}</strong><small>${capital.knownCostCount} bekannt · ${capital.unknownCostCount} unbekannt</small></div>
+    <div><small>Inseratswert</small><strong>${money(capital.listingValue)}</strong><small>davon ${money(capital.unknownListingValue)} mit unbekanntem EK</small></div>
+    <div><small>Price-Guide-Referenzwert</small><strong>${money(capital.referenceValue)}</strong><small>gespeicherter Preisstand</small></div>
+    <div><small>Physische Karten / Positionen</small><strong>${capital.physicalCards} / ${capital.positions}</strong></div>`;
+  const decisions=activeInv.map(item=>({item,analysis:phase2InventoryAnalysis(item)}));
+  const decisionRows={
+    "price-review":decisions.filter(row=>["PREIS PRÜFEN","BREAK-EVEN PRÜFEN","GEWINNZIEL GEFÄHRDET","KAPITALBINDUNG PRÜFEN"].includes(row.analysis.marketDecision?.recommendation)),
+    falling:decisions.filter(row=>["FALLEND","STARK FALLEND"].includes(row.analysis.marketDecision?.trend?.status)),
+    rising:decisions.filter(row=>["STEIGEND","STARK STEIGEND"].includes(row.analysis.marketDecision?.trend?.status)),
+    target:decisions.filter(row=>["GEWINNZIEL GEFÄHRDET","GEWINNZIEL AKTUELL NICHT REALISTISCH"].includes(row.analysis.marketDecision?.profitTargetStatus))
+  };
+  const flaggedIds=new Set(Object.values(decisionRows).flat().map(row=>row.item.id));
+  const boundCost=activeInv.filter(item=>flaggedIds.has(item.id)&&["known","confirmed_zero"].includes(item.costStatus)).reduce((sum,item)=>sum+Number(item.cost||0),0);
+  const dashboardMarket=document.getElementById("dashboardMarketDecisionSummary");
+  if(dashboardMarket)dashboardMarket.innerHTML=`
+    <button type="button" data-phase3-filter="price-review"><small>Preis prüfen</small><strong>${decisionRows["price-review"].length}</strong><span>inkl. Break-even und Kapitalbindung</span></button>
+    <button type="button" data-phase3-filter="falling"><small>Markt fallend</small><strong class="money-negative">${decisionRows.falling.length}</strong><span>gespeicherter Price-Guide-Trend</span></button>
+    <button type="button" data-phase3-filter="rising"><small>Markt steigend</small><strong class="money-positive">${decisionRows.rising.length}</strong><span>gespeicherter Price-Guide-Trend</span></button>
+    <button type="button" data-phase3-filter="target"><small>Gewinnziel gefährdet</small><strong>${decisionRows.target.length}</strong><span>regelbasierte Prüfung</span></button>
+    <button type="button" data-phase3-filter="all"><small>Gebundener EK dieser Hinweise</small><strong>${money(boundCost)}</strong><span>nur bekannter EK</span></button>`;
 
   const monthlyRows = [];
   for (let offset=11; offset>=0; offset--) {
@@ -1252,14 +1362,8 @@ function renderDashboard() {
     return `<div class="list-row"><div><a class="card-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(w.name)}</strong><span class="external-link">↗</span></a><br><small>${money(w.currentBuy)} → ${money(w.targetSell)} · ROI ${pct(w.roi)}</small></div>${statusBadge(w.status)}</div>`;
   }).join("")}</div>` : `<div class="empty">Noch keine konkreten Einkaufspreise eingetragen</div>`;
 
-  const age = [
-    {label:"0–30 Tage", count:activeInv.filter(i=>daysBetween(i.purchaseDate)<=30).length},
-    {label:"31–60 Tage", count:activeInv.filter(i=>daysBetween(i.purchaseDate)>30 && daysBetween(i.purchaseDate)<=60).length},
-    {label:"61–90 Tage", count:activeInv.filter(i=>daysBetween(i.purchaseDate)>60 && daysBetween(i.purchaseDate)<=90).length},
-    {label:"über 90 Tage", count:activeInv.filter(i=>daysBetween(i.purchaseDate)>90).length}
-  ];
-  const maxAge = Math.max(1,...age.map(x=>x.count));
-  document.getElementById("ageSummary").innerHTML = `<div class="list">${age.map(x=>`<div><div class="list-row"><span>${x.label}</span><strong>${x.count}</strong></div><div class="bar"><span style="width:${x.count/maxAge*100}%"></span></div></div>`).join("")}</div>`;
+  const age=window.TcgBusinessAutomation?.buildAgingSummary?.(activeInv,state.productCatalog||{},state.settings)||[];
+  document.getElementById("ageSummary").innerHTML = age.length?`<div class="table-wrap compact-table"><table><thead><tr><th>Stufe</th><th>Karten</th><th>bekannter EK</th><th>Inserat</th><th>Referenz</th></tr></thead><tbody>${age.map(row=>`<tr><td><strong>${escapeHtml(row.status)}</strong><br><small>${escapeHtml(row.label)}</small></td><td>${row.count}</td><td>${money(row.knownCost)}</td><td>${money(row.listingValue)}</td><td>${money(row.referenceValue)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">Noch kein aktueller Geschäftsbestand.</div>`;
 
   const recent = [...state.sales].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
   document.getElementById("recentSales").innerHTML = recent.length ? `<div class="list">${recent.map(s=>{const calc=calculateSaleProfit(s); return `<div class="list-row"><div><strong>${escapeHtml(s.orderNo)}</strong><br><small>${fmtDate(s.date)} · ${escapeHtml(s.customer||"")}</small></div>${calc.profitKnown===false?'<span class="badge yellow">EK klären</span>':`<span class="${calc.profit>=0?"money-positive":"money-negative"}">${money(calc.profit)}</span>`}</div>`}).join("")}</div>` : `<div class="empty">Noch keine Verkäufe</div>`;
@@ -1710,8 +1814,9 @@ function appendListingChange(item,{listed,price,mode="manual",reason=""}){
   const newListed=Boolean(listed&&Number(price)>0);
   const newPrice=newListed?Number(price):null;
   if(oldListed===newListed&&oldPrice===newPrice)return;
-  const priorListing=item.listingHistory.some(entry=>["first_listing","price_change","baseline"].includes(entry.eventType));
-  item.listingHistory.push({id:uid(),eventType:!newListed?"unlisted":priorListing?"price_change":"first_listing",changedAt:new Date().toISOString(),oldPrice,newPrice,changeMode:mode,reason:reason||(!newListed?"Inserat beendet":mode==="suggested"?"VK-Vorschlag übernommen":"Manuelle Änderung")});
+  const priorConfirmedListing=item.listingHistory.some(entry=>["first_listing","price_change"].includes(entry.eventType));
+  const eventType=!newListed?"unlisted":!oldListed?"first_listing":priorConfirmedListing?"price_change":"price_change";
+  item.listingHistory.push({id:uid(),eventType,changedAt:new Date().toISOString(),oldPrice,newPrice,changeMode:mode,reason:reason||(!newListed?"Inserat beendet":mode==="suggested"?"VK-Vorschlag übernommen":"Manuelle Änderung")});
 }
 function openInventoryDetails(groupKey){
   const group=getInventoryGroups(true).find(g=>g.key===groupKey);
@@ -1734,6 +1839,13 @@ function openInventoryDetails(groupKey){
   });
   const reservationRows=[...reservations.values()];
   const listingEvents=stats.items.flatMap((item,index)=>(item.listingHistory||[]).map(entry=>({...entry,copy:index+1}))).sort((a,b)=>new Date(b.changedAt||0)-new Date(a.changedAt||0));
+  const detailItem=stats.currentItems[0]||i;
+  const detailAnalysis=phase2InventoryAnalysis(detailItem);
+  const decision=detailAnalysis.marketDecision||{};
+  const priceGuide=decision.priceGuide||{};
+  const decisionThresholds=decision.thresholds||{};
+  const scenarioRows=(decision.scenarios||[]).map(row=>`<tr><td><strong>${escapeHtml(row.label)}</strong></td><td>${row.result?.price?money(row.result.price):"–"}</td><td>${row.result?.calculable?money(row.result.grossMargin):"nicht vollständig berechenbar"}</td><td>${row.result?.calculable?`<span class="${row.result.expectedProfit>=0?"money-positive":"money-negative"}">${row.result.expectedProfit>=0?"+":""}${money(row.result.expectedProfit)}</span>`:"nicht vollständig berechenbar"}</td><td>${row.result?.calculable&&row.result.roi!=null?pct(row.result.roi):"–"}</td></tr>`).join("");
+  const detailPurchase=state.purchases.find(row=>row.id===detailItem.purchaseId);
   const lotRows=[...stats.items].sort((a,b)=>String(a.purchaseDate||"").localeCompare(String(b.purchaseDate||""))).map((item,index)=>{
     const lot=inventoryLotDetail(item);
     const purchaseReference=lot.purchase?`#${lot.purchase.orderNo||"-"}`:(item.source||item.lotId||"Manuelle Erfassung");
@@ -1747,6 +1859,33 @@ function openInventoryDetails(groupKey){
   document.getElementById("orderDetailContent").innerHTML=`
     <div class="inventory-detail-head"><div><h3>${escapeHtml(i.name)}</h3><small>${escapeHtml(i.setName||i.set||"Set fehlt")} · ${escapeHtml(i.collectorNumber||i.set||"Setnummer fehlt")} · ${escapeHtml(i.rarity||"Version/Seltenheit fehlt")} · CM ${escapeHtml(i.productId||"-")}</small></div><div class="row-actions"><button type="button" class="secondary" data-correct-inventory="${escapeHtml(group.key)}">Bestand korrigieren</button>${stats.available?`<button type="button" class="secondary" data-business-to-private="${escapeHtml(group.key)}">1 Exemplar privat</button>`:""}<a class="button secondary" href="${escapeHtml(cardmarketUrl(i))}" target="_blank" rel="noopener noreferrer">Cardmarket öffnen ↗</a></div></div>
     <div class="inventory-stock-grid"><div><small>Gesamtbestand</small><strong>${stats.total}</strong></div><div><small>Reserviert</small><strong>${stats.reserved}</strong></div><div><small>Verfügbar</small><strong>${stats.available}</strong></div>${stats.unavailable?`<div><small>Nicht verfügbar</small><strong>${stats.unavailable}</strong></div>`:""}</div>
+    <section class="market-decision-block"><div class="panel-head"><div><h3>MARKT</h3><small>Cardmarket Price Guide · gespeicherte Tageswerte für genau CM ${escapeHtml(decision.productId||i.productId||"–")}. Sprache und Zustand des Bestands werden angezeigt, aber nicht künstlich in den Price Guide hineingerechnet.</small></div>${statusBadge(decision.dataQuality||"UNZUREICHEND")}</div>
+      <div class="collection-summary inventory-analysis-summary">
+        <div><small>Aktuelle Referenz</small><strong>${decision.currentReference?money(decision.currentReference):"fehlt"}</strong><small>${escapeHtml(decision.referenceSource||"Keine Price-Guide-Referenz")} · ${decision.currentDate?fmtDate(decision.currentDate):"ohne Datum"}</small></div>
+        <div><small>Price Guide Low / Low EX+</small><strong>${priceGuide.low?money(priceGuide.low):"–"} / ${priceGuide.lowEx?money(priceGuide.lowEx):"–"}</strong></div>
+        <div><small>1 / 7 / 30 Tage</small><strong>${priceGuide.avg1?money(priceGuide.avg1):"–"} / ${priceGuide.avg7?money(priceGuide.avg7):"–"} / ${priceGuide.avg30?money(priceGuide.avg30):"–"}</strong><small>Trend ${priceGuide.trend?money(priceGuide.trend):"–"}</small></div>
+        <div><small>Seit gestern</small><strong class="${marketChangeClass(decision.changes?.day1)}">${marketChangeText(decision.changes?.day1)}</strong></div>
+        <div><small>7 Tage</small><strong class="${marketChangeClass(decision.changes?.day7)}">${marketChangeText(decision.changes?.day7)}</strong></div>
+        <div><small>30 Tage</small><strong class="${marketChangeClass(decision.changes?.day30)}">${marketChangeText(decision.changes?.day30)}</strong></div>
+        <div><small>Seit Einkauf</small><strong class="${marketChangeClass(decision.sincePurchase)}">${marketChangeText(decision.sincePurchase)}</strong><small>${decision.purchaseReference?`Referenz damals ${money(decision.purchaseReference)}`:"Kaufdatum oder passender Preisstand fehlt"}</small></div>
+        <div><small>Seit Erstinserierung</small><strong class="${marketChangeClass(decision.sinceListing)}">${marketChangeText(decision.sinceListing)}</strong><small>${decision.listingReference?`Referenz damals ${money(decision.listingReference)}`:"keine belegte Erstinserierung oder kein Preisstand"}</small></div>
+        <div><small>Markttrend</small><strong>${escapeHtml(decision.trend?.status||"UNZUREICHENDE DATEN")}</strong><small>${decision.trend?.weightedPercent==null?"keine belastbare Mehrperioden-Auswertung":`${decision.trend.weightedPercent>=0?"+":""}${pct(decision.trend.weightedPercent)} gewichtet · ${decision.historyPointCount||0} Stände`}</small></div>
+      </div>
+    </section>
+    <section class="market-decision-block"><div class="panel-head"><div><h3>MEIN HANDEL</h3><small>Rechenhilfe auf Basis deiner Daten. Keine automatische Marktprognose und keine automatische Preisänderung.</small></div>${statusBadge(decision.recommendation||detailAnalysis.recommendation||"BEOBACHTEN")}</div>
+      <div class="collection-summary inventory-analysis-summary">
+        <div><small>EK / Einkaufsdatum</small><strong>${detailAnalysis.costKnown?money(detailAnalysis.cost):"unbekannt"}</strong><small>${fmtDate(detailItem.purchaseDate)||"Datum unbekannt"} · ${escapeHtml(detailPurchase?.seller||detailItem.source||"Quelle unbekannt")}</small></div>
+        <div><small>Ziel-VK / aktueller VK</small><strong>${decision.originalTarget?money(decision.originalTarget):"Ziel fehlt"} / ${detailAnalysis.currentPrice?money(detailAnalysis.currentPrice):"nicht inseriert"}</strong></div>
+        <div><small>Mindestgewinn / Mindest-ROI</small><strong>${money(state.settings.minProfit)} / ${pct(state.settings.minRoi)}</strong></div>
+        <div><small>Break-even</small><strong>${decisionThresholds.calculable?money(decisionThresholds.breakEven):"nicht vollständig berechenbar"}</strong><small>Mindestgewinn ${decisionThresholds.calculable?money(decisionThresholds.minimumProfitPrice):"–"} · Mindest-ROI ${decisionThresholds.calculable?money(decisionThresholds.minimumRoiPrice):"–"}</small></div>
+        <div><small>Preisposition</small><strong>${escapeHtml(decision.pricePosition?.status||"NICHT BERECHENBAR")}</strong><small>${decision.pricePosition?.percent==null?"kein eigener VK oder keine Referenz":`${decision.pricePosition.percent>=0?"+":""}${pct(decision.pricePosition.percent)} zur gespeicherten Referenz`}</small></div>
+        <div><small>Gewinnziel</small><strong>${escapeHtml(decision.profitTargetStatus||"NICHT BERECHENBAR")}</strong></div>
+        <div><small>Bestand / Inserat</small><strong>${detailAnalysis.inventoryAgeDays==null?"unbekannt":`${detailAnalysis.inventoryAgeDays} Tage`} / ${detailAnalysis.listingAgeDays==null?"unbekannt":`${detailAnalysis.listingAgeDays} Tage`}</strong><small>${escapeHtml(detailAnalysis.profile||"UNKLASSIFIZIERT")}${detailAnalysis.longTerm?" · langfristig halten":""}</small></div>
+        <div><small>Empfehlung</small><strong>${escapeHtml(decision.recommendation||detailAnalysis.recommendation||"BEOBACHTEN")}</strong><small>${escapeHtml(decision.priceAction||"KEINE AUTOMATISCHE PREISÄNDERUNG")}</small></div>
+      </div>
+      <div class="market-decision-reasons"><strong>Begründung</strong><ul>${(decision.reasons||detailAnalysis.factors||[]).map(reason=>`<li>${escapeHtml(reason)}</li>`).join("")||"<li>Keine ausreichenden Daten.</li>"}</ul></div>
+      <div class="table-wrap"><table><thead><tr><th>Szenario</th><th>Preis</th><th>Rohmarge</th><th>Erwarteter Gewinn</th><th>ROI</th></tr></thead><tbody>${scenarioRows||'<tr><td colspan="5" class="empty">Szenarien sind nicht vollständig berechenbar.</td></tr>'}</tbody></table></div>
+    </section>
     <h3>Einkaufslosen &amp; Einstand je Exemplar</h3>
     <div class="table-wrap"><table><thead><tr><th>Exemplar</th><th>Einkauf</th><th>Bestellung / Händler</th><th>Kartenpreis + Anteil</th><th>Vollständiger EK</th><th>Inserat</th><th>Status / Ergebnis</th></tr></thead><tbody>${lotRows||`<tr><td colspan="7" class="empty">Keine Einkaufshistorie vorhanden.</td></tr>`}</tbody></table></div>
     <h3>Inseratspreis-Verlauf</h3>
@@ -1876,7 +2015,10 @@ function inventoryGroupPricing(group){
   const unprofitableAtMarket=Boolean(averageCost>0&&suggestedSell>0&&!calculated.profitableAtMarket);
   const expectedRoi=Number(calculated.expectedRoi||0);
   const traffic=!knownCosts.length||!suggestedSell?"gray":calculated.meetsTargetRoi?"green":calculated.profitableAtMarket?"yellow":"red";
-  return {averageCost,minCost,maxCost,knownCostCount:knownCosts.length,missingCostCount:Math.max(0,items.length-knownCosts.length),listingPrice,listedCount:listed.length,itemCount:items.length,suggestedSell,difference,expectedRoi,traffic,needsReprice:Boolean(listed.length&&suggestedSell&&Math.abs(difference)>=threshold),unprofitableAtMarket,dailyChange:Number.isFinite(dailyChange)?dailyChange:0,changePercent:Number.isFinite(changePercent)?changePercent:0,priceDate:catalog.priceDate||"",marketLow:Number(catalog.low||0),marketTrend:Number(catalog.trend||0),calculated};
+  const marketDecisions=items.map(item=>phase2InventoryAnalysis(item).marketDecision).filter(Boolean);
+  const decisionReview=marketDecisions.some(decision=>["PREIS PRÜFEN","BREAK-EVEN PRÜFEN","GEWINNZIEL GEFÄHRDET","KAPITALBINDUNG PRÜFEN","VK ERHÖHUNG PRÜFEN"].includes(decision.recommendation));
+  const hasDecisionHistory=Boolean(marketDecisionHistoryByProduct[productId]?.length);
+  return {averageCost,minCost,maxCost,knownCostCount:knownCosts.length,missingCostCount:Math.max(0,items.length-knownCosts.length),listingPrice,listedCount:listed.length,itemCount:items.length,suggestedSell,difference,expectedRoi,traffic,needsReprice:hasDecisionHistory?decisionReview:Boolean(listed.length&&suggestedSell&&Math.abs(difference)>=threshold),unprofitableAtMarket,dailyChange:Number.isFinite(dailyChange)?dailyChange:0,changePercent:Number.isFinite(changePercent)?changePercent:0,priceDate:catalog.priceDate||"",marketLow:Number(catalog.low||0),marketTrend:Number(catalog.trend||0),calculated,marketDecisions};
 }
 
 function inventoryAgeMatches(days, filter) {
@@ -1952,6 +2094,14 @@ function renderInventory() {
     const url = cardmarketUrl(i);
     const exactLink = /^https?:\/\//i.test(String(i.productUrl || state.productCatalog?.[cleanProductId(i.productId)]?.productUrl || ""));
     const pricing=group.pricing||inventoryGroupPricing(group);
+    const itemAnalyses=stats.currentItems.map(item=>({item,analysis:phase2InventoryAnalysis(item)}));
+    const representative=itemAnalyses.sort((a,b)=>(b.analysis.inventoryAgeDays??-1)-(a.analysis.inventoryAgeDays??-1))[0]||{item:i,analysis:phase2InventoryAnalysis(i)};
+    const analysis=representative.analysis;
+    const profiles=[...new Set(stats.currentItems.map(item=>window.TcgBusinessAutomation?.normalizeHoldingProfile?.(item.holdingProfile)||"UNKLASSIFIZIERT"))];
+    const profileText=profiles.length===1?profiles[0]:`${profiles.length} Profile`;
+    const currentMarginKnown=pricing.missingCostCount===0&&pricing.listingPrice>0;
+    const currentMargin=currentMarginKnown?pricing.listingPrice-pricing.averageCost:null;
+    const currentRoi=currentMarginKnown&&pricing.averageCost>0?currentMargin/pricing.averageCost*100:null;
     const price=pricing.listedCount&&pricing.listingPrice
       ? `${money(pricing.listingPrice)}${pricing.listedCount!==pricing.itemCount?`<br><small>${pricing.listedCount} Exemplar${pricing.listedCount===1?"":"e"} inseriert</small>`:""}`
       : '<span class="muted">Nicht inseriert</span>';
@@ -1964,13 +2114,76 @@ function renderInventory() {
       <td><button class="stock-detail-button" data-inventory-details="${escapeHtml(group.key)}"><strong>${stats.total}</strong><span>${stats.total===0&&stats.sold?`${stats.sold} verkauft`:stats.reserved?`${stats.available} verfügbar · ${stats.reserved} reserviert`:`${stats.available} verfügbar`}</span></button></td>
       <td>${pricing.knownCostCount?`<strong>${money(pricing.averageCost)}</strong><br><small>${pricing.minCost!==pricing.maxCost?`${money(pricing.minCost)}–${money(pricing.maxCost)} · `:""}${pricing.knownCostCount}/${pricing.itemCount} bekannt</small>`:'<span class="muted">unbekannt</span>'}</td>
       <td>${price}</td>
+      <td>${currentMarginKnown?`<span class="${currentMargin>=0?"money-positive":"money-negative"}"><strong>${currentMargin>=0?"+":""}${money(currentMargin)}</strong></span><br><small>${currentRoi==null?"ROI nicht berechenbar":pct(currentRoi)}</small>`:'<span class="muted">EK oder VK fehlt</span>'}</td>
       <td><span class="profit-light profit-light-${pricing.traffic}" title="Grün: Ziel-ROI · Gelb: mindestens profitabel · Rot: nicht rentabel · Grau: Daten fehlen"></span>${pricing.suggestedSell?`<strong>${money(pricing.suggestedSell)}</strong><br><small>Marktbasierter VK · ${pct(pricing.expectedRoi)} ROI</small>${pricing.unprofitableAtMarket?'<br><small class="money-negative">Zum Marktpreis nicht rentabel</small>':""}<br><button type="button" class="link-button compact-button" data-apply-group-price="${escapeHtml(group.key)}">Übernehmen</button>`:'<span class="muted">Keine Preisdaten</span>'}</td>
       <td>${pricing.priceDate?`<span class="${changeClass}"><strong>${pricing.dailyChange>0?"+":""}${money(pricing.dailyChange)}</strong></span><br><small>${pricing.changePercent?`${pricing.changePercent>0?"+":""}${pricing.changePercent.toFixed(1)} % · `:""}Price Guide ${fmtDate(pricing.priceDate)}</small>${pricing.needsReprice?'<br><span class="badge yellow">Preis prüfen</span>':""}`:'<span class="muted">Kein Preisstand</span>'}</td>
+      <td><strong>${escapeHtml(analysis.priceGroup?.key||"–")}</strong><br><small>${escapeHtml(analysis.priceGroup?.label||"")}</small></td>
+      <td>${escapeHtml(profileText)}${stats.currentItems.some(item=>item.longTermHold)?'<br><span class="badge blue">langfristig</span>':""}</td>
+      <td><strong>${analysis.inventoryAgeDays==null?"unbekannt":`${analysis.inventoryAgeDays} Tage`}</strong><br><small>Inserat: ${analysis.listingAgeDays==null?"unbekannt":`${analysis.listingAgeDays} Tage`}</small></td>
+      <td>${statusBadge(analysis.marketDecision?.recommendation||analysis.recommendation||"BEOBACHTEN")}<br><small>${escapeHtml(analysis.marketDecision?.trend?.status||analysis.marketSignal||"UNZUREICHENDE DATEN")}</small></td>
       <td>${statusBadge(displayStatus)}</td>
-      <td>${daysBetween(group.oldestDate)} Tage</td>
       <td>${stats.total>0?`<div class="row-actions"><button class="icon-button" data-edit-inventory-group="${escapeHtml(group.key)}">Bearbeiten</button><button class="icon-button" data-delete-inventory-group="${escapeHtml(group.key)}">Löschen</button></div>`:'<span class="muted">Historie</span>'}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="11" class="empty">Keine Karten gefunden</td></tr>`;
+  }).join("") : `<tr><td colspan="15" class="empty">Keine Karten gefunden</td></tr>`;
+}
+
+function renderSlowMovers(){
+  const target=document.getElementById("slowMoverTable");if(!target)return;
+  const q=document.getElementById("slowMoverSearch")?.value||"";
+  const ageFilter=document.getElementById("slowMoverAgeFilter")?.value||"";
+  const priceGroupFilter=document.getElementById("slowMoverPriceGroup")?.value||"";
+  const profileFilter=document.getElementById("slowMoverProfile")?.value||"";
+  const costFilter=document.getElementById("slowMoverCost")?.value||"";
+  const longFilter=document.getElementById("slowMoverLongTerm")?.value||"";
+  const languageFilter=document.getElementById("slowMoverLanguage")?.value||"";
+  const conditionFilter=document.getElementById("slowMoverCondition")?.value||"";
+  const trendFilter=document.getElementById("slowMoverTrend")?.value||"";
+  const recommendationFilter=document.getElementById("slowMoverRecommendation")?.value||"";
+  const profitTargetFilter=document.getElementById("slowMoverProfitTarget")?.value||"";
+  const minPriceRaw=document.getElementById("slowMoverPriceMin")?.value||"";
+  const maxPriceRaw=document.getElementById("slowMoverPriceMax")?.value||"";
+  const minPrice=minPriceRaw===""?null:Number(minPriceRaw),maxPrice=maxPriceRaw===""?null:Number(maxPriceRaw);
+  const sort=document.getElementById("slowMoverSort")?.value||"age-desc";
+  const rows=getInventoryGroups().map(group=>{
+    const stats=inventoryGroupStats(group),pricing=inventoryGroupPricing(group);
+    const analyzed=stats.currentItems.map(item=>({item,analysis:phase2InventoryAnalysis(item)})).sort((a,b)=>(b.analysis.inventoryAgeDays??-1)-(a.analysis.inventoryAgeDays??-1));
+    const representative=analyzed[0]||{item:group.first,analysis:phase2InventoryAnalysis(group.first)};
+    const profiles=[...new Set(stats.currentItems.map(item=>window.TcgBusinessAutomation?.normalizeHoldingProfile?.(item.holdingProfile)||"UNKLASSIFIZIERT"))];
+    const longTerm=stats.currentItems.some(item=>item.longTermHold);
+    const referenceValue=stats.currentItems.reduce((sum,item)=>sum+Number(phase2InventoryAnalysis(item).referencePrice||0),0);
+    const listingValue=stats.currentItems.filter(item=>item.listed).reduce((sum,item)=>sum+Number(item.listingPrice||0),0);
+    const knownCost=stats.currentItems.filter(item=>["known","confirmed_zero"].includes(item.costStatus)).reduce((sum,item)=>sum+Number(item.cost||0),0);
+    return {group,stats,pricing,representative,profiles,longTerm,referenceValue,listingValue,knownCost,missingCost:stats.currentItems.filter(item=>!["known","confirmed_zero"].includes(item.costStatus)).length};
+  }).filter(row=>row.representative.analysis.inventoryAgeDays==null||row.representative.analysis.inventoryAgeDays>Number(state.settings.agingObserveMaxDays??30));
+  syncFilterOptions("slowMoverProfile",rows.flatMap(row=>row.profiles),"Alle Profile");
+  syncFilterOptions("slowMoverLanguage",rows.map(row=>row.representative.item.language),"Alle Sprachen");
+  syncFilterOptions("slowMoverCondition",rows.map(row=>row.representative.item.condition),"Alle Zustände");
+  const filtered=rows.filter(row=>{
+    const item=row.representative.item,analysis=row.representative.analysis;
+    const value=row.pricing.listingPrice||analysis.referencePrice||0;
+    const sharedMatches=window.TcgBusinessAutomation?.matchesSlowMoverFilters?.({...analysis,costKnown:row.missingCost===0,longTerm:row.longTerm,currentPrice:value},item,{ageKey:ageFilter,priceGroup:priceGroupFilter,cost:costFilter,longTerm:longFilter,language:languageFilter,condition:conditionFilter,minPrice,maxPrice})!==false;
+    const decision=analysis.marketDecision||{};
+    const trendStatus=decision.trend?.status||"UNZUREICHENDE DATEN";
+    const trendMatches=!trendFilter||(trendFilter==="rising"&&["STEIGEND","STARK STEIGEND"].includes(trendStatus))||(trendFilter==="stable"&&trendStatus==="STABIL")||(trendFilter==="falling"&&["FALLEND","STARK FALLEND"].includes(trendStatus))||(trendFilter==="insufficient"&&trendStatus==="UNZUREICHENDE DATEN");
+    const recommendationMatches=!recommendationFilter||(recommendationFilter==="review"&&["PREIS PRÜFEN","BREAK-EVEN PRÜFEN","GEWINNZIEL GEFÄHRDET","KAPITALBINDUNG PRÜFEN"].includes(decision.recommendation))||decision.recommendation===recommendationFilter;
+    const targetMatches=!profitTargetFilter||(profitTargetFilter==="risk"&&["GEWINNZIEL GEFÄHRDET","GEWINNZIEL AKTUELL NICHT REALISTISCH"].includes(decision.profitTargetStatus))||decision.profitTargetStatus===profitTargetFilter;
+    return sharedMatches&&trendMatches&&recommendationMatches&&targetMatches&&cardRecordMatchesSearch(item,q)&&(!profileFilter||row.profiles.includes(profileFilter));
+  }).sort((a,b)=>{
+    if(sort==="value-desc")return b.listingValue-a.listingValue;
+    if(sort==="cost-desc")return b.knownCost-a.knownCost;
+    if(sort==="name")return cardDisplayNames(a.representative.item).primary.localeCompare(cardDisplayNames(b.representative.item).primary,"de",{numeric:true,sensitivity:"base"});
+    return (b.representative.analysis.inventoryAgeDays??Number.MAX_SAFE_INTEGER)-(a.representative.analysis.inventoryAgeDays??Number.MAX_SAFE_INTEGER);
+  });
+  const summary=document.getElementById("slowMoverSummary");
+  if(summary)summary.innerHTML=`<div><small>Druckvarianten</small><strong>${filtered.length}</strong></div><div><small>Physische Karten</small><strong>${filtered.reduce((sum,row)=>sum+row.stats.total,0)}</strong></div><div><small>Bekannter EK</small><strong>${money(filtered.reduce((sum,row)=>sum+row.knownCost,0))}</strong></div><div><small>Inseratswert</small><strong>${money(filtered.reduce((sum,row)=>sum+row.listingValue,0))}</strong></div><div><small>Price-Guide-Referenzwert</small><strong>${money(filtered.reduce((sum,row)=>sum+row.referenceValue,0))}</strong></div><div><small>EK unbekannt</small><strong>${filtered.reduce((sum,row)=>sum+row.missingCost,0)}</strong></div>`;
+  target.innerHTML=filtered.length?filtered.map(row=>{
+    const item=row.representative.item,analysis=row.representative.analysis,names=cardDisplayNames(item);
+    const marginKnown=row.missingCost===0&&row.pricing.listingPrice>0;
+    const rawMargin=marginKnown?row.pricing.listingPrice-row.pricing.averageCost:null;
+    const rawRoi=marginKnown&&row.pricing.averageCost>0?rawMargin/row.pricing.averageCost*100:null;
+    const decision=analysis.marketDecision||{};
+    return `<tr><td><a class="card-link" href="${escapeHtml(cardmarketUrl(item))}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(names.primary)}</strong><span class="external-link">↗</span></a>${names.secondary?`<br><small>Englisch: ${escapeHtml(names.secondary)}</small>`:""}<br><small>${escapeHtml(item.setName||item.set||"–")} · ${escapeHtml(item.collectorNumber||"–")} · ${escapeHtml(item.rarity||"–")} · CM ${escapeHtml(cleanProductId(item.productId)||"fehlt")}</small><br><button class="link-button" data-inventory-details="${escapeHtml(row.group.key)}">Bestanddetails</button></td><td>${escapeHtml(item.language||"–")}<br><small>${escapeHtml(item.condition||"–")}</small></td><td>${row.stats.total}<br><small>${row.stats.available} verfügbar · ${row.stats.reserved} reserviert</small></td><td>${row.pricing.knownCostCount?money(row.pricing.averageCost):"unbekannt"}<br><small>${row.missingCost?`${row.missingCost}× EK unbekannt`:"EK vollständig"}</small></td><td>${row.pricing.listingPrice?money(row.pricing.listingPrice):"nicht inseriert"}<br><small>${row.pricing.listedCount}/${row.stats.total} inseriert</small></td><td>${marginKnown?`<span class="${rawMargin>=0?"money-positive":"money-negative"}">${rawMargin>=0?"+":""}${money(rawMargin)}</span><br><small>${rawRoi==null?"ROI nicht berechenbar":pct(rawRoi)}</small>`:'<span class="muted">EK oder VK fehlt</span>'}</td><td>${decision.currentReference?money(decision.currentReference):"fehlt"}<br><small>${escapeHtml(decision.referenceSource||"gespeicherter Price Guide")}</small></td><td>${statusBadge(decision.trend?.status||"UNZUREICHENDE DATEN")}<br><small>${escapeHtml(decision.dataQuality||"UNZUREICHEND")}</small></td><td class="${marketChangeClass(decision.changes?.day30)}">${marketChangeText(decision.changes?.day30)}</td><td class="${marketChangeClass(decision.sincePurchase)}">${marketChangeText(decision.sincePurchase)}</td><td>${statusBadge(decision.pricePosition?.status||"NICHT BERECHENBAR")}<br><small>${decision.pricePosition?.percent==null?"–":`${decision.pricePosition.percent>=0?"+":""}${pct(decision.pricePosition.percent)}`}</small></td><td>${statusBadge(decision.profitTargetStatus||"NICHT BERECHENBAR")}</td><td><strong>${analysis.inventoryAgeDays==null?"unbekannt":`${analysis.inventoryAgeDays} Tage`}</strong></td><td>${analysis.listingAgeDays==null?"unbekannt":`${analysis.listingAgeDays} Tage`}<br><small>${analysis.firstListingAt?fmtDate(analysis.firstListingAt):"keine belegte Erstinserierung"}</small></td><td>${statusBadge(analysis.inventoryBucket?.status||"ALTER UNBEKANNT")}</td><td><strong>${escapeHtml(analysis.priceGroup?.key||"–")}</strong><br><small>${escapeHtml(analysis.priceGroup?.label||"")}</small></td><td>${escapeHtml(row.profiles.join(" / "))}${row.longTerm?'<br><span class="badge blue">langfristig</span>':""}</td><td title="${escapeHtml((decision.reasons||analysis.factors||[]).join(" · "))}">${statusBadge(decision.recommendation||analysis.recommendation||"BEOBACHTEN")}<br><small>keine automatische Preisänderung</small></td></tr>`;
+  }).join(""):`<tr><td colspan="18" class="empty">Keine Karten passen zu diesen Langsamdreher-Filtern.</td></tr>`;
 }
 
 function editInventoryGroup(groupKey, suggestedPrice=0) {
@@ -1985,7 +2198,7 @@ function editInventoryGroup(groupKey, suggestedPrice=0) {
     note: first.note || "",
     costStatus:"Unverändert",cost:Number(first.cost||0),
     originalTargetSell:first.originalTargetSell??(suggestedPrice>0?suggestedPrice:""),
-    holdingProfile:first.holdingProfile||"standard",longTermHold:Boolean(first.longTermHold)
+    holdingProfile:window.TcgBusinessAutomation?.normalizeHoldingProfile?.(first.holdingProfile)||"UNKLASSIFIZIERT",longTermHold:Boolean(first.longTermHold)
   };
   openModal(`${group.quantity} Karte${group.quantity===1?"":"n"} bearbeiten`,[
     {name:"listingStatus",label:"Cardmarket-Inserat",type:"select",options:["Nicht inseriert","Inseriert"]},
@@ -1993,7 +2206,7 @@ function editInventoryGroup(groupKey, suggestedPrice=0) {
     {name:"originalTargetSell",label:"Ursprüngliches VK-Ziel (€)",type:"number",step:"0.01"},
     {name:"costStatus",label:"EK-Datenstatus",type:"select",options:["Unverändert",{value:"known",label:"EK bekannt"},{value:"confirmed_zero",label:"0 € bestätigt"},{value:"unknown",label:"EK unbekannt"}]},
     {name:"cost",label:"Vollständiger EK pro Exemplar (€)",type:"number",step:"0.01"},
-    {name:"holdingProfile",label:"Halteprofil",type:"select",options:[{value:"standard",label:"Standard"},{value:"quick",label:"Schnellverkauf"},{value:"long_term",label:"Langfristig"}]},
+    {name:"holdingProfile",label:"Halteprofil",type:"select",options:(window.TcgBusinessAutomation?.HOLDING_PROFILES||["UNKLASSIFIZIERT"]).map(value=>({value,label:value}))},
     {name:"longTermHold",label:"Bewusst langfristig halten",type:"checkbox"},
     {name:"status",label:"Bestandsstatus",type:"select",options:["Unverändert","Im Bestand","Beschädigt"]},
     {name:"location",label:"Lagerort"},
@@ -2018,7 +2231,7 @@ function editInventoryGroup(groupKey, suggestedPrice=0) {
         if(data.costStatus==="known")item.cost=Math.max(0,Number(data.cost||0));
         if(data.costStatus==="confirmed_zero")item.cost=0;
       }
-      item.holdingProfile=data.holdingProfile||"standard";
+      item.holdingProfile=window.TcgBusinessAutomation?.normalizeHoldingProfile?.(data.holdingProfile)||"UNKLASSIFIZIERT";
       item.longTermHold=Boolean(data.longTermHold);
       if(data.status!=="Unverändert"&&item.status!=="Reserviert"){
         const beforeBucket=purchaseBucketForAsset(item,"business");item.status = data.status || "Im Bestand";
@@ -2467,7 +2680,7 @@ function renderPurchaseAnalysis() {
     const saleRows=a.sales.slice(0,15).map(r=>`<tr><td>${fmtDate(r.date)||"-"}</td><td>${r.quantity}×</td><td>${money(r.unitPrice)}</td><td>${escapeHtml(r.customer)}</td><td>${escapeHtml(r.reference)}</td></tr>`).join("");
     return `<article class="analysis-card"><div class="analysis-card-head"><div><h3><a class="card-link" href="${escapeHtml(cardmarketUrl(card))}" target="_blank" rel="noopener noreferrer">${escapeHtml(names.primary)} <span class="external-link">↗</span></a></h3>${names.secondary?`<small>Englisch: ${escapeHtml(names.secondary)}</small><br>`:""}<small>${escapeHtml(card.set||"Set unbekannt")} · ${escapeHtml(card.rarity||"Version unbekannt")} · CM ${escapeHtml(card.productId||"-")}</small></div>${a.watch?statusBadge(calculateWatch(a.watch).status):`<button class="secondary" data-analysis-add-watch="${escapeHtml(card.productId||"")}">+ Watchlist</button>`}</div>
       <div class="analysis-metrics">
-        <div class="analysis-metric"><span>Price-Guide Low</span><strong>${a.marketPrice?money(a.marketPrice):"-"}</strong></div><div class="analysis-metric"><span>Kurzfristiger Markt-VK</span><strong>${a.expectedSell?money(a.expectedSell):"-"}</strong><small>${escapeHtml(a.marketReferenceSource||"")}</small></div><div class="analysis-metric"><span>Sichere Kaufgrenze</span><strong>${a.calculatedMaxBuy?money(a.calculatedMaxBuy):"-"}</strong></div>
+        <div class="analysis-metric"><span>Price-Guide Low</span><strong>${a.marketPrice?money(a.marketPrice):"-"}</strong></div><div class="analysis-metric"><span>Gespeicherte Preisreferenz</span><strong>${a.expectedSell?money(a.expectedSell):"-"}</strong><small>${escapeHtml(a.marketReferenceSource||"")}</small></div><div class="analysis-metric"><span>Sichere Kaufgrenze</span><strong>${a.calculatedMaxBuy?money(a.calculatedMaxBuy):"-"}</strong></div>
         <div class="analysis-metric"><span>Eigene Kaufgrenze</span><strong>${a.watch?.maxBuy?money(a.watch.maxBuy):"-"}</strong></div><div class="analysis-metric"><span>Bester eigener EK</span><strong>${a.bestBuy?money(a.bestBuy):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Ø eigener EK</span><strong>${a.avgBuy?money(a.avgBuy):"Keine Daten"}</strong></div>
         <div class="analysis-metric"><span>Bester eigener VK</span><strong>${a.bestSell?money(a.bestSell):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Ø eigener VK</span><strong>${a.avgSell?money(a.avgSell):"Keine Daten"}</strong></div><div class="analysis-metric"><span>Geschätzter Gewinn</span><strong class="${a.estimatedProfit>=0?'money-positive':'money-negative'}">${a.expectedSell?money(a.estimatedProfit):"-"}</strong></div>
         <div class="analysis-metric"><span>Geschätzte Marge</span><strong>${a.expectedSell?pct(a.estimatedMargin):"-"}</strong></div><div class="analysis-metric"><span>Bestand / reserviert</span><strong>${a.total} / ${a.reserved}</strong></div><div class="analysis-metric"><span>Verfügbar</span><strong>${a.available}</strong></div>
@@ -2757,7 +2970,7 @@ function renderBuyingPlanner(){
     summary.innerHTML=`<div><small>Karten / geschäftlich</small><strong>${totals.cards} / ${totals.businessCards}</strong></div><div><small>Bezahlt gesamt</small><strong>${money(totals.paid)}</strong></div><div><small>Geschäftlicher EK</small><strong>${money(totals.businessCost)}</strong></div><div><small>Möglicher Umsatz</small><strong>${range(totals.projectedRevenue,totals.typicalProjectedRevenue)}</strong><small>vorsichtig bis typischer Price Guide</small></div><div><small>Möglicher Gewinn</small><strong class="${rangeClass(totals.projectedProfit,totals.typicalProjectedProfit)}">${range(totals.projectedProfit,totals.typicalProjectedProfit)}</strong></div><div><small>Möglicher ROI</small><strong class="${rangeClass(totals.projectedRoi,totals.typicalProjectedRoi)}">${range(totals.projectedRoi,totals.typicalProjectedRoi,pct)}</strong></div><div><small>Gesamtentscheidung</small><strong class="${overallClass}">${overallDecision}</strong><small>${missingPrices?`${missingPrices} Position(en) ohne Preis`: `${goodLines} gut · ${manualLines} Markt prüfen · ${badLines} nicht kaufen`}</small></div>`;
     table.innerHTML=analysis.lines.map(row=>{
       const sellLow=Number(row.pricing.suggestedSell||0),sellHigh=Number(row.pricing.typicalSell||sellLow),buyLow=Number(row.pricing.maxBuy||0),buyHigh=Number(row.pricing.typicalMaxBuy||buyLow);
-      return `<tr class="draft-${row.recommendation.toLowerCase().replaceAll(" ","-")}"><td><input type="checkbox" data-draft-enabled="${escapeHtml(row.id)}" ${row.enabled!==false?"checked":""}></td><td><input class="draft-number" type="number" min="0" max="${row.quantity}" value="${row.privateQuantity}" data-draft-private="${escapeHtml(row.id)}"></td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(row))}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(cardDisplayNames(row).primary)}</strong> ↗</a><br><small>${escapeHtml([row.setName||row.set,row.collectorNumber,row.rarity,row.language,row.condition].filter(Boolean).join(" · "))} · CM ${escapeHtml(row.productId||"fehlt")}</small></td><td><input class="draft-number" type="number" min="1" value="${row.quantity}" data-draft-quantity="${escapeHtml(row.id)}"></td><td><input class="draft-price" type="number" min="0" step="0.01" value="${row.unitPrice}" data-draft-price="${escapeHtml(row.id)}"></td><td><strong>${money(row.landedUnitCost)}</strong></td><td>${sellLow?`<strong>${range(sellLow,sellHigh)}</strong><br><small>${row.pricing.liveOffer?"Live-Angebot":"vorsichtig bis typisches 1-/7-/30-Tage-Niveau"}</small>`:"–"}</td><td>${buyHigh?`<strong>${range(buyLow,buyHigh)}</strong><br><small>untere Grenze sicher · obere nur nach Marktprüfung</small>`:"–"}</td><td class="${rangeClass(row.expectedProfit,row.typicalProfit)}">${sellLow?`${range(row.expectedProfit,row.typicalProfit)}<br><small>${range(row.expectedRoi,row.typicalRoi,pct)}</small>`:"–"}</td><td>${statusBadge(row.recommendation)}<br><small>${escapeHtml(row.decisionReason||"")}</small></td></tr>`;
+      return `<tr class="draft-${row.recommendation.toLowerCase().replaceAll(" ","-")}"><td><input type="checkbox" data-draft-enabled="${escapeHtml(row.id)}" ${row.enabled!==false?"checked":""}></td><td><input class="draft-number" type="number" min="0" max="${row.quantity}" value="${row.privateQuantity}" data-draft-private="${escapeHtml(row.id)}"></td><td><a class="card-link" href="${escapeHtml(cardmarketUrl(row))}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(cardDisplayNames(row).primary)}</strong> ↗</a><br><small>${escapeHtml([row.setName||row.set,row.collectorNumber,row.rarity,row.language,row.condition].filter(Boolean).join(" · "))} · CM ${escapeHtml(row.productId||"fehlt")}</small></td><td><input class="draft-number" type="number" min="1" value="${row.quantity}" data-draft-quantity="${escapeHtml(row.id)}"></td><td><input class="draft-price" type="number" min="0" step="0.01" value="${row.unitPrice}" data-draft-price="${escapeHtml(row.id)}"></td><td><strong>${money(row.landedUnitCost)}</strong></td><td>${sellLow?`<strong>${range(sellLow,sellHigh)}</strong><br><small>${row.pricing.liveOffer?"Gespeicherte Angebotsbeobachtung":"vorsichtig bis typisches 1-/7-/30-Tage-Niveau"}</small>`:"–"}</td><td>${buyHigh?`<strong>${range(buyLow,buyHigh)}</strong><br><small>untere Grenze sicher · obere nur nach Marktprüfung</small>`:"–"}</td><td class="${rangeClass(row.expectedProfit,row.typicalProfit)}">${sellLow?`${range(row.expectedProfit,row.typicalProfit)}<br><small>${range(row.expectedRoi,row.typicalRoi,pct)}</small>`:"–"}</td><td>${statusBadge(row.recommendation)}<br><small>${escapeHtml(row.decisionReason||"")}</small></td></tr>`;
     }).join("");
   }
   renderDemandRadar();
@@ -3118,16 +3331,43 @@ function renderCapitalPanel(){
   const summary=document.getElementById("capitalSummary");
   const list=document.getElementById("capitalAccountList");
   if(!summary||!list)return;
+  const overview=phase2CapitalOverview();
   const balances=capitalAccountBalances();
-  const liquid=[...balances.values()].reduce((sum,value)=>sum+value,0);
-  const stock=state.inventory.filter(item=>item.status!=="Verkauft"&&item.status!=="Privat");
-  const knownStock=stock.filter(item=>["known","confirmed_zero"].includes(item.costStatus));
-  const stockCost=knownStock.reduce((sum,item)=>sum+Number(item.cost||0),0);
-  const listingValue=stock.filter(item=>item.listed).reduce((sum,item)=>sum+Number(item.listingPrice||0),0);
   const realized=(state.sales||[]).filter(sale=>["Abgeschlossen","Abgerechnet"].includes(sale.status)).map(calculateSaleProfit).filter(row=>row.profitKnown!==false).reduce((sum,row)=>sum+Number(row.profit||0),0);
-  summary.innerHTML=`<div><small>Liquides Handelskapital</small><strong>${money(liquid)}</strong></div><div><small>Bestand zum bekannten EK</small><strong>${money(stockCost)}</strong><small>${knownStock.length}/${stock.length} Exemplare bekannt</small></div><div><small>Aktueller Inseratswert</small><strong>${money(listingValue)}</strong></div><div><small>Handelsvermögen zum EK</small><strong>${money(liquid+stockCost)}</strong><small>kein Marktwert</small></div><div><small>Realisierter Gewinn</small><strong>${money(realized)}</strong></div>`;
+  summary.innerHTML=`<div><small>Liquides Handelskapital</small><strong>${money(overview.liquid)}</strong></div><div><small>Bestand zum bekannten EK</small><strong>${money(overview.knownStockCost)}</strong><small>${overview.knownCostCount}/${overview.physicalCards} Exemplare bekannt</small></div><div><small>Aktueller Inseratswert</small><strong>${money(overview.listingValue)}</strong><small>nicht liquide</small></div><div><small>Handelsvermögen zum EK</small><strong>${money(overview.tradingWealthAtCost)}</strong><small>Liquidität + bekannter Bestands-EK</small></div><div><small>Realisierter Gewinn</small><strong>${money(realized)}</strong></div>`;
   const typeLabel={cardmarket:"Cardmarket",bank:"Bank",cash:"Kasse",other:"Sonstiges"};
   list.innerHTML=(state.capitalAccounts||[]).length?`<div class="table-wrap"><table><thead><tr><th>Konto</th><th>Typ</th><th>Stand</th><th>Status</th></tr></thead><tbody>${state.capitalAccounts.map(account=>`<tr><td><strong>${escapeHtml(account.name)}</strong>${account.notes?`<small>${escapeHtml(account.notes)}</small>`:""}</td><td>${escapeHtml(typeLabel[account.type]||"Sonstiges")}</td><td><strong>${money(balances.get(account.id)||0)}</strong></td><td>${account.active===false?"Inaktiv":"Aktiv"}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">Noch kein Handelskonto angelegt. Lege zuerst Cardmarket, Bank, Kasse oder ein anderes Konto mit seinem Startstand an.</div>`;
+}
+
+function renderCapitalView(){
+  const summary=document.getElementById("capitalPageSummary"),accountsTarget=document.getElementById("capitalPageAccounts"),historyTarget=document.getElementById("capitalPageHistory");
+  if(!summary||!accountsTarget||!historyTarget)return;
+  const overview=phase2CapitalOverview();
+  const labels={cardmarket:"Cardmarket",bank:"Bank",cash:"Kasse",other:"Sonstiges"};
+  summary.innerHTML=`
+    <div><small>Liquides Handelskapital</small><strong>${money(overview.liquid)}</strong></div>
+    <div><small>Cardmarket</small><strong>${money(overview.byType.cardmarket)}</strong></div>
+    <div><small>Bank</small><strong>${money(overview.byType.bank)}</strong></div>
+    <div><small>Kasse</small><strong>${money(overview.byType.cash)}</strong></div>
+    <div><small>Sonstiges</small><strong>${money(overview.byType.other)}</strong></div>
+    <div><small>Bekannter Bestands-EK</small><strong>${money(overview.knownStockCost)}</strong><small>${overview.knownCostCount}/${overview.physicalCards} Exemplare mit bekanntem EK</small></div>
+    <div><small>Handelsvermögen zum EK</small><strong>${money(overview.tradingWealthAtCost)}</strong><small>Liquidität + bekannter Bestands-EK</small></div>
+    <div><small>Inseratswert</small><strong>${money(overview.listingValue)}</strong><small>davon ${money(overview.unknownListingValue)} mit unbekanntem EK · nicht liquide</small></div>`;
+  const totals=overview.entryTotals||{};
+  summary.innerHTML+=`
+    <div><small>Einzahlungen</small><strong>${money(Math.abs(Number(totals.deposit||0)))}</strong></div>
+    <div><small>Auszahlungen</small><strong>${money(Math.abs(Number(totals.withdrawal||0)))}</strong></div>
+    <div><small>Verkäufe</small><strong>${money(Math.abs(Number(totals.sale||0)))}</strong></div>
+    <div><small>Einkäufe</small><strong>${money(Math.abs(Number(totals.purchase||0)))}</strong></div>
+    <div><small>Gebühren</small><strong>${money(Math.abs(Number(totals.fee||0)))}</strong></div>
+    <div><small>Erstattungen</small><strong>${money(Math.abs(Number(totals.refund||0)))}</strong></div>
+    <div><small>Korrekturen</small><strong class="${Number(totals.correction||0)<0?"money-negative":"money-positive"}">${money(Number(totals.correction||0))}</strong></div>
+    <div><small>Umbuchungsvolumen</small><strong>${money(Number(totals.transfer||0))}</strong><small>ändert die Gesamtliquidität nicht</small></div>`;
+  accountsTarget.innerHTML=overview.accounts.length?`<div class="table-wrap"><table><thead><tr><th>Konto</th><th>Kategorie</th><th>Stand</th><th>Status</th></tr></thead><tbody>${overview.accounts.map(account=>`<tr><td><strong>${escapeHtml(account.name||"Ohne Namen")}</strong>${account.notes?`<br><small>${escapeHtml(account.notes)}</small>`:""}</td><td>${escapeHtml(labels[account.type]||"Sonstiges")}</td><td class="${account.balance<0?"money-negative":""}"><strong>${money(account.balance)}</strong></td><td>${account.active===false?"Inaktiv":"Aktiv"}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">Noch kein Kapitalkonto angelegt. Lege zum Beispiel dein Cardmarket-Guthaben mit dem richtigen Stichtag als Startstand an.</div>`;
+  const accountNames=new Map((state.capitalAccounts||[]).map(account=>[account.id,account.name]));
+  const typeLabels={opening:"Startstand",deposit:"Einzahlung",withdrawal:"Auszahlung",purchase:"Einkauf bezahlt",sale:"Verkauf erhalten",fee:"Gebühr",refund:"Erstattung",correction:"Korrektur",transfer:"Umbuchung"};
+  const entries=[...(state.capitalEntries||[])].filter(entry=>!entry.archived).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))||String(b.id||"").localeCompare(String(a.id||"")));
+  historyTarget.innerHTML=entries.length?`<div class="table-wrap"><table><thead><tr><th>Datum</th><th>Konto</th><th>Art</th><th>Grund</th><th>Betrag</th></tr></thead><tbody>${entries.map(entry=>`<tr class="${Number(entry.amount||0)<0?"movement-row-negative":"movement-row-positive"}"><td>${fmtDate(entry.date)||"–"}</td><td>${escapeHtml(accountNames.get(entry.accountId)||"Unbekannt")}</td><td>${escapeHtml(typeLabels[entry.type]||entry.type||"Buchung")}</td><td>${escapeHtml(entry.description||"–")}</td><td class="${Number(entry.amount||0)<0?"money-negative":"money-positive"}"><strong>${Number(entry.amount||0)>0?"+":""}${money(entry.amount)}</strong></td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">Noch keine Kapitalbuchungen vorhanden.</div>`;
 }
 
 function addCapitalAccount(){
@@ -3141,7 +3381,7 @@ function addCapitalAccount(){
     const accountId=uid();
     state.capitalAccounts.push({id:accountId,name:data.name,type:data.type||"other",currency:"EUR",active:true,notes:data.notes||""});
     state.capitalEntries.push({id:uid(),accountId,type:"opening",date:data.date||todayISO(),amount:Number(data.openingBalance||0),description:"Startstand",source:"manual"});
-    saveState();renderSettings();
+    saveState();renderAll();
   });
 }
 
@@ -3158,7 +3398,7 @@ function addCapitalEntry(){
     const entered=Number(data.amount||0);
     const amount=data.type==="correction"?entered:(negative.has(data.type)?-Math.abs(entered):Math.abs(entered));
     state.capitalEntries.push({id:uid(),accountId:data.accountId,type:data.type,date:data.date||todayISO(),amount,description:data.description||"",source:"manual"});
-    saveState();renderSettings();
+    saveState();renderAll();
   });
 }
 
@@ -3178,7 +3418,7 @@ function addCapitalTransfer(){
     const transferId=uid(),date=data.date||todayISO(),description=data.description||"Umbuchung";
     state.capitalEntries.push({id:uid(),accountId:data.fromAccountId,transferId,type:"transfer",date,amount:-amount,description,source:"manual"});
     state.capitalEntries.push({id:uid(),accountId:data.toAccountId,transferId,type:"transfer",date,amount,description,source:"manual"});
-    saveState();renderSettings();
+    saveState();renderAll();
   });
 }
 
@@ -3201,6 +3441,19 @@ function renderSettings() {
   document.getElementById("settingQuickSellDiscount").value = state.settings.quickSellDiscount ?? 8;
   document.getElementById("settingStockAgeWarning").value = state.settings.stockAgeWarningDays ?? 90;
   document.getElementById("settingStockAgeCritical").value = state.settings.stockAgeCriticalDays ?? 180;
+  document.getElementById("settingPriceGroupA").value = state.settings.priceGroupAFrom ?? 5;
+  document.getElementById("settingPriceGroupB").value = state.settings.priceGroupBFrom ?? 1;
+  document.getElementById("settingPriceGroupC").value = state.settings.priceGroupCFrom ?? 0.20;
+  document.getElementById("settingAgingFresh").value = state.settings.agingFreshMaxDays ?? 14;
+  document.getElementById("settingAgingObserve").value = state.settings.agingObserveMaxDays ?? 30;
+  document.getElementById("settingAgingReview").value = state.settings.agingReviewMaxDays ?? 45;
+  document.getElementById("settingAgingCapital").value = state.settings.agingCapitalMaxDays ?? 60;
+  document.getElementById("settingAgingSlow").value = state.settings.agingSlowMaxDays ?? 90;
+  document.getElementById("settingMarketTrendStable").value = state.settings.marketTrendStablePercent ?? 3;
+  document.getElementById("settingMarketTrendDirectional").value = state.settings.marketTrendDirectionalPercent ?? 6;
+  document.getElementById("settingMarketTrendStrong").value = state.settings.marketTrendStrongPercent ?? 15;
+  document.getElementById("settingMarketPriceNear").value = state.settings.marketPriceNearPercent ?? 5;
+  document.getElementById("settingMarketPriceFar").value = state.settings.marketPriceFarPercent ?? 20;
   document.getElementById("settingScannerEnabled").checked = state.settings.scannerEnabled !== false;
   document.getElementById("settingScannerConfidence").value = state.settings.scannerMinConfidence ?? 80;
   document.getElementById("settingScannerRemember").checked = state.settings.scannerRememberMappings !== false;
@@ -3257,6 +3510,8 @@ function openModal(title, fields, initial={}, onSave, options={}) {
     <label class="${f.full?"full-width":""}">${escapeHtml(f.label)}
       ${f.type==="select"
         ? `<select name="${f.name}">${f.options.map(option=>{const value=typeof option==="object"?option.value:option;const label=typeof option==="object"?option.label:option;return `<option value="${escapeHtml(value)}" ${String(initial[f.name]??f.value??"")===String(value)?"selected":""}>${escapeHtml(label)}</option>`;}).join("")}</select>`
+        : f.type==="checkbox"
+          ? `<input name="${f.name}" type="checkbox" value="true" ${(initial[f.name]??f.value)?"checked":""} />`
         : `<input name="${f.name}" type="${f.type||"text"}" value="${escapeHtml(initial[f.name]??f.value??"")}" ${f.step?`step="${f.step}"`:""} ${f.required?"required":""} />`
       }
     </label>`).join("");
@@ -3650,6 +3905,7 @@ function addInventory(initial={}, collection="business", scan=null) {
     <label class="full-width">Version / Seltenheit<input id="inventoryRarityDisplay" value="${escapeHtml(initial.rarity||"")}" readonly></label>
     <label>Sprache<select name="language">${["DE","EN","DE/EN","IT","FR","ES","PL","NL"].map(value=>`<option ${language===value?"selected":""}>${value}</option>`).join("")}</select></label>
     <label>Zustand<select name="condition">${["NM","EX","GD","LP","PL"].map(value=>`<option ${condition===value?"selected":""}>${value}</option>`).join("")}</select></label>
+    ${isPrivate?"":`<label>Halteprofil<select name="holdingProfile">${(window.TcgBusinessAutomation?.HOLDING_PROFILES||["UNKLASSIFIZIERT"]).map(value=>`<option value="${escapeHtml(value)}" ${(window.TcgBusinessAutomation?.normalizeHoldingProfile?.(initial.holdingProfile)||"UNKLASSIFIZIERT")===value?"selected":""}>${escapeHtml(value)}</option>`).join("")}</select></label><label class="switch-label"><input name="longTermHold" type="checkbox" ${initial.longTermHold?"checked":""}> Bewusst langfristig halten</label>`}
     <label>Edition<select name="edition">${["Unbekannt","1st Edition","Unlimited","Limited Edition"].map(value=>`<option ${edition===value?"selected":""}>${value}</option>`).join("")}</select></label>
     ${initial.id?"":`<label>Stückzahl<input name="quantity" type="number" min="1" max="999" step="1" value="1" required></label>`}
     <label>Einstand (€)<input name="cost" type="number" min="0" step="0.01" value="${Number(initial.cost||0)||""}"></label>
@@ -3665,7 +3921,7 @@ function addInventory(initial={}, collection="business", scan=null) {
   const inventoryObject=data=>{
     const enteredCost=data.cost!==""&&data.cost!==null&&data.cost!==undefined;
     const listingPrice=isPrivate?0:Number(data.listingPrice||0),listed=!isPrivate&&listingPrice>0;
-    const obj={...data,cost:Number(data.cost||0),costStatus:enteredCost?(Number(data.cost)>0?"known":"confirmed_zero"):"unknown",listingPrice,desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed,ownership:isPrivate?"private":"business",holdingProfile:"standard",longTermHold:false,originalTargetSell:null,listingHistory:[]};
+    const obj={...data,cost:Number(data.cost||0),costStatus:enteredCost?(Number(data.cost)>0?"known":"confirmed_zero"):"unknown",listingPrice,desiredSalePrice:isPrivate?Number(data.desiredSalePrice||0):0,suggestedSell:Number(data.suggestedSell||0),listed,ownership:isPrivate?"private":"business",holdingProfile:isPrivate?"UNKLASSIFIZIERT":(window.TcgBusinessAutomation?.normalizeHoldingProfile?.(data.holdingProfile)||"UNKLASSIFIZIERT"),longTermHold:!isPrivate&&Boolean(data.longTermHold),originalTargetSell:null,listingHistory:[]};
     if(listed)obj.listingHistory.push({id:uid(),eventType:"first_listing",changedAt:new Date().toISOString(),oldPrice:null,newPrice:listingPrice,changeMode:"manual",reason:"Beim Anlegen inseriert"});
     delete obj.quantity;
     if(scan?.fingerprint){obj.scanFingerprint=scan.fingerprint;obj.scanSource="iPhone";if(state.settings.scannerKeepImages)obj.scanImageDataUrl=scan.imageDataUrl;}
@@ -3924,7 +4180,7 @@ function purchaseLineAssetBase(purchase,row){
     collectorNumber:item.collectorNumber||item.setCode||"",productUrl:item.productUrl||"",cost:Number(row.unitCost||0),costStatus:Number(row.unitCost||0)>0?"known":"confirmed_zero",
     purchaseDate:purchase.date||todayISO(),receivedDate:todayISO(),location:"",source:"Einkauf / Wareneingang",
     lotId:purchase.orderNo||purchase.id,importKey:purchase.importKey||purchase.orderNo||purchase.id,sourceRow:item.sourceRow,
-    purchaseId:purchase.id,purchaseLineKey:`${purchase.id}:${row.receipt.key}`,ownership:"business",holdingProfile:"standard",longTermHold:false,originalTargetSell:null,listingHistory:[]
+    purchaseId:purchase.id,purchaseLineKey:`${purchase.id}:${row.receipt.key}`,ownership:"business",holdingProfile:"UNKLASSIFIZIERT",longTermHold:false,originalTargetSell:null,listingHistory:[]
   };
 }
 
@@ -4635,7 +4891,7 @@ async function importStock(file) {
     });
     const addCount=Math.max(0,row.quantity-activeSnapshotItems.length);
     for(let n=0;n<addCount;n++){
-      const item={id:uid(),...metadata,cost:0,costStatus:"unknown",purchaseDate:todayISO(),status:"Im Bestand",location:"",source:"Cardmarket-Bestandsabgleich",importKey:key,lotId:key,sourceRow:row.sourceRow,movementRecorded:true,holdingProfile:"standard",longTermHold:false,originalTargetSell:null,listingHistory:row.offerPrice>0?[{id:uid(),eventType:"baseline",changedAt:new Date().toISOString(),oldPrice:null,newPrice:row.offerPrice,changeMode:"import",reason:"Cardmarket-Bestandsimport"}]:[]};
+      const item={id:uid(),...metadata,cost:0,costStatus:"unknown",purchaseDate:todayISO(),status:"Im Bestand",location:"",source:"Cardmarket-Bestandsabgleich",importKey:key,lotId:key,sourceRow:row.sourceRow,movementRecorded:true,holdingProfile:"UNKLASSIFIZIERT",longTermHold:false,originalTargetSell:null,listingHistory:row.offerPrice>0?[{id:uid(),eventType:"baseline",changedAt:new Date().toISOString(),oldPrice:null,newPrice:row.offerPrice,changeMode:"import",reason:"Cardmarket-Bestandsimport"}]:[]};
       state.inventory.push(item);createdIds.push(item.id);
     }
     const delta=addCount-removeIds.size;
@@ -5474,10 +5730,10 @@ window.addEventListener("mouseup",event=>{
   else if(event.button===4){event.preventDefault();navigateForward();}
 });
 
-["inventorySearch","privateSearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch"].forEach(id=>document.getElementById(id).addEventListener("input",renderAll));
+["inventorySearch","privateSearch","purchaseSearch","salesSearch","watchSearch","materialSearch","expenseSearch","slowMoverSearch","slowMoverPriceMin","slowMoverPriceMax"].forEach(id=>document.getElementById(id)?.addEventListener("input",renderAll));
 // Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
 // während des Öffnens würde das native Auswahlmenü sofort wieder schließen.
-["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryStockFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter","wantlistShowArchived","expenseCategoryFilter","expenseTypeFilter"].forEach(id=>document.getElementById(id).addEventListener("change",renderAll));
+["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryStockFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter","wantlistShowArchived","expenseCategoryFilter","expenseTypeFilter","slowMoverAgeFilter","slowMoverPriceGroup","slowMoverProfile","slowMoverCost","slowMoverLongTerm","slowMoverLanguage","slowMoverCondition","slowMoverTrend","slowMoverRecommendation","slowMoverProfitTarget","slowMoverSort"].forEach(id=>document.getElementById(id)?.addEventListener("change",renderAll));
 
 document.getElementById("inventoryFilterReset").onclick=()=>{["inventorySearch","inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter"].forEach(id=>document.getElementById(id).value="");document.getElementById("inventoryStockFilter").value="current";document.getElementById("inventorySort").value="name";renderAll();};
 document.getElementById("privateFilterReset").onclick=()=>{["privateSearch","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
@@ -5485,6 +5741,7 @@ document.getElementById("purchaseFilterReset").onclick=()=>{["purchaseSearch","p
 document.getElementById("salesFilterReset").onclick=()=>{["salesSearch","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 document.getElementById("watchFilterReset").onclick=()=>{["watchSearch","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter"].forEach(id=>document.getElementById(id).value="");renderAll();};
 document.getElementById("wantlistFilterReset").onclick=()=>{["wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter"].forEach(id=>document.getElementById(id).value="");document.getElementById("wantlistShowArchived").checked=false;renderAll();};
+document.getElementById("slowMoverFilterReset").onclick=()=>{["slowMoverSearch","slowMoverAgeFilter","slowMoverPriceGroup","slowMoverProfile","slowMoverCost","slowMoverLongTerm","slowMoverLanguage","slowMoverCondition","slowMoverTrend","slowMoverRecommendation","slowMoverProfitTarget","slowMoverPriceMin","slowMoverPriceMax"].forEach(id=>document.getElementById(id).value="");document.getElementById("slowMoverSort").value="age-desc";renderAll();};
 
 document.getElementById("addInventoryBtn").onclick=()=>addInventory();
 document.getElementById("addPrivateBtn").onclick=()=>addInventory({},"private");
@@ -5518,6 +5775,9 @@ document.getElementById("demandFilterReset").onclick=()=>{["demandCategoryFilter
 document.getElementById("addSellerBtn").onclick=()=>addPartner("seller");
 document.getElementById("addCustomerBtn").onclick=()=>addPartner("customer");
 document.getElementById("quickAddBtn").onclick=()=>addInventory();
+document.getElementById("capitalAddAccountBtn").onclick=addCapitalAccount;
+document.getElementById("capitalAddEntryBtn").onclick=addCapitalEntry;
+document.getElementById("capitalAddTransferBtn").onclick=addCapitalTransfer;
 
 document.body.addEventListener("click",e=>{
   const wantButton=e.target.closest("[data-want-to-watch], [data-toggle-want-archive], [data-assign-want-variant]");
@@ -5628,6 +5888,19 @@ document.getElementById("saveSettingsBtn").onclick=()=>{
     quickSellDiscount:Number(document.getElementById("settingQuickSellDiscount").value||0),
     stockAgeWarningDays:Number(document.getElementById("settingStockAgeWarning").value||90),
     stockAgeCriticalDays:Number(document.getElementById("settingStockAgeCritical").value||180),
+    priceGroupAFrom:Number(document.getElementById("settingPriceGroupA").value||5),
+    priceGroupBFrom:Number(document.getElementById("settingPriceGroupB").value||1),
+    priceGroupCFrom:Number(document.getElementById("settingPriceGroupC").value||0.20),
+    agingFreshMaxDays:Number(document.getElementById("settingAgingFresh").value||14),
+    agingObserveMaxDays:Number(document.getElementById("settingAgingObserve").value||30),
+    agingReviewMaxDays:Number(document.getElementById("settingAgingReview").value||45),
+    agingCapitalMaxDays:Number(document.getElementById("settingAgingCapital").value||60),
+    agingSlowMaxDays:Number(document.getElementById("settingAgingSlow").value||90),
+    marketTrendStablePercent:Number(document.getElementById("settingMarketTrendStable").value||3),
+    marketTrendDirectionalPercent:Number(document.getElementById("settingMarketTrendDirectional").value||6),
+    marketTrendStrongPercent:Number(document.getElementById("settingMarketTrendStrong").value||15),
+    marketPriceNearPercent:Number(document.getElementById("settingMarketPriceNear").value||5),
+    marketPriceFarPercent:Number(document.getElementById("settingMarketPriceFar").value||20),
     themeMode:document.getElementById("settingThemeMode").value,
     density:document.getElementById("settingDensity").value,
     startView:document.getElementById("settingStartView").value,
@@ -5849,6 +6122,18 @@ globalSearchResults.onclick=event=>{const button=event.target.closest("[data-glo
 document.addEventListener("click",event=>{if(!event.target.closest(".global-search-wrap"))globalSearchResults.hidden=true;});
 document.addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();globalSearch.focus();globalSearch.select();}});
 document.addEventListener("click",event=>{
+  const phase3Filter=event.target.closest("[data-phase3-filter]");
+  if(phase3Filter){
+    const filter=phase3Filter.dataset.phase3Filter;
+    showView("slowmovers");
+    ["slowMoverTrend","slowMoverRecommendation","slowMoverProfitTarget"].forEach(id=>{const field=document.getElementById(id);if(field)field.value="";});
+    if(filter==="falling")document.getElementById("slowMoverTrend").value="falling";
+    if(filter==="rising")document.getElementById("slowMoverTrend").value="rising";
+    if(filter==="price-review")document.getElementById("slowMoverRecommendation").value="review";
+    if(filter==="target")document.getElementById("slowMoverProfitTarget").value="risk";
+    renderAll();
+    return;
+  }
   const repair=event.target.closest("[data-repair-action]");
   if(repair){
     const action=repair.dataset.repairAction,recordId=repair.dataset.recordId;
@@ -5884,6 +6169,7 @@ initAutomation();
 refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
   console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);
 });
+refreshMarketDecisionHistory(true);
 
 // Beim ersten Start der Desktop-Version wird der vorhandene Browserstand
 // automatisch in die dauerhafte SQLite-Datei übernommen.

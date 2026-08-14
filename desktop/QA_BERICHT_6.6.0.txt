@@ -1,0 +1,28 @@
+QA-Bericht TCG Business Manager 6.6.0
+
+Automatische Prüfungen:
+- JavaScript-Syntax aller Haupt-, Renderer-, Scanner- und Hilfsdateien: BESTANDEN
+- 91 automatisierte Fach- und Datenbanktests: BESTANDEN
+- Alle 82 vorhandenen Tests aus Phase 1 weiterhin erfolgreich: BESTANDEN
+- Bestands- und Inseratsalter einschließlich unbekannter Daten: BESTANDEN
+- Aging-Grenzen, Preisgruppen, Halteprofile und Langsamdreher-Filter: BESTANDEN
+- Kapitalübersicht ohne Doppelzählung oder unbekannten EK als 0 Euro: BESTANDEN
+- Keine automatische Veränderung von Inseratspreisen: BESTANDEN
+- Deutsche/englische Suche und Price-Guide-Funktionen weiterhin erfolgreich: BESTANDEN
+
+Reale Datenbank-Testkopie:
+- Originaldatenbank ausschließlich schreibgeschützt geöffnet: BESTANDEN
+- SQLite-Integrität von Original und Testkopie: BESTANDEN
+- Schema 9 unverändert erhalten: BESTANDEN
+- 890 Bestandskarten, 14 private Karten, 9 Einkäufe und 49 Verkäufe erhalten
+- Phase-2-Auswertung verändert den gespeicherten Zustand nicht: BESTANDEN
+- Originalgröße und Änderungszeit blieben unverändert: BESTANDEN
+
+Windows-Oberfläche und Installer:
+- Windows-Installer 6.6.0 erfolgreich erstellt: BESTANDEN
+- Gepackte App startet mit Titel und Version 6.6.0: BESTANDEN
+- Dashboard, Kapital, Langsamdreher, Filter, Einstellungen und Bestandsansicht: BESTANDEN
+- Keine automatische Preisänderung beim Anzeigen oder Filtern: BESTANDEN
+- Bestandsschutz, Druckdatenreparatur und Verkaufszuordnung aus Phase 1: BESTANDEN
+- Scanner-Brücke, Serienmodus und lokale Erkennungsbausteine verfügbar: BESTANDEN
+- Dark-Mode-Kontrast aller geprüften Komponenten mindestens 8,76:1: BESTANDEN

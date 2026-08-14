@@ -1,0 +1,18 @@
+TCG Business Manager 6.6.0 – Phase 2 Handelsübersicht
+
+- Neues Handels-Dashboard mit Liquidität, Handelsvermögen auf EK-Basis,
+  Bestandswerten, realisiertem Ergebnis und wirtschaftlicher Altersübersicht.
+- Neuer Kapitalbereich mit Konten, Startständen, manuellen Buchungen,
+  Korrekturen, Umbuchungen, Kategorie-Summen und vollständiger Historie.
+- Bestandsalter und belegtes Inseratsalter werden getrennt berechnet.
+- Historische Inserats-Baselines und alte Bestands-Snapshots erzeugen kein
+  erfundenes Startdatum; das Alter bleibt in diesen Fällen sichtbar unbekannt.
+- Konfigurierbare Aging-Stufen und Preisgruppen A bis D.
+- Manuelle Halteprofile sowie Kennzeichnung „Langfristig halten“.
+- Neuer filter- und sortierbarer Bereich „Langsamdreher“ mit EK, VK, Marge,
+  ROI, Price-Guide-Referenz, Alter, Profil und nachvollziehbarer Empfehlung.
+- Bestandsliste und Einzelkartendetails um die neuen Handelskennzahlen ergänzt.
+- Price Guide bleibt klar als gespeicherter Referenzwert gekennzeichnet;
+  es werden keine Inseratspreise automatisch geändert.
+- 91 automatisierte Tests sowie Prüfung auf einer Kopie der echten Datenbank.
+- Keine Funktionen aus Phase 3 oder der Foto-/Sammlungsanalyse begonnen.

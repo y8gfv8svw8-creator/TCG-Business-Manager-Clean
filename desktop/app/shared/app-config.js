@@ -20,6 +20,21 @@
     quickSellDiscount: 8,
     stockAgeWarningDays: 90,
     stockAgeCriticalDays: 180,
+    priceGroupAFrom: 5,
+    priceGroupBFrom: 1,
+    priceGroupCFrom: 0.20,
+    agingFreshMaxDays: 14,
+    agingObserveMaxDays: 30,
+    agingReviewMaxDays: 45,
+    agingCapitalMaxDays: 60,
+    agingSlowMaxDays: 90,
+    marketTrendStablePercent: 3,
+    marketTrendDirectionalPercent: 6,
+    marketTrendStrongPercent: 15,
+    marketPriceNearPercent: 5,
+    marketPriceFarPercent: 20,
+    marketHistoryMinPoints: 3,
+    marketHistoryMaxGapDays: 7,
     themeMode: 'system',
     density: 'comfortable',
     startView: 'dashboard',
@@ -40,7 +55,7 @@
   const VALID_DENSITIES = new Set(['comfortable', 'compact']);
   const VALID_VIEWS = new Set([
     'dashboard', 'inventory', 'private', 'purchases', 'sales', 'materials',
-    'expenses', 'watchlist', 'buying', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
+    'expenses', 'capital', 'slowmovers', 'watchlist', 'buying', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
   ]);
   const VALID_ALLOCATION_STRATEGIES = new Set(['fifo', 'lowest-cost', 'highest-cost', 'manual']);
 
@@ -74,6 +89,21 @@
     normalized.quickSellDiscount = number(source.quickSellDiscount, DEFAULT_SETTINGS.quickSellDiscount, 0, 50);
     normalized.stockAgeWarningDays = Math.round(number(source.stockAgeWarningDays, DEFAULT_SETTINGS.stockAgeWarningDays, 1, 3650));
     normalized.stockAgeCriticalDays = Math.round(number(source.stockAgeCriticalDays, DEFAULT_SETTINGS.stockAgeCriticalDays, normalized.stockAgeWarningDays, 3650));
+    normalized.priceGroupCFrom = number(source.priceGroupCFrom, DEFAULT_SETTINGS.priceGroupCFrom, 0, 1000000);
+    normalized.priceGroupBFrom = Math.max(normalized.priceGroupCFrom + 0.01, number(source.priceGroupBFrom, DEFAULT_SETTINGS.priceGroupBFrom, 0, 1000000));
+    normalized.priceGroupAFrom = Math.max(normalized.priceGroupBFrom + 0.01, number(source.priceGroupAFrom, DEFAULT_SETTINGS.priceGroupAFrom, 0, 1000000));
+    normalized.agingFreshMaxDays = Math.round(number(source.agingFreshMaxDays, DEFAULT_SETTINGS.agingFreshMaxDays, 0, 3650));
+    normalized.agingObserveMaxDays = Math.round(Math.max(normalized.agingFreshMaxDays + 1, number(source.agingObserveMaxDays, DEFAULT_SETTINGS.agingObserveMaxDays, 1, 3650)));
+    normalized.agingReviewMaxDays = Math.round(Math.max(normalized.agingObserveMaxDays + 1, number(source.agingReviewMaxDays, DEFAULT_SETTINGS.agingReviewMaxDays, 2, 3650)));
+    normalized.agingCapitalMaxDays = Math.round(Math.max(normalized.agingReviewMaxDays + 1, number(source.agingCapitalMaxDays, DEFAULT_SETTINGS.agingCapitalMaxDays, 3, 3650)));
+    normalized.agingSlowMaxDays = Math.round(Math.max(normalized.agingCapitalMaxDays + 1, number(source.agingSlowMaxDays, DEFAULT_SETTINGS.agingSlowMaxDays, 4, 3650)));
+    normalized.marketTrendStablePercent = number(source.marketTrendStablePercent, DEFAULT_SETTINGS.marketTrendStablePercent, 0, 100);
+    normalized.marketTrendDirectionalPercent = Math.max(normalized.marketTrendStablePercent, number(source.marketTrendDirectionalPercent, DEFAULT_SETTINGS.marketTrendDirectionalPercent, 0, 500));
+    normalized.marketTrendStrongPercent = Math.max(normalized.marketTrendDirectionalPercent, number(source.marketTrendStrongPercent, DEFAULT_SETTINGS.marketTrendStrongPercent, 0, 1000));
+    normalized.marketPriceNearPercent = number(source.marketPriceNearPercent, DEFAULT_SETTINGS.marketPriceNearPercent, 0, 100);
+    normalized.marketPriceFarPercent = Math.max(normalized.marketPriceNearPercent, number(source.marketPriceFarPercent, DEFAULT_SETTINGS.marketPriceFarPercent, 0, 1000));
+    normalized.marketHistoryMinPoints = Math.round(number(source.marketHistoryMinPoints, DEFAULT_SETTINGS.marketHistoryMinPoints, 2, 3650));
+    normalized.marketHistoryMaxGapDays = Math.round(number(source.marketHistoryMaxGapDays, DEFAULT_SETTINGS.marketHistoryMaxGapDays, 0, 365));
     normalized.scannerMinConfidence = Math.round(number(source.scannerMinConfidence, DEFAULT_SETTINGS.scannerMinConfidence, 0, 100));
     normalized.backupRetentionDays = Math.round(number(source.backupRetentionDays, DEFAULT_SETTINGS.backupRetentionDays, 1, 3650));
     normalized.condition = String(source.condition || DEFAULT_SETTINGS.condition).trim() || DEFAULT_SETTINGS.condition;

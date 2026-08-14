@@ -1,0 +1,30 @@
+TCG Business Manager 6.7.0 – Phase 3 Markt- und Preisentscheidungen
+
+- Neue regelbasierte Markt-, Preistrend- und Verkaufsentscheidungs-Engine.
+- Jede Marktanalyse verwendet ausschließlich die konkrete Cardmarket-Produkt-ID
+  und damit die exakte Druckvariante; Kartennamen werden nicht zur Preiszuordnung
+  verwendet.
+- Gespeicherte Cardmarket-Price-Guide-Tagesstände werden für Veränderungen über
+  1, 7 und 30 Tage sowie seit Einkauf und Erstinserierung ausgewertet.
+- Markttrends werden aus mehreren Zeiträumen als stark steigend, steigend,
+  stabil, fallend, stark fallend oder unzureichend eingestuft.
+- Eigene Inseratspreise werden relativ zur gespeicherten Price-Guide-Referenz
+  eingeordnet, ohne einen Vergleich mit aktuellen Cardmarket-Angeboten zu
+  behaupten.
+- Gewinnziel, Break-even, Mindestgewinn und Mindest-ROI werden mit der bereits
+  vorhandenen Gebühren- und Verpackungskostenlogik berechnet.
+- Szenarien für aktuellen VK, Referenzwert, Break-even und Ziel-VK zeigen
+  Rohmarge, erwarteten Gewinn und ROI je Exemplar.
+- Empfehlungen berücksichtigen Datenqualität, Markttrend, Einkauf, Inserat,
+  Bestandsalter, Halteprofil und langfristiges Halten. Alter allein löst keine
+  Preisreduktions-Empfehlung aus.
+- Einzelkartendetails, Langsamdreher und Dashboard wurden gezielt um die neuen
+  Marktentscheidungen, Filter und Begründungen erweitert.
+- Empfehlungen und Preisaktionen bleiben getrennt. Es werden niemals
+  Inseratspreise automatisch geändert.
+- Keine Cardmarket-API und keine behaupteten Live-Angebotsdaten. Angezeigt
+  werden gespeicherte Price-Guide- und Angebotsbeobachtungen mit klarer Quelle.
+- SQLite-Schema 9 bleibt unverändert; es wurde kein paralleles Preissystem
+  angelegt.
+- 108 automatisierte Tests, Prüfung auf einer Kopie der echten Datenbank und
+  Smoke-Test der gepackten Windows-Anwendung bestanden.

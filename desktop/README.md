@@ -1,4 +1,4 @@
-# TCG Business Manager – Analysecenter 6.5.3
+# TCG Business Manager – Analysecenter 6.7.0
 
 Diese Version aktiviert die dauerhafte lokale SQLite-Datenbank.
 
@@ -39,6 +39,11 @@ Cardmarket-Abrechnungen können als CSV über den Universal-Import eingelesen we
 - Wantlisten werden nach Geschäftsbestand, Privatsammlung, Meta-Beobachtung, konkretem Deck oder Nachkauf getrennt; Folgeimporte archivieren entfernte Wünsche und erhalten Historie sowie Notizen.
 - Kaufempfehlungen trennen Price-Guide-Marktwert, berechneten maximalen vollständigen EK und die eigene Wantlist-Preisgrenze sichtbar voneinander.
 - Preisprüfung eigener Bestände markiert Inserate, deren Preis vom aktuellen marktgestützten VK abweicht oder nicht kostendeckend wäre.
+- Print-genaue Markt- und Preisentscheidungen verwenden ausschließlich die konkrete Cardmarket-Produkt-ID und gespeicherte Price-Guide-Tagesstände.
+- Nachvollziehbare 1-/7-/30-Tage-Trends, Vergleiche seit Einkauf und Erstinserierung sowie klar gekennzeichnete Datenqualität.
+- Regelbasierte Empfehlungen trennen Prüfung und Entscheidung strikt von Preisänderungen; das Programm ändert niemals automatisch einen Inseratspreis.
+- Einzelkartendetails zeigen Markt, eigenen Handel, Break-even, Mindestgewinn, Mindest-ROI und Verkaufsszenarien getrennt voneinander.
+- Langsamdreher und Dashboard enthalten anklickbare Markt-, Gewinnziel- und Preisprüfhinweise ohne behauptete Live-Angebotsdaten.
 - Warenkorb-Gesamtentscheidung berücksichtigt Kartenpreis, Einkaufsversand, Zusatzkosten, privaten Anteil, Gebühren, Verpackung und Mindest-ROI.
 - Nachfrage- und Shop-Radar für öffentliche TCG-Staples sowie gekennzeichnete CSV-/JSON-Deck- und Turnierdaten.
 - Statusverläufe für Zahlung, Lieferung, Versand und Abrechnung bleiben dauerhaft nachvollziehbar.

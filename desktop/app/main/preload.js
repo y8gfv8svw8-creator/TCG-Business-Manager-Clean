@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getCardNameBackup: () => ipcRenderer.invoke('data:get-card-name-backup'),
   upsertMarketPrices: payload => ipcRenderer.invoke('data:upsert-market-prices', payload),
   getMarketHistory: payload => ipcRenderer.invoke('data:get-market-history', payload),
+  getMarketDecisionHistory: payload => ipcRenderer.invoke('data:get-market-decision-history', payload),
   getMarketOverview: payload => ipcRenderer.invoke('data:get-market-overview', payload),
   getSnapshotDates: payload => ipcRenderer.invoke('data:get-snapshot-dates', payload),
   clearMarketData: () => ipcRenderer.invoke('data:clear-market-data'),

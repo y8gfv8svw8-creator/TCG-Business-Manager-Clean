@@ -599,3 +599,83 @@ CREATE TABLE IF NOT EXISTS pricing_recommendation_history (
   explanation_json TEXT NOT NULL DEFAULT '[]',
   PRIMARY KEY(product_id, calculated_date, model_version)
 );
+
+-- Schema 11: Eine Sammlungsanalyse ist noch kein Einkauf. app_state bleibt
+-- fuehrend; diese Tabellen sind die normalisierte, transaktionale Analysesicht.
+CREATE TABLE IF NOT EXISTS collection_purchase_analyses (
+  analysis_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT '',
+  seller_name TEXT NOT NULL DEFAULT '',
+  source_url TEXT NOT NULL DEFAULT '',
+  analysis_date TEXT NOT NULL DEFAULT '',
+  seller_price REAL NOT NULL DEFAULT 0,
+  shipping REAL NOT NULL DEFAULT 0,
+  extra_cost REAL NOT NULL DEFAULT 0,
+  actual_purchase_price REAL,
+  decision TEXT NOT NULL DEFAULT 'ZU WENIGE DATEN',
+  blind_max_ek REAL,
+  confirmed_max_ek REAL,
+  first_offer REAL,
+  conservative_value REAL,
+  potential_value REAL,
+  linked_purchase_id TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_purchase_items (
+  item_id TEXT PRIMARY KEY,
+  analysis_id TEXT NOT NULL,
+  product_id TEXT NOT NULL DEFAULT '',
+  card_name TEXT NOT NULL DEFAULT '',
+  set_name TEXT NOT NULL DEFAULT '',
+  collector_number TEXT NOT NULL DEFAULT '',
+  rarity TEXT NOT NULL DEFAULT '',
+  quantity INTEGER NOT NULL DEFAULT 1,
+  card_condition TEXT NOT NULL DEFAULT 'UNBEKANNT',
+  language TEXT NOT NULL DEFAULT '',
+  print_confidence TEXT NOT NULL DEFAULT 'unknown',
+  reference_value REAL,
+  conservative_value REAL,
+  potential_value REAL,
+  max_ek_contribution REAL,
+  economic_relevant INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(analysis_id) REFERENCES collection_purchase_analyses(analysis_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_purchase_items_analysis
+ON collection_purchase_items(analysis_id, archived);
+
+CREATE INDEX IF NOT EXISTS idx_collection_purchase_items_product
+ON collection_purchase_items(product_id, archived);
+
+CREATE TABLE IF NOT EXISTS collection_purchase_decision_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  analysis_id TEXT NOT NULL,
+  decided_at TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  seller_price REAL NOT NULL DEFAULT 0,
+  total_cost REAL NOT NULL DEFAULT 0,
+  nominal_value REAL,
+  realistic_value REAL,
+  conservative_value REAL,
+  potential_value REAL,
+  uncertainty_value REAL,
+  bulk_value REAL,
+  blind_max_ek REAL,
+  confirmed_max_ek REAL,
+  first_offer REAL,
+  actual_purchase_price REAL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(analysis_id) REFERENCES collection_purchase_analyses(analysis_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_purchase_snapshots_analysis
+ON collection_purchase_decision_snapshots(analysis_id, decided_at DESC, archived);

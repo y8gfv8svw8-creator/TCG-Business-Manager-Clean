@@ -35,6 +35,30 @@
     marketPriceFarPercent: 20,
     marketHistoryMinPoints: 3,
     marketHistoryMaxGapDays: 7,
+    collectionClassAFrom: 10,
+    collectionClassBFrom: 5,
+    collectionClassCFrom: 1,
+    collectionClassDFrom: 0.20,
+    collectionFactorA: 60,
+    collectionFactorB: 47.5,
+    collectionFactorC: 32.5,
+    collectionFactorD: 15,
+    collectionBulkPerCard: 0.01,
+    collectionFirstOfferPercent: 75,
+    collectionEconomicRelevance: 3,
+    collectionMinimumSafetyPercent: 5,
+    collectionUnknownConditionRiskPercent: 8,
+    collectionLikelyPrintRiskPercent: 7,
+    collectionUnknownPrintRiskPercent: 20,
+    collectionFallingMarketRiskPercent: 7,
+    collectionStrongFallingRiskPercent: 12,
+    collectionWeakDataRiskPercent: 5,
+    collectionHighQuantityDiscountPercent: 8,
+    collectionHighQuantityFrom: 5,
+    collectionLowValueEffortPercent: 5,
+    collectionConcentrationThresholdPercent: 75,
+    collectionCapitalMediumPercent: 25,
+    collectionCapitalHighPercent: 50,
     themeMode: 'system',
     density: 'comfortable',
     startView: 'dashboard',
@@ -55,7 +79,7 @@
   const VALID_DENSITIES = new Set(['comfortable', 'compact']);
   const VALID_VIEWS = new Set([
     'dashboard', 'inventory', 'private', 'purchases', 'sales', 'materials',
-    'expenses', 'capital', 'slowmovers', 'watchlist', 'buying', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
+    'expenses', 'capital', 'slowmovers', 'watchlist', 'buying', 'collectionpurchases', 'salesanalysis', 'cardmarket', 'partners', 'imports', 'reports', 'settings'
   ]);
   const VALID_ALLOCATION_STRATEGIES = new Set(['fifo', 'lowest-cost', 'highest-cost', 'manual']);
 
@@ -104,6 +128,30 @@
     normalized.marketPriceFarPercent = Math.max(normalized.marketPriceNearPercent, number(source.marketPriceFarPercent, DEFAULT_SETTINGS.marketPriceFarPercent, 0, 1000));
     normalized.marketHistoryMinPoints = Math.round(number(source.marketHistoryMinPoints, DEFAULT_SETTINGS.marketHistoryMinPoints, 2, 3650));
     normalized.marketHistoryMaxGapDays = Math.round(number(source.marketHistoryMaxGapDays, DEFAULT_SETTINGS.marketHistoryMaxGapDays, 0, 365));
+    normalized.collectionClassDFrom = number(source.collectionClassDFrom, DEFAULT_SETTINGS.collectionClassDFrom, 0, 1000000);
+    normalized.collectionClassCFrom = Math.max(normalized.collectionClassDFrom + 0.01, number(source.collectionClassCFrom, DEFAULT_SETTINGS.collectionClassCFrom, 0, 1000000));
+    normalized.collectionClassBFrom = Math.max(normalized.collectionClassCFrom + 0.01, number(source.collectionClassBFrom, DEFAULT_SETTINGS.collectionClassBFrom, 0, 1000000));
+    normalized.collectionClassAFrom = Math.max(normalized.collectionClassBFrom + 0.01, number(source.collectionClassAFrom, DEFAULT_SETTINGS.collectionClassAFrom, 0, 1000000));
+    normalized.collectionFactorA = number(source.collectionFactorA, DEFAULT_SETTINGS.collectionFactorA, 55, 65);
+    normalized.collectionFactorB = number(source.collectionFactorB, DEFAULT_SETTINGS.collectionFactorB, 40, 55);
+    normalized.collectionFactorC = number(source.collectionFactorC, DEFAULT_SETTINGS.collectionFactorC, 25, 40);
+    normalized.collectionFactorD = number(source.collectionFactorD, DEFAULT_SETTINGS.collectionFactorD, 10, 20);
+    normalized.collectionBulkPerCard = number(source.collectionBulkPerCard, DEFAULT_SETTINGS.collectionBulkPerCard, 0, 1);
+    normalized.collectionFirstOfferPercent = number(source.collectionFirstOfferPercent, DEFAULT_SETTINGS.collectionFirstOfferPercent, 25, 100);
+    normalized.collectionEconomicRelevance = number(source.collectionEconomicRelevance, DEFAULT_SETTINGS.collectionEconomicRelevance, 0, 1000000);
+    normalized.collectionMinimumSafetyPercent = number(source.collectionMinimumSafetyPercent, DEFAULT_SETTINGS.collectionMinimumSafetyPercent, 1, 50);
+    normalized.collectionUnknownConditionRiskPercent = number(source.collectionUnknownConditionRiskPercent, DEFAULT_SETTINGS.collectionUnknownConditionRiskPercent, 0, 50);
+    normalized.collectionLikelyPrintRiskPercent = number(source.collectionLikelyPrintRiskPercent, DEFAULT_SETTINGS.collectionLikelyPrintRiskPercent, 0, 50);
+    normalized.collectionUnknownPrintRiskPercent = number(source.collectionUnknownPrintRiskPercent, DEFAULT_SETTINGS.collectionUnknownPrintRiskPercent, 0, 80);
+    normalized.collectionFallingMarketRiskPercent = number(source.collectionFallingMarketRiskPercent, DEFAULT_SETTINGS.collectionFallingMarketRiskPercent, 0, 50);
+    normalized.collectionStrongFallingRiskPercent = Math.max(normalized.collectionFallingMarketRiskPercent, number(source.collectionStrongFallingRiskPercent, DEFAULT_SETTINGS.collectionStrongFallingRiskPercent, 0, 80));
+    normalized.collectionWeakDataRiskPercent = number(source.collectionWeakDataRiskPercent, DEFAULT_SETTINGS.collectionWeakDataRiskPercent, 0, 50);
+    normalized.collectionHighQuantityDiscountPercent = number(source.collectionHighQuantityDiscountPercent, DEFAULT_SETTINGS.collectionHighQuantityDiscountPercent, 0, 50);
+    normalized.collectionHighQuantityFrom = Math.round(number(source.collectionHighQuantityFrom, DEFAULT_SETTINGS.collectionHighQuantityFrom, 2, 100000));
+    normalized.collectionLowValueEffortPercent = number(source.collectionLowValueEffortPercent, DEFAULT_SETTINGS.collectionLowValueEffortPercent, 0, 50);
+    normalized.collectionConcentrationThresholdPercent = number(source.collectionConcentrationThresholdPercent, DEFAULT_SETTINGS.collectionConcentrationThresholdPercent, 25, 100);
+    normalized.collectionCapitalMediumPercent = number(source.collectionCapitalMediumPercent, DEFAULT_SETTINGS.collectionCapitalMediumPercent, 1, 99);
+    normalized.collectionCapitalHighPercent = Math.max(normalized.collectionCapitalMediumPercent, number(source.collectionCapitalHighPercent, DEFAULT_SETTINGS.collectionCapitalHighPercent, 1, 100));
     normalized.scannerMinConfidence = Math.round(number(source.scannerMinConfidence, DEFAULT_SETTINGS.scannerMinConfidence, 0, 100));
     normalized.backupRetentionDays = Math.round(number(source.backupRetentionDays, DEFAULT_SETTINGS.backupRetentionDays, 1, 3650));
     normalized.condition = String(source.condition || DEFAULT_SETTINGS.condition).trim() || DEFAULT_SETTINGS.condition;

@@ -4,7 +4,7 @@ const path = require('path');
 const cardSearch = require('../shared/card-search');
 const businessAutomation = require('../shared/business-automation');
 
-const CURRENT_SCHEMA_VERSION = 10;
+const CURRENT_SCHEMA_VERSION = 11;
 
 function isoNow() {
   return new Date().toISOString();
@@ -162,6 +162,28 @@ function upgradeStateToVersion10(state = {}) {
   return result;
 }
 
+function upgradeStateToVersion11(state = {}) {
+  const result = upgradeStateToVersion10(upgradeStateToVersion9(state));
+  result.collectionPurchaseAnalyses = (Array.isArray(state.collectionPurchaseAnalyses) ? state.collectionPurchaseAnalyses : []).map((analysis, analysisIndex) => ({
+    ...analysis,
+    id: String(analysis?.id || `collection-analysis-${analysisIndex}`),
+    sellerPrice: roundedMoney(analysis?.sellerPrice),
+    shipping: roundedMoney(analysis?.shipping),
+    extra: roundedMoney(analysis?.extra),
+    actualPurchasePrice: nullableMoney(analysis?.actualPurchasePrice),
+    items: (Array.isArray(analysis?.items) ? analysis.items : []).map((item, itemIndex) => ({
+      ...item,
+      id: String(item?.id || `${analysis?.id || `collection-analysis-${analysisIndex}`}:item:${itemIndex}`),
+      productId: /^\d+$/.test(String(item?.productId || '').trim()) ? String(item.productId).trim() : '',
+      quantity: positiveQuantity(item?.quantity),
+      printConfidence: ['confirmed', 'likely', 'unknown'].includes(String(item?.printConfidence || '')) ? String(item.printConfidence) : 'unknown',
+      condition: String(item?.condition || 'UNBEKANNT')
+    })),
+    decisionSnapshots: (Array.isArray(analysis?.decisionSnapshots) ? analysis.decisionSnapshots : []).map(snapshot => ({ ...snapshot }))
+  }));
+  return result;
+}
+
 class TcgDatabase {
   constructor({ databasePath, schemaPath, backupRoot }) {
     this.databasePath = databasePath;
@@ -254,6 +276,7 @@ class TcgDatabase {
       if (currentVersion < 7) this.migrateToVersion7();
       if (currentVersion < 9) this.migrateToVersion9();
       if (currentVersion < 10) this.migrateToVersion10();
+      if (currentVersion < 11) this.migrateToVersion11();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -443,6 +466,17 @@ class TcgDatabase {
       .run(JSON.stringify(state), updatedAt);
   }
 
+  migrateToVersion11() {
+    this.ensureDataSources();
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (!row?.state_json) return;
+    const updatedAt = row.updated_at || isoNow();
+    const state = upgradeStateToVersion11(JSON.parse(row.state_json));
+    this.materializeState(state, updatedAt);
+    this.db.prepare('UPDATE app_state SET state_json = ?, updated_at = ? WHERE id = 1')
+      .run(JSON.stringify(state), updatedAt);
+  }
+
   close() {
     if (!this.db) return;
     this.db.close();
@@ -550,7 +584,7 @@ class TcgDatabase {
       throw new TypeError('Der Programmstand ist ungültig.');
     }
 
-    state = upgradeStateToVersion9(state);
+    state = upgradeStateToVersion11(state);
     const updatedAt = isoNow();
     const json = JSON.stringify(state);
     const previousRow = this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get();
@@ -599,7 +633,8 @@ class TcgDatabase {
       ['private_inventory', 'privateCollection'],
       ['settlement', 'reconciliations'],
       ['capital_account', 'capitalAccounts'],
-      ['capital_entry', 'capitalEntries']
+      ['capital_entry', 'capitalEntries'],
+      ['collection_purchase_analysis', 'collectionPurchaseAnalyses']
     ];
     const insert = this.db.prepare(`
       INSERT INTO business_events (
@@ -660,6 +695,7 @@ class TcgDatabase {
     const privateCollection = Array.isArray(state?.privateCollection) ? state.privateCollection : [];
     const capitalAccounts = Array.isArray(state?.capitalAccounts) ? state.capitalAccounts : [];
     const capitalEntries = Array.isArray(state?.capitalEntries) ? state.capitalEntries : [];
+    const collectionAnalyses = Array.isArray(state?.collectionPurchaseAnalyses) ? state.collectionPurchaseAnalyses : [];
     const settings = state?.settings || {};
     const inventoryById = new Map(inventory.map((row, index) => [recordId(row, index), row]));
 
@@ -673,6 +709,9 @@ class TcgDatabase {
       UPDATE inventory_listing_history SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE capital_ledger_entries SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE capital_accounts SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_purchase_decision_snapshots SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_purchase_items SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_purchase_analyses SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
     `);
 
     const upsertOrder = this.db.prepare(`
@@ -871,6 +910,98 @@ class TcgDatabase {
         String(entry.description || ''), String(entry.referenceType || ''),
         String(entry.referenceId || ''), recordSource(entry), JSON.stringify(entry), updatedAt
       );
+    });
+
+    const upsertCollection = this.db.prepare(`
+      INSERT INTO collection_purchase_analyses (
+        analysis_id, title, source_type, seller_name, source_url, analysis_date,
+        seller_price, shipping, extra_cost, actual_purchase_price, decision,
+        blind_max_ek, confirmed_max_ek, first_offer, conservative_value,
+        potential_value, linked_purchase_id, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(analysis_id) DO UPDATE SET
+        title=excluded.title, source_type=excluded.source_type, seller_name=excluded.seller_name,
+        source_url=excluded.source_url, analysis_date=excluded.analysis_date,
+        seller_price=excluded.seller_price, shipping=excluded.shipping, extra_cost=excluded.extra_cost,
+        actual_purchase_price=excluded.actual_purchase_price, decision=excluded.decision,
+        blind_max_ek=excluded.blind_max_ek, confirmed_max_ek=excluded.confirmed_max_ek,
+        first_offer=excluded.first_offer, conservative_value=excluded.conservative_value,
+        potential_value=excluded.potential_value, linked_purchase_id=excluded.linked_purchase_id,
+        archived=0, raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    const upsertCollectionItem = this.db.prepare(`
+      INSERT INTO collection_purchase_items (
+        item_id, analysis_id, product_id, card_name, set_name, collector_number,
+        rarity, quantity, card_condition, language, print_confidence,
+        reference_value, conservative_value, potential_value, max_ek_contribution,
+        economic_relevant, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(item_id) DO UPDATE SET
+        analysis_id=excluded.analysis_id, product_id=excluded.product_id,
+        card_name=excluded.card_name, set_name=excluded.set_name,
+        collector_number=excluded.collector_number, rarity=excluded.rarity,
+        quantity=excluded.quantity, card_condition=excluded.card_condition,
+        language=excluded.language, print_confidence=excluded.print_confidence,
+        reference_value=excluded.reference_value, conservative_value=excluded.conservative_value,
+        potential_value=excluded.potential_value, max_ek_contribution=excluded.max_ek_contribution,
+        economic_relevant=excluded.economic_relevant, archived=0,
+        raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    const upsertCollectionSnapshot = this.db.prepare(`
+      INSERT INTO collection_purchase_decision_snapshots (
+        snapshot_id, analysis_id, decided_at, decision, seller_price, total_cost,
+        nominal_value, realistic_value, conservative_value, potential_value,
+        uncertainty_value, bulk_value, blind_max_ek, confirmed_max_ek,
+        first_offer, actual_purchase_price, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(snapshot_id) DO UPDATE SET
+        analysis_id=excluded.analysis_id, decided_at=excluded.decided_at,
+        decision=excluded.decision, seller_price=excluded.seller_price,
+        total_cost=excluded.total_cost, nominal_value=excluded.nominal_value,
+        realistic_value=excluded.realistic_value, conservative_value=excluded.conservative_value,
+        potential_value=excluded.potential_value, uncertainty_value=excluded.uncertainty_value,
+        bulk_value=excluded.bulk_value, blind_max_ek=excluded.blind_max_ek,
+        confirmed_max_ek=excluded.confirmed_max_ek, first_offer=excluded.first_offer,
+        actual_purchase_price=excluded.actual_purchase_price, archived=0,
+        raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    collectionAnalyses.forEach((analysis, analysisIndex) => {
+      const analysisId = recordId(analysis, analysisIndex);
+      const calculated = analysis.calculation || {};
+      upsertCollection.run(
+        analysisId, String(analysis.title || ''), String(analysis.sourceType || ''),
+        String(analysis.sellerName || ''), String(analysis.url || ''), String(analysis.date || ''),
+        numberValue(analysis.sellerPrice), numberValue(analysis.shipping), numberValue(analysis.extra),
+        nullableMoney(analysis.actualPurchasePrice), String(calculated.decision || analysis.decision || 'ZU WENIGE DATEN'),
+        nullableMoney(calculated.blindMaxEk), nullableMoney(calculated.confirmedMaxEk),
+        nullableMoney(calculated.firstOffer), nullableMoney(calculated.conservativeValue),
+        nullableMoney(calculated.potentialValue), String(analysis.linkedPurchaseId || ''),
+        JSON.stringify(analysis), updatedAt
+      );
+      (Array.isArray(analysis.items) ? analysis.items : []).forEach((item, itemIndex) => {
+        const itemId = recordId(item, itemIndex);
+        const row = calculated.items?.find(calculatedItem => String(calculatedItem.id || '') === itemId) || {};
+        upsertCollectionItem.run(
+          itemId, analysisId, /^\d+$/.test(String(item.productId || '').trim()) ? String(item.productId).trim() : '',
+          String(item.name || ''), String(item.setName || item.set || ''), String(item.collectorNumber || ''),
+          String(item.rarity || ''), positiveQuantity(item.quantity), String(item.condition || 'UNBEKANNT'),
+          String(item.language || ''), ['confirmed', 'likely', 'unknown'].includes(item.printConfidence) ? item.printConfidence : 'unknown',
+          nullableMoney(row.referenceValue), nullableMoney(row.conservativeValue), nullableMoney(row.potentialValue),
+          nullableMoney(row.maxPurchaseContribution), row.economicRelevant ? 1 : 0,
+          JSON.stringify(item), updatedAt
+        );
+      });
+      (Array.isArray(analysis.decisionSnapshots) ? analysis.decisionSnapshots : []).forEach((snapshot, snapshotIndex) => {
+        upsertCollectionSnapshot.run(
+          String(snapshot.id || `${analysisId}:snapshot:${snapshotIndex}`), analysisId,
+          String(snapshot.decidedAt || updatedAt), String(snapshot.decision || 'ZU WENIGE DATEN'),
+          numberValue(snapshot.sellerPrice), numberValue(snapshot.totalCost), nullableMoney(snapshot.nominalValue),
+          nullableMoney(snapshot.realisticValue), nullableMoney(snapshot.conservativeValue), nullableMoney(snapshot.potentialValue),
+          nullableMoney(snapshot.uncertaintyValue), nullableMoney(snapshot.bulkValue), nullableMoney(snapshot.blindMaxEk),
+          nullableMoney(snapshot.confirmedMaxEk), nullableMoney(snapshot.firstOffer), nullableMoney(snapshot.actualPurchasePrice),
+          JSON.stringify(snapshot), updatedAt
+        );
+      });
     });
 
     const insertLine = (order, item, index, values = {}) => {

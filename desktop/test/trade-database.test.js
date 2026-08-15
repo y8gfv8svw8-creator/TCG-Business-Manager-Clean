@@ -157,7 +157,7 @@ test('migriert vorhandenen Programmstand und Marktpreise mit Sicherung in das ak
   });
   database.open();
   const status = database.getTradeDatabaseStatus();
-  assert.equal(database.getStatus().schemaVersion, 10);
+  assert.equal(database.getStatus().schemaVersion, 11);
   assert.equal(status.orderCount, 2);
   assert.equal(status.marketObservationCount, 1);
   assert.equal(status.eventCount, 3);

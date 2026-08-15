@@ -32,6 +32,8 @@ const defaultState = {
     {id: (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `watch-${Date.now()}-${Math.random().toString(16).slice(2)}`), priority:"B", name:"Ausgeglichener Zweikampf", set:"RA01", version:"V.3 – Secret Rare", stock:0, target:3, maxBuy:2.25, targetSell:3.49, ...WATCHLIST_REFERENCE["Ausgeglichener Zweikampf"], reprint:"Mittel", banlist:"Niedrig", priceDate:"2026-07-16"}
   ],
   purchaseDrafts: [],
+  collectionPurchaseAnalyses: [],
+  activeCollectionAnalysisId: "",
   activePurchaseDraftId: "",
   wantlists: [],
   demandRadar: {records:[], source:"", importedAt:"", sourceDate:""},
@@ -84,6 +86,7 @@ const views = {
   slowmovers: ["Langsamdreher", "Gebundenes Kapital nach Alter, Profil und Preisgruppe gezielt prüfen."],
     watchlist: ["Marktbeobachtung", "Wantlisten, Kaufgrenzen, Marktpreise und Preisprüfungen."],
   buying: ["Einkaufsplanung & Nachfrage", "Warenkorb prüfen, Einkaufsentwürfe speichern und gefragte Karten erkennen."],
+  collectionpurchases: ["Sammlungsankauf", "Sammlungen als Händler kalkulieren, Risiken prüfen und einen nachvollziehbaren Max-EK bestimmen."],
   partners: ["Händler & Kunden", "Kontakte, Bewertungen, Bestellungen und Umsatz."],
   imports: ["Importe", "Cardmarket-Einkäufe, Verkäufe, Marktpreise und Backups."],
   reports: ["Auswertungen", "Gewinn, ROI, Lagerdauer und Leistung nach Monat."],
@@ -108,7 +111,7 @@ function collectUserProductIds() {
     if (productId) ids.add(productId);
     ["pendingItems", "items"].forEach(key => visit(value[key], depth + 1));
   };
-  [state.inventory, state.privateCollection, state.purchases, state.sales, state.watchlist, state.wantlists].forEach(value => visit(value));
+  [state.inventory, state.privateCollection, state.purchases, state.sales, state.watchlist, state.wantlists, state.collectionPurchaseAnalyses].forEach(value => visit(value));
   return [...ids].sort((a, b) => Number(a) - Number(b));
 }
 
@@ -406,6 +409,16 @@ function migrateState(data) {
   migrated.watchlist = Array.isArray(data.watchlist) ? data.watchlist : structuredClone(defaultState.watchlist);
   migrated.purchaseDrafts = Array.isArray(data.purchaseDrafts) ? data.purchaseDrafts : [];
   migrated.activePurchaseDraftId = String(data.activePurchaseDraftId||"");
+  migrated.collectionPurchaseAnalyses = (Array.isArray(data.collectionPurchaseAnalyses) ? data.collectionPurchaseAnalyses : []).map((analysis,index)=>({
+    id:String(analysis?.id||`collection-analysis-${index}`), title:"", sourceType:"Kleinanzeigen", sellerName:"", url:"", date:todayISO(),
+    sellerPrice:0, shipping:0, extra:0, notes:"", items:[], decisionSnapshots:[], ...analysis,
+    items:(Array.isArray(analysis?.items)?analysis.items:[]).map((item,itemIndex)=>({
+      ...item,id:String(item?.id||`${analysis?.id||`collection-analysis-${index}`}:item:${itemIndex}`), quantity:Math.max(1,Math.round(Number(item?.quantity||1))),
+      condition:item?.condition||"UNBEKANNT", language:item?.language||"", printConfidence:["confirmed","likely","unknown"].includes(item?.printConfidence)?item.printConfidence:"unknown"
+    })),
+    decisionSnapshots:Array.isArray(analysis?.decisionSnapshots)?analysis.decisionSnapshots:[]
+  }));
+  migrated.activeCollectionAnalysisId = String(data.activeCollectionAnalysisId||"");
   migrated.wantlists = (Array.isArray(data.wantlists) ? data.wantlists : []).map(list=>({
     ...list,
     purpose:list.purpose||"Geschäftsbestand",
@@ -700,6 +713,10 @@ function marketDecisionHistoryRequest() {
     const purchaseDate = window.TcgBusinessAutomation?.inventoryStartDate?.(item);
     const listingDate = window.TcgBusinessAutomation?.listingStartDate?.(item);
     [purchaseDate, listingDate].filter(Boolean).forEach(date => targetDates[productId].push(String(date).slice(0, 10)));
+  });
+  (state.collectionPurchaseAnalyses||[]).flatMap(analysis=>analysis.items||[]).forEach(item=>{
+    const productId=cleanProductId(item.productId);if(!productId)return;
+    productIds.push(productId);targetDates[productId]||=[];
   });
   Object.keys(targetDates).forEach(productId => { targetDates[productId] = [...new Set(targetDates[productId])]; });
   return { productIds: [...new Set(productIds)], targetDates, recentDays: 45 };
@@ -1083,6 +1100,7 @@ function renderGlobalSearch(query){
   state.sales.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(row=>push("Verkauf",`#${row.orderNo||"–"}`,`${row.customer||"Unbekannter Kunde"} · ${fmtDate(row.date)}`,()=>openOrderDetails("sale",row.id)));
   [...state.sellers.map(row=>({row,kind:"Händler"})),...state.customers.map(row=>({row,kind:"Kunde"}))].filter(({row})=>cardRecordMatchesSearch(row,term)).slice(0,5).forEach(({row,kind})=>push(kind,row.cardmarketName||row.name,[row.realName,row.country].filter(Boolean).join(" · "),()=>{showView("partners");kind==="Händler"?showSellerDetails(row.id):showCustomerDetails(row.id);}));
   state.materials.filter(row=>cardRecordMatchesSearch(row,term)).slice(0,3).forEach(row=>push("Material",row.name,`${Number(row.stock||0)} ${row.unit||"Stück"}`,()=>{showView("materials");document.getElementById("materialSearch").value=term;renderAll();}));
+  (state.collectionPurchaseAnalyses||[]).filter(row=>cardRecordMatchesSearch(row,term)||(row.items||[]).some(item=>cardRecordMatchesSearch(item,term))).slice(0,5).forEach(row=>push("Sammlungsankauf",row.title||"Unbenannte Analyse",`${row.sellerName||row.sourceType||"Quelle unbekannt"} · ${money(row.sellerPrice)}`,()=>{state.activeCollectionAnalysisId=row.id;showView("collectionpurchases");}));
   globalSearchActions=rows.map(row=>row.action);
   target.innerHTML=rows.length?rows.map((row,index)=>`<button type="button" data-global-result="${index}"><span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.subtitle||"")}</small></span><span class="global-search-kind">${escapeHtml(row.kind)}</span></button>`).join(""):'<div class="empty">Keine passenden Daten gefunden.</div>';
   target.hidden=false;
@@ -1129,6 +1147,7 @@ function renderAll() {
   renderSlowMovers();
   renderWatchlist();
   renderBuyingPlanner();
+  renderCollectionPurchases();
   renderPartners();
   renderImports();
   renderReports();
@@ -3078,6 +3097,122 @@ function renderBuyingPlanner(){
   }
   renderDemandRadar();
 }
+
+let collectionSearchProducts=new Map();
+let selectedCollectionProductId="";
+let collectionSearchSequence=0;
+
+function activeCollectionAnalysis(){
+  return (state.collectionPurchaseAnalyses||[]).find(row=>row.id===state.activeCollectionAnalysisId)||null;
+}
+
+function createCollectionAnalysis(){
+  const analysis={id:uid(),title:`Sammlungsanalyse ${new Date().toLocaleString("de-DE")}`,sourceType:"Kleinanzeigen",sellerName:"",url:"",date:todayISO(),sellerPrice:0,shipping:0,extra:0,notes:"",items:[],decisionSnapshots:[],createdAt:new Date().toISOString()};
+  state.collectionPurchaseAnalyses.unshift(analysis);state.activeCollectionAnalysisId=analysis.id;return analysis;
+}
+
+function syncCollectionMetadata(){
+  const analysis=activeCollectionAnalysis();if(!analysis)return null;
+  const value=id=>document.getElementById(id)?.value??"";
+  Object.assign(analysis,{title:value("collectionTitle").trim(),sourceType:value("collectionSourceType"),sellerName:value("collectionSellerName").trim(),url:value("collectionUrl").trim(),date:value("collectionDate")||todayISO(),sellerPrice:Math.max(0,Number(value("collectionSellerPrice")||0)),shipping:Math.max(0,Number(value("collectionShipping")||0)),extra:Math.max(0,Number(value("collectionExtra")||0)),notes:value("collectionNotes").trim(),updatedAt:new Date().toISOString()});
+  return analysis;
+}
+
+function collectionCalculationInput(analysis){
+  return {...analysis,items:(analysis.items||[]).map(item=>{
+    const productId=cleanProductId(item.productId);
+    const market=productId?marketRecordForProduct({...item,productId}):{};
+    const history=productId?(marketDecisionHistoryByProduct[productId]||[]):[];
+    const marketDecision=productId?window.TcgBusinessAutomation?.analyzeMarketDecision?.({},market,history,forwardPricingSettings(),new Date()):null;
+    const printCandidates=(item.printCandidates||[]).map(candidate=>{
+      const candidateId=cleanProductId(candidate.productId);return {...candidate,market:candidateId?marketRecordForProduct({...candidate,productId:candidateId}):{}};
+    });
+    return {...item,market,marketTrend:marketDecision?.trend||item.marketTrend||"",marketDecision,ownSales:ownSalesExperienceFor(productId)||{},printCandidates};
+  })};
+}
+
+function calculateCollectionAnalysis(analysis=activeCollectionAnalysis()){
+  if(!analysis)return null;
+  const result=window.TcgBusinessAutomation?.analyzeCollectionPurchase?.(collectionCalculationInput(analysis),{settings:forwardPricingSettings(),liquidCapital:phase2CapitalOverview().liquid})||null;
+  if(result){analysis.calculation=result;analysis.decision=result.decision;analysis.calculatedAt=new Date().toISOString();}
+  return result;
+}
+
+function collectionDecisionClass(decision){
+  return decision==="KAUFEN"?"money-positive":decision==="ABLEHNEN"?"money-negative":decision==="ZU WENIGE DATEN"?"muted":"money-warning";
+}
+
+function collectionRiskShare(value,total){return total>0?`${Math.round(Number(value||0)/total*100)} %`:"0 %";}
+
+function renderCollectionPurchases(){
+  const select=document.getElementById("collectionAnalysisSelect");if(!select)return;
+  const analyses=state.collectionPurchaseAnalyses||[];
+  let current=activeCollectionAnalysis();
+  select.innerHTML=`<option value="">Neue Analyse</option>${analyses.map(row=>`<option value="${escapeHtml(row.id)}" ${row.id===state.activeCollectionAnalysisId?"selected":""}>${escapeHtml(row.title||"Unbenannte Analyse")} · ${money(row.sellerPrice)}</option>`).join("")}`;
+  const ids=["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"];
+  if(!current){ids.forEach(id=>{const field=document.getElementById(id);if(field)field.value=id==="collectionDate"?todayISO():"";});document.getElementById("collectionDecisionSummary").innerHTML='<div class="empty">Neue Analyse anlegen und Karten erfassen.</div>';document.getElementById("collectionItemTable").innerHTML='<tr><td colspan="14" class="empty">Noch keine Karten erfasst.</td></tr>';document.getElementById("collectionValueCarriers").innerHTML='<div class="empty">Noch keine Wertträger.</div>';document.getElementById("collectionRiskDistribution").innerHTML="";document.getElementById("collectionDecisionReasons").innerHTML="Noch keine Händlerentscheidung berechnet.";return;}
+  document.getElementById("collectionTitle").value=current.title||"";document.getElementById("collectionSourceType").value=current.sourceType||"Kleinanzeigen";document.getElementById("collectionSellerName").value=current.sellerName||"";document.getElementById("collectionUrl").value=current.url||"";document.getElementById("collectionDate").value=current.date||todayISO();document.getElementById("collectionSellerPrice").value=Number(current.sellerPrice||0);document.getElementById("collectionShipping").value=Number(current.shipping||0);document.getElementById("collectionExtra").value=Number(current.extra||0);document.getElementById("collectionNotes").value=current.notes||"";
+  const calculation=calculateCollectionAnalysis(current);
+  if(!calculation)return;
+  const summary=document.getElementById("collectionDecisionSummary");
+  summary.innerHTML=`<div><small>Karten / Prints</small><strong>${calculation.cardCount} / ${calculation.itemCount}</strong></div><div><small>Verkäuferpreis + Kosten</small><strong>${money(calculation.totalCost)}</strong></div><div><small>Nominaler Referenzwert</small><strong>${money(calculation.nominalValue)}</strong><small>keine sichere Erlösaussage</small></div><div><small>Realistischer Handelswert</small><strong>${money(calculation.realisticValue)}</strong></div><div><small>Konservativer Handelswert</small><strong>${money(calculation.conservativeValue)}</strong></div><div><small>Unsicheres Potenzial</small><strong>${money(calculation.uncertaintyValue)}</strong></div><div><small>Bulk-Wert</small><strong>${money(calculation.bulkValue)}</strong></div><div><small>Blind-Max-EK</small><strong>${money(calculation.blindMaxEk)}</strong></div><div><small>Bestätigter Max-EK</small><strong>${money(calculation.confirmedMaxEk)}</strong></div><div><small>Empfohlenes Erstangebot</small><strong>${money(calculation.firstOffer)}</strong><small>Reserve ${money(calculation.negotiationReserve)}</small></div><div><small>Kapitalbindung / Budget</small><strong>${calculation.capitalBinding} / ${calculation.capitalRisk}</strong><small>${calculation.capitalShare==null?"kein liquides Kapital hinterlegt":`${pct(calculation.capitalShare)} des liquiden Kapitals`}</small></div><div><small>Entscheidung</small><strong class="${collectionDecisionClass(calculation.decision)}">${escapeHtml(calculation.decision)}</strong></div>`;
+  document.getElementById("collectionValueCarriers").innerHTML=calculation.topValueCarriers.length?`<ol class="collection-carrier-list">${calculation.topValueCarriers.map(item=>`<li><span><strong>${escapeHtml(item.name||`CM ${item.productId||"unbekannt"}`)}</strong><small>${item.quantity}× · ${escapeHtml(item.priceClass.label)}</small></span><strong>${money(item.conservativeValue)}</strong></li>`).join("")}</ol><p class="muted">Die Top 3 tragen ${calculation.topThreeShare.toLocaleString("de-DE")} % des konservativen Werts. Konzentrationsrisiko: <strong>${calculation.concentrationRisk}</strong>.</p>`:'<div class="empty">Noch keine belastbaren Wertträger.</div>';
+  const risk=calculation.riskDistribution,total=calculation.conservativeValue;
+  document.getElementById("collectionRiskDistribution").innerHTML=`<div class="settings-status-grid"><div><small>Bestätigt</small><strong>${collectionRiskShare(risk.confirmed,total)}</strong></div><div><small>Unsicher</small><strong>${collectionRiskShare(risk.uncertain,total)}</strong></div><div><small>Low Value</small><strong>${collectionRiskShare(risk.lowValue,total)}</strong></div><div><small>Bulk</small><strong>${collectionRiskShare(risk.bulk,total)}</strong></div></div><p class="muted">Nur aus den vorhandenen Berechnungen; keine behauptete Verkaufswahrscheinlichkeit.</p>`;
+  document.getElementById("collectionDecisionReasons").innerHTML=`<strong>${escapeHtml(calculation.decision)}</strong><ul>${calculation.reasons.map(reason=>`<li>${escapeHtml(reason)}</li>`).join("")}</ul>${calculation.relevantItems.length?`<p><strong>Detailprüfung relevant:</strong> ${calculation.relevantItems.map(item=>escapeHtml(item.name||`CM ${item.productId||"?"}`)).join(", ")}</p>`:'<p>Keine unbestätigte Position überschreitet in dieser Entscheidung die Economic-Relevance-Schwelle.</p>'}`;
+  const query=String(document.getElementById("collectionItemFilter")?.value||"").trim(),classFilter=document.getElementById("collectionClassFilter")?.value||"",confidenceFilter=document.getElementById("collectionConfidenceFilter")?.value||"",sort=document.getElementById("collectionSort")?.value||"value";
+  let rows=calculation.items.filter(row=>(!query||cardRecordMatchesSearch({...current.items.find(item=>item.id===row.id),...row},query))&&(!classFilter||row.priceClass.key===classFilter)&&(!confidenceFilter||row.printConfidence===confidenceFilter));
+  rows.sort(sort==="name"?(a,b)=>String(a.name).localeCompare(String(b.name),"de"):sort==="uncertainty"?(a,b)=>b.uncertaintyValue-a.uncertaintyValue:sort==="max"?(a,b)=>b.maxPurchaseContribution-a.maxPurchaseContribution:(a,b)=>b.conservativeValue-a.conservativeValue);
+  document.getElementById("collectionItemTable").innerHTML=rows.length?rows.map(row=>{const original=current.items.find(item=>item.id===row.id)||{};const conditions=["NM","EX","GD","LP","PL","POOR","UNBEKANNT"];const languages=["DE","EN","FR","IT","ES","PT","NL","UNBEKANNT"];const confidences={confirmed:"PRINT BESTÄTIGT",likely:"PRINT WAHRSCHEINLICH",unknown:"PRINT UNBEKANNT"};return `<tr><td><strong>${escapeHtml(row.name||original.name||"Print unbekannt")}</strong><br><small>CM ${escapeHtml(row.productId||"nicht bestätigt")}</small></td><td>${escapeHtml(original.setName||original.set||"–")}<br><small>${escapeHtml([original.collectorNumber,original.rarity].filter(Boolean).join(" · ")||"–")}</small></td><td><input class="draft-number" type="number" min="1" value="${row.quantity}" data-collection-quantity="${escapeHtml(row.id)}"></td><td><select data-collection-condition="${escapeHtml(row.id)}">${conditions.map(value=>`<option value="${value}" ${value===row.condition?'selected':''}>${value}</option>`).join('')}</select><select data-collection-language="${escapeHtml(row.id)}">${languages.map(value=>`<option value="${value}" ${value===(original.language||'UNBEKANNT')?'selected':''}>${value}</option>`).join('')}</select></td><td><select data-collection-confidence="${escapeHtml(row.id)}">${Object.entries(confidences).map(([value,label])=>`<option value="${value}" ${value===row.printConfidence?'selected':''}>${label}</option>`).join('')}</select></td><td>${row.referenceValue?money(row.referenceValue):"–"}<br><small>${escapeHtml(row.referenceSource)}</small></td><td><strong>${money(row.conservativeValue)}</strong></td><td>${pct(row.factor*100)}</td><td>${escapeHtml(row.ownSalesDataStatus)}<br><small>${row.ownMedianDays==null?"Median unbekannt":`Median ${row.ownMedianDays} Tage`}</small></td><td>${escapeHtml(row.marketTrend)}</td><td>${money(row.uncertaintyValue)}</td><td>${row.economicRelevant?'<span class="money-warning">DETAILPRÜFUNG</span>':'nicht relevant'}</td><td><strong>${money(row.maxPurchaseContribution)}</strong></td><td><button type="button" class="icon-button danger-text" data-remove-collection-item="${escapeHtml(row.id)}">Entfernen</button></td></tr>`;}).join(""):'<tr><td colspan="14" class="empty">Keine passenden Kartenpositionen.</td></tr>';
+  document.getElementById("confirmCollectionPurchaseBtn").textContent=current.linkedPurchaseId?"Einkauf öffnen":"Ankauf bestätigen";
+}
+
+async function searchCollectionCards(query){
+  const sequence=++collectionSearchSequence,results=document.getElementById("collectionCardSearchResults");selectedCollectionProductId="";document.getElementById("addCollectionCardBtn").disabled=true;
+  if(String(query||"").trim().length<2){results.innerHTML="";return;}
+  results.innerHTML='<div class="muted">Druckvarianten werden gesucht …</div>';
+  const products=await searchInventoryCardVariants(query);if(sequence!==collectionSearchSequence)return;
+  collectionSearchProducts=new Map(products.map(product=>[String(product.productId),product]));
+  results.innerHTML=products.length?products.slice(0,60).map(product=>`<button type="button" class="inventory-card-choice" data-select-collection-product="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong>${product.englishName?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<span>${escapeHtml(inventoryVariantSubtitle(product))}</span><small>Cardmarket-Produkt ${escapeHtml(product.productId)}</small></button>`).join(""):'<div class="empty">Keine passende Druckvariante gefunden.</div>';
+}
+
+function addSelectedCollectionCard(){
+  let analysis=activeCollectionAnalysis()||createCollectionAnalysis();const product=collectionSearchProducts.get(selectedCollectionProductId);if(!product){alert("Bitte zuerst eine konkrete Druckvariante auswählen.");return;}
+  syncCollectionMetadata();const confidence=document.getElementById("collectionCardConfidence").value;
+  const market=marketRecordForProduct(product),names=cardDisplayNames(product);
+  const sameCardCandidates=confidence==="unknown"?[...collectionSearchProducts.values()].filter(candidate=>normalizeCardName(inventoryVariantName(candidate))===normalizeCardName(inventoryVariantName(product))).slice(0,30).map(candidate=>marketRecordForProduct(candidate)):[];
+  analysis.items.push({id:uid(),productId:cleanProductId(product.productId),name:names.primary,germanName:product.germanName||names.primary,englishName:product.englishName||"",set:product.set||"",setName:product.setName||product.set||"",collectorNumber:product.collectorNumber||product.setCode||"",rarity:product.rarity||product.variant||"",quantity:Math.max(1,Math.round(Number(document.getElementById("collectionCardQuantity").value||1))),condition:document.getElementById("collectionCardCondition").value,language:document.getElementById("collectionCardLanguage").value,printConfidence:confidence,printCandidates:sameCardCandidates.map(candidate=>({productId:candidate.productId,name:candidate.name,setName:candidate.setName,collectorNumber:candidate.collectorNumber,rarity:candidate.rarity})),note:"",addedAt:new Date().toISOString(),referenceAtEntry:{priceDate:market.priceDate||"",low:market.low||0,trend:market.trend||0,avg1:market.avg1||0,avg7:market.avg7||0,avg30:market.avg30||0}});
+  document.getElementById("collectionCardSearch").value="";document.getElementById("collectionCardSearchResults").innerHTML="";document.getElementById("collectionCardQuantity").value="1";selectedCollectionProductId="";calculateCollectionAnalysis(analysis);saveState();renderAll();document.getElementById("collectionCardSearch").focus();
+}
+
+async function importCollectionCsv(file){
+  let analysis=activeCollectionAnalysis()||createCollectionAnalysis();const rows=parseCsv(await readFile(file));let imported=0,unconfirmed=0;
+  for(const [index,row] of rows.entries()){
+    const productId=cleanProductId(row.productId||row["Product-ID"]||row["Produkt-ID"]||row.idProduct);
+    const fallback={name:row.Name||row.name||row.Kartenname||row.Karte||"",set:row.Set||row.set||"",collectorNumber:row.Setcode||row.Setnummer||row.collectorNumber||"",rarity:row.Seltenheit||row.rarity||""};
+    const product=productId?resolveProduct(productId,fallback):fallback;const confirmed=Boolean(productId);
+    analysis.items.push({id:uid(),productId:confirmed?productId:"",name:product.name||fallback.name||`CSV-Zeile ${index+2}`,germanName:product.germanName||"",englishName:product.englishName||"",set:product.set||fallback.set||"",setName:product.setName||"",collectorNumber:product.collectorNumber||fallback.collectorNumber||"",rarity:product.rarity||fallback.rarity||"",quantity:Math.max(1,Math.round(Number(row.Menge||row.quantity||1))),condition:String(row.Zustand||row.condition||"UNBEKANNT").toUpperCase(),language:String(row.Sprache||row.language||""),printConfidence:confirmed?"confirmed":"unknown",printCandidates:[],note:"CSV-Import · unbestätigte Zuordnung bleibt offen",sourceRow:index+2});imported++;if(!confirmed)unconfirmed++;
+  }
+  calculateCollectionAnalysis(analysis);saveState();renderAll();alert(`${imported} Position(en) importiert. ${unconfirmed} Position(en) bleiben bewusst als Print unbekannt.`);
+}
+
+function saveCollectionDecisionSnapshot(actualPurchasePrice=null){
+  const analysis=syncCollectionMetadata();if(!analysis)return null;const calculation=calculateCollectionAnalysis(analysis);if(!calculation)return null;
+  if(actualPurchasePrice!==null)analysis.actualPurchasePrice=Math.max(0,Number(actualPurchasePrice));
+  const snapshot=window.TcgBusinessAutomation.buildCollectionDecisionSnapshot(analysis,calculation,new Date().toISOString());snapshot.id=uid();snapshot.actualPurchasePrice=actualPurchasePrice===null?null:Number(actualPurchasePrice);analysis.decisionSnapshots.push(snapshot);analysis.lastDecisionSnapshotId=snapshot.id;return snapshot;
+}
+
+function confirmCollectionPurchase(){
+  const analysis=activeCollectionAnalysis();if(!analysis)return;
+  if(analysis.linkedPurchaseId){const purchase=state.purchases.find(row=>row.id===analysis.linkedPurchaseId);if(purchase){showView("purchases");openOrderDetails("purchase",purchase.id);}return;}
+  syncCollectionMetadata();const calculation=calculateCollectionAnalysis(analysis);if(!calculation?.items?.length){alert("Bitte zuerst Karten erfassen und die Analyse prüfen.");return;}
+  const actualText=prompt("Tatsächlich vereinbarter Kartenpreis (€):",Number(analysis.sellerPrice||0).toFixed(2));if(actualText===null)return;const actual=Math.max(0,num(actualText,NaN));if(!Number.isFinite(actual)){alert("Bitte einen gültigen Kaufpreis eingeben.");return;}
+  const orderNo=prompt("Bestellnummer oder eigene Ankauf-Referenz:",`SAMMLUNG-${Date.now()}`);if(orderNo===null)return;
+  saveCollectionDecisionSnapshot(actual);
+  const purchase=window.TcgBusinessAutomation.buildCollectionPurchaseDraft(analysis,calculation,{actualPurchasePrice:actual,purchaseId:uid(),orderNo:orderNo.trim()||`SAMMLUNG-${Date.now()}`,date:todayISO()});
+  state.purchases.unshift(purchase);analysis.linkedPurchaseId=purchase.id;analysis.actualPurchasePrice=actual;analysis.confirmedAt=new Date().toISOString();saveState();renderAll();showView("purchases");openOrderDetails("purchase",purchase.id);
+}
+
 function demandContext(){
   const stockByProduct={},salesByProduct={};
   state.inventory.filter(item=>!["Verkauft","Storniert"].includes(item.status)).forEach(item=>{const id=cleanProductId(item.productId);if(id)stockByProduct[id]=(stockByProduct[id]||0)+1;});
@@ -3563,6 +3698,20 @@ function renderSettings() {
   document.getElementById("settingScannerKeepImages").checked = Boolean(state.settings.scannerKeepImages);
   document.getElementById("settingImportReview").checked = state.settings.importReviewRequired !== false;
   document.getElementById("settingArchiveImports").checked = Boolean(state.settings.archiveOriginalImports);
+  document.getElementById("settingCollectionClassA").value = state.settings.collectionClassAFrom ?? 10;
+  document.getElementById("settingCollectionClassB").value = state.settings.collectionClassBFrom ?? 5;
+  document.getElementById("settingCollectionClassC").value = state.settings.collectionClassCFrom ?? 1;
+  document.getElementById("settingCollectionClassD").value = state.settings.collectionClassDFrom ?? 0.20;
+  document.getElementById("settingCollectionFactorA").value = state.settings.collectionFactorA ?? 60;
+  document.getElementById("settingCollectionFactorB").value = state.settings.collectionFactorB ?? 47.5;
+  document.getElementById("settingCollectionFactorC").value = state.settings.collectionFactorC ?? 32.5;
+  document.getElementById("settingCollectionFactorD").value = state.settings.collectionFactorD ?? 15;
+  document.getElementById("settingCollectionBulk").value = state.settings.collectionBulkPerCard ?? 0.01;
+  document.getElementById("settingCollectionFirstOffer").value = state.settings.collectionFirstOfferPercent ?? 75;
+  document.getElementById("settingCollectionRelevance").value = state.settings.collectionEconomicRelevance ?? 3;
+  document.getElementById("settingCollectionSafety").value = state.settings.collectionMinimumSafetyPercent ?? 5;
+  document.getElementById("settingCollectionCapitalMedium").value = state.settings.collectionCapitalMediumPercent ?? 25;
+  document.getElementById("settingCollectionCapitalHigh").value = state.settings.collectionCapitalHighPercent ?? 50;
   const preview=document.getElementById("settingsCalculationPreview");
   if(preview){
     const sell=5, fee=sell*Number(state.settings.feePercent||0)/100, allocation=packagingAllocation(), safety=sell*Number(state.settings.safetyPercent||0)/100;
@@ -6053,6 +6202,20 @@ document.getElementById("saveSettingsBtn").onclick=()=>{
     scannerKeepImages:document.getElementById("settingScannerKeepImages").checked,
     importReviewRequired:document.getElementById("settingImportReview").checked,
     archiveOriginalImports:document.getElementById("settingArchiveImports").checked
+    ,collectionClassAFrom:Number(document.getElementById("settingCollectionClassA").value||10)
+    ,collectionClassBFrom:Number(document.getElementById("settingCollectionClassB").value||5)
+    ,collectionClassCFrom:Number(document.getElementById("settingCollectionClassC").value||1)
+    ,collectionClassDFrom:Number(document.getElementById("settingCollectionClassD").value||0.20)
+    ,collectionFactorA:Number(document.getElementById("settingCollectionFactorA").value||60)
+    ,collectionFactorB:Number(document.getElementById("settingCollectionFactorB").value||47.5)
+    ,collectionFactorC:Number(document.getElementById("settingCollectionFactorC").value||32.5)
+    ,collectionFactorD:Number(document.getElementById("settingCollectionFactorD").value||15)
+    ,collectionBulkPerCard:Number(document.getElementById("settingCollectionBulk").value||0.01)
+    ,collectionFirstOfferPercent:Number(document.getElementById("settingCollectionFirstOffer").value||75)
+    ,collectionEconomicRelevance:Number(document.getElementById("settingCollectionRelevance").value||3)
+    ,collectionMinimumSafetyPercent:Number(document.getElementById("settingCollectionSafety").value||5)
+    ,collectionCapitalMediumPercent:Number(document.getElementById("settingCollectionCapitalMedium").value||25)
+    ,collectionCapitalHighPercent:Number(document.getElementById("settingCollectionCapitalHigh").value||50)
   };
   state.settings=window.TcgAppConfig?.normalizeSettings?window.TcgAppConfig.normalizeSettings(next):next;
   applyAppearanceSettings();saveState();renderAll();alert("Einstellungen gespeichert.");
@@ -6261,6 +6424,23 @@ document.getElementById("reportDateFrom").onchange=renderReports;
 document.getElementById("reportDateTo").onchange=renderReports;
 document.getElementById("reportPeriodReset").onclick=()=>{document.getElementById("reportDateFrom").value="";document.getElementById("reportDateTo").value="";renderReports();};
 document.getElementById("exportReportCsv").onclick=exportFinancialReportCsv;
+const collectionSelect=document.getElementById("collectionAnalysisSelect");
+collectionSelect.onchange=event=>{state.activeCollectionAnalysisId=event.target.value;selectedCollectionProductId="";renderCollectionPurchases();};
+document.getElementById("newCollectionAnalysisBtn").onclick=()=>{createCollectionAnalysis();saveState();renderAll();document.getElementById("collectionTitle").focus();};
+["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"].forEach(id=>{
+  document.getElementById(id).addEventListener("change",()=>{if(!activeCollectionAnalysis())createCollectionAnalysis();syncCollectionMetadata();calculateCollectionAnalysis();saveState();renderCollectionPurchases();});
+});
+let collectionSearchTimer;
+document.getElementById("collectionCardSearch").addEventListener("input",event=>{clearTimeout(collectionSearchTimer);collectionSearchTimer=setTimeout(()=>searchCollectionCards(event.target.value),180);});
+document.getElementById("collectionCardSearch").addEventListener("keydown",event=>{if(event.key==="Enter"&&selectedCollectionProductId){event.preventDefault();addSelectedCollectionCard();}});
+document.getElementById("collectionCardSearchResults").addEventListener("click",event=>{const button=event.target.closest("[data-select-collection-product]");if(!button)return;selectedCollectionProductId=button.dataset.selectCollectionProduct;document.querySelectorAll("#collectionCardSearchResults [data-select-collection-product]").forEach(row=>row.classList.toggle("selected",row===button));document.getElementById("addCollectionCardBtn").disabled=false;});
+document.getElementById("addCollectionCardBtn").onclick=addSelectedCollectionCard;
+document.getElementById("collectionCsvInput").addEventListener("change",async event=>{const file=event.target.files?.[0];if(file)try{await importCollectionCsv(file);}catch(error){alert(`Sammlungs-CSV konnte nicht gelesen werden: ${error.message}`);}event.target.value="";});
+document.getElementById("collectionItemTable").addEventListener("change",event=>{const id=event.target.dataset.collectionQuantity||event.target.dataset.collectionCondition||event.target.dataset.collectionLanguage||event.target.dataset.collectionConfidence;if(!id)return;const analysis=activeCollectionAnalysis(),item=analysis?.items?.find(row=>row.id===id);if(!item)return;if(event.target.dataset.collectionQuantity)item.quantity=Math.max(1,Math.round(Number(event.target.value||1)));if(event.target.dataset.collectionCondition)item.condition=event.target.value;if(event.target.dataset.collectionLanguage)item.language=event.target.value;if(event.target.dataset.collectionConfidence)item.printConfidence=event.target.value;calculateCollectionAnalysis(analysis);saveState();renderCollectionPurchases();});
+document.getElementById("collectionItemTable").addEventListener("click",event=>{const id=event.target.closest("[data-remove-collection-item]")?.dataset.removeCollectionItem;if(!id)return;const analysis=activeCollectionAnalysis();if(!analysis)return;analysis.items=analysis.items.filter(row=>row.id!==id);calculateCollectionAnalysis(analysis);saveState();renderAll();});
+["collectionItemFilter","collectionClassFilter","collectionConfidenceFilter","collectionSort"].forEach(id=>document.getElementById(id).addEventListener(id==="collectionItemFilter"?"input":"change",renderCollectionPurchases));
+document.getElementById("saveCollectionSnapshotBtn").onclick=()=>{if(!activeCollectionAnalysis()){alert("Bitte zuerst eine Analyse anlegen.");return;}saveCollectionDecisionSnapshot();saveState();renderAll();alert("Entscheidungssnapshot gespeichert. Spätere Marktpreise verändern diese historische Begründung nicht.");};
+document.getElementById("confirmCollectionPurchaseBtn").onclick=confirmCollectionPurchase;
 const globalSearch=document.getElementById("globalSearch"),globalSearchResults=document.getElementById("globalSearchResults");
 globalSearch.oninput=event=>renderGlobalSearch(event.target.value);
 globalSearch.onkeydown=event=>{if(event.key==="Escape"){globalSearch.value="";renderGlobalSearch("");globalSearch.blur();}else if(event.key==="Enter"&&globalSearchActions[0]){event.preventDefault();globalSearchActions[0]();globalSearch.value="";renderGlobalSearch("");}};

@@ -2139,6 +2139,309 @@
     return { inventoryDate, inventoryAgeDays, listingAgeDays, firstListingAt, inventoryBucket: bucket, listingBucket, priceGroup: pg, profile, longTerm, costKnown, cost, currentPrice, referencePrice, margin, roi, recommendation, marketSignal, factors, marketDecision };
   }
 
+  const COLLECTION_PRICE_CLASSES = Object.freeze({
+    A: Object.freeze({ minFactor: 0.55, maxFactor: 0.65, label: 'A · ab 10 €' }),
+    B: Object.freeze({ minFactor: 0.40, maxFactor: 0.55, label: 'B · 5–9,99 €' }),
+    C: Object.freeze({ minFactor: 0.25, maxFactor: 0.40, label: 'C · 1–4,99 €' }),
+    D: Object.freeze({ minFactor: 0.10, maxFactor: 0.20, label: 'D · 0,20–0,99 €' }),
+    E: Object.freeze({ minFactor: 0, maxFactor: 0, label: 'E · Bulk' })
+  });
+
+  function collectionPriceClass(referenceValue, settings = {}) {
+    const value = Math.max(0, asNumber(referenceValue));
+    const key = value >= asNumber(settings.collectionClassAFrom ?? 10) ? 'A'
+      : value >= asNumber(settings.collectionClassBFrom ?? 5) ? 'B'
+        : value >= asNumber(settings.collectionClassCFrom ?? 1) ? 'C'
+          : value >= asNumber(settings.collectionClassDFrom ?? 0.20) ? 'D' : 'E';
+    return { key, ...COLLECTION_PRICE_CLASSES[key] };
+  }
+
+  function collectionBaseFactor(priceClass, settings = {}) {
+    const configured = {
+      A: asNumber(settings.collectionFactorA ?? 60) / 100,
+      B: asNumber(settings.collectionFactorB ?? 47.5) / 100,
+      C: asNumber(settings.collectionFactorC ?? 32.5) / 100,
+      D: asNumber(settings.collectionFactorD ?? 15) / 100,
+      E: 0
+    }[priceClass.key] || 0;
+    return clamp(configured, priceClass.minFactor, priceClass.maxFactor);
+  }
+
+  function collectionTrendStatus(item = {}) {
+    return String(item.marketTrend?.status || item.marketTrend || item.marketDecision?.trend?.status || '').trim().toUpperCase();
+  }
+
+  function collectionTurnoverStatus(experience = {}) {
+    const quality = experience.dataQuality || ownSalesDataQuality(experience.saleCount);
+    const turnover = experience.turnoverClass || ownTurnoverClass(experience.medianDays, experience.saleCount);
+    return { quality, turnover };
+  }
+
+  function collectionCandidateValues(item = {}) {
+    const raw = Array.isArray(item.printCandidates) ? item.printCandidates : [];
+    return raw.map(candidate => {
+      const market = candidate.market || candidate;
+      return {
+        productId: String(candidate.productId || ''),
+        name: String(candidate.name || ''),
+        reference: Math.max(0, marketReferenceValue(market))
+      };
+    }).filter(row => row.reference > 0);
+  }
+
+  function analyzeCollectionPurchaseItem(item = {}, settings = {}) {
+    const quantity = Math.max(1, Math.round(asNumber(item.quantity) || 1));
+    const printConfidence = ['confirmed', 'likely', 'unknown'].includes(item.printConfidence) ? item.printConfidence : 'unknown';
+    const condition = String(item.condition || 'UNBEKANNT').toUpperCase();
+    const conditionUnknown = !condition || condition === 'UNBEKANNT' || condition === 'UNKNOWN';
+    const candidates = collectionCandidateValues(item);
+    const exactReference = Math.max(0, marketReferenceValue(item.market || {}));
+    const candidateReferences = candidates.map(row => row.reference);
+    const allPlausibleReferences = [exactReference, ...candidateReferences].filter(value => value > 0);
+    const lowerCandidate = allPlausibleReferences.length ? Math.min(...allPlausibleReferences) : 0;
+    const upperCandidate = allPlausibleReferences.length ? Math.max(...allPlausibleReferences) : 0;
+    const reference = printConfidence === 'confirmed' ? (exactReference || lowerCandidate) : lowerCandidate;
+    const possibleReference = Math.max(reference, upperCandidate);
+    const priceClass = collectionPriceClass(reference, settings);
+    const trendStatus = collectionTrendStatus(item);
+    const experience = item.ownSales || {};
+    const { quality, turnover } = collectionTurnoverStatus(experience);
+    const reasons = [];
+    let factor = collectionBaseFactor(priceClass, settings);
+
+    if (quality.sufficient) {
+      const roi = optionalNumber(experience.averageRoi);
+      const profit = optionalNumber(experience.averageProfit);
+      if (['very-fast', 'fast'].includes(turnover.key) && profit !== null && profit > 0 && roi !== null && roi >= asNumber(settings.minRoi ?? 25)) {
+        factor = Math.min(priceClass.maxFactor, factor + 0.05);
+        reasons.push('Ausreichende eigene Verkäufe mit schnellem Umschlag und positiver Marge');
+      } else if (['slow', 'very-slow'].includes(turnover.key) || (roi !== null && roi < asNumber(settings.minRoi ?? 25))) {
+        factor = Math.max(priceClass.minFactor, factor - 0.05);
+        reasons.push('Ausreichende eigene Verkäufe zeigen langsamen Umschlag oder schwache Marge');
+      }
+    } else if (asNumber(experience.saleCount) > 0) {
+      reasons.push(`${quality.label}: nur Tendenz, keine starke Faktoranpassung`);
+    } else reasons.push('Keine ausreichende eigene Verkaufserfahrung');
+
+    let riskPercent = Math.max(0.01, asNumber(settings.collectionMinimumSafetyPercent ?? 5) / 100);
+    if (conditionUnknown) {
+      riskPercent += asNumber(settings.collectionUnknownConditionRiskPercent ?? 8) / 100;
+      reasons.push('Zustand unbekannt: zusätzlicher Sicherheitsabschlag, kein erfundener Zustandswert');
+    }
+    if (printConfidence === 'likely') {
+      riskPercent += asNumber(settings.collectionLikelyPrintRiskPercent ?? 7) / 100;
+      reasons.push('Print nur wahrscheinlich');
+    } else if (printConfidence === 'unknown') {
+      riskPercent += asNumber(settings.collectionUnknownPrintRiskPercent ?? 20) / 100;
+      reasons.push('Print unbekannt: niedrigster plausibler Kandidat trägt die konservative Rechnung');
+    }
+    if (/STARK FALLEND/.test(trendStatus)) {
+      riskPercent += asNumber(settings.collectionStrongFallingRiskPercent ?? 12) / 100;
+      reasons.push('Markttrend stark fallend');
+    } else if (/FALLEND/.test(trendStatus)) {
+      riskPercent += asNumber(settings.collectionFallingMarketRiskPercent ?? 7) / 100;
+      reasons.push('Markttrend fallend');
+    } else if (/STEIGEND/.test(trendStatus)) {
+      reasons.push('Steigender Markt wird als Potenzial gezeigt, aber nicht als FOMO-Aufschlag bezahlt');
+    }
+    if (!quality.sufficient) riskPercent += asNumber(settings.collectionWeakDataRiskPercent ?? 5) / 100;
+
+    const bulkPerCard = Math.max(0, asNumber(settings.collectionBulkPerCard ?? 0.01));
+    const nominalValue = roundMoney(reference * quantity);
+    const potentialValue = roundMoney(possibleReference * quantity);
+    let realisticValue = priceClass.key === 'E'
+      ? roundMoney(bulkPerCard * quantity)
+      : roundMoney(nominalValue * Math.max(0, 1 - riskPercent / 2));
+    let conservativeValue = priceClass.key === 'E'
+      ? roundMoney(bulkPerCard * quantity)
+      : roundMoney(nominalValue * Math.max(0, 1 - riskPercent));
+
+    const highQuantityFrom = Math.max(2, Math.round(asNumber(settings.collectionHighQuantityFrom ?? 5)));
+    const duplicateDiscount = quantity >= highQuantityFrom && !quality.sufficient
+      ? asNumber(settings.collectionHighQuantityDiscountPercent ?? 8) / 100 : 0;
+    if (duplicateDiscount > 0 && priceClass.key !== 'E') {
+      realisticValue = roundMoney(realisticValue * (1 - duplicateDiscount));
+      conservativeValue = roundMoney(conservativeValue * (1 - duplicateDiscount));
+      reasons.push(`Mengenabschlag bei ${quantity} Exemplaren ohne belastbare eigene Nachfrage`);
+    }
+
+    const uncertaintyValue = roundMoney(Math.max(0, potentialValue - conservativeValue));
+    const economicThreshold = Math.max(0, asNumber(settings.collectionEconomicRelevance ?? 3));
+    const economicRelevant = uncertaintyValue >= economicThreshold;
+    const specificRiskCost = priceClass.key === 'E' ? 0 : roundMoney(Math.max(0, realisticValue - conservativeValue) * 0.25);
+    const factorValue = priceClass.key === 'E' ? conservativeValue : conservativeValue * factor;
+    const roiCap = priceClass.key === 'E' ? conservativeValue : conservativeValue / (1 + asNumber(settings.minRoi ?? 25) / 100);
+    const minProfitCap = priceClass.key === 'E' ? conservativeValue : conservativeValue - Math.max(0, asNumber(settings.minProfit ?? 0)) * quantity;
+    const maxPurchaseContribution = roundMoney(Math.max(0, Math.min(factorValue, roiCap, minProfitCap) - specificRiskCost));
+    const confirmedContribution = printConfidence === 'confirmed' && !conditionUnknown
+      ? maxPurchaseContribution
+      : roundMoney(Math.max(maxPurchaseContribution, Math.min(
+        possibleReference * quantity * factor,
+        possibleReference * quantity / (1 + asNumber(settings.minRoi ?? 25) / 100)
+      ) - specificRiskCost));
+    const capitalBinding = quality.sufficient
+      ? (['very-fast', 'fast'].includes(turnover.key) ? 'NIEDRIG' : ['slow', 'very-slow'].includes(turnover.key) ? 'HOCH' : 'MITTEL')
+      : 'UNBEKANNT';
+    return {
+      id: item.id || '', productId: String(item.productId || ''), name: item.name || '', quantity,
+      printConfidence, condition, referenceSource: exactReference > 0 && printConfidence === 'confirmed' && /^\d+$/.test(String(item.productId || '')) ? 'Cardmarket Price Guide · exakte Produkt-ID' : candidates.length ? 'Price-Guide-Spanne plausibler Print-Kandidaten' : exactReference > 0 ? 'Gespeicherter Referenzwert · Print noch nicht bestätigt' : 'Keine belastbare Referenz',
+      referenceValue: roundMoney(reference), possibleReferenceValue: roundMoney(possibleReference), priceClass,
+      nominalValue, realisticValue, conservativeValue, potentialValue, bulkValue: priceClass.key === 'E' ? conservativeValue : 0,
+      uncertaintyValue, economicRelevant, economicThreshold, factor: Math.round(factor * 1000) / 1000,
+      specificRiskCost, maxPurchaseContribution, confirmedMaxContribution: confirmedContribution,
+      ownSalesDataStatus: quality.label, ownMedianDays: optionalNumber(experience.medianDays), turnover: turnover.displayLabel || turnover.label,
+      marketTrend: trendStatus || 'UNBEKANNT', capitalBinding, reasons
+    };
+  }
+
+  function collectionCapitalBinding(items = []) {
+    const weighted = { NIEDRIG: 0, MITTEL: 0, HOCH: 0, UNBEKANNT: 0 };
+    items.forEach(item => { weighted[item.capitalBinding] = (weighted[item.capitalBinding] || 0) + item.conservativeValue; });
+    const total = Object.values(weighted).reduce((sum, value) => sum + value, 0);
+    if (!total || weighted.UNBEKANNT / total >= 0.5) return { status: 'UNBEKANNT', weighted };
+    if (weighted.HOCH / total >= 0.35) return { status: 'HOCH', weighted };
+    if (weighted.NIEDRIG / total >= 0.6) return { status: 'NIEDRIG', weighted };
+    return { status: 'MITTEL', weighted };
+  }
+
+  function analyzeCollectionPurchase(collection = {}, options = {}) {
+    const settings = options.settings || {};
+    const items = (Array.isArray(collection.items) ? collection.items : []).map(item => analyzeCollectionPurchaseItem(item, settings));
+    const sum = key => roundMoney(items.reduce((total, item) => total + asNumber(item[key]), 0));
+    const cardCount = items.reduce((total, item) => total + item.quantity, 0);
+    const nominalValue = sum('nominalValue');
+    const realisticValue = sum('realisticValue');
+    const conservativeValue = sum('conservativeValue');
+    const potentialValue = sum('potentialValue');
+    const uncertaintyValue = sum('uncertaintyValue');
+    const bulkValue = sum('bulkValue');
+    const sellerPrice = Math.max(0, asNumber(collection.sellerPrice));
+    const shipping = Math.max(0, asNumber(collection.shipping));
+    const extra = Math.max(0, asNumber(collection.extra));
+    const totalCost = roundMoney(sellerPrice + shipping + extra);
+    const lowValueShare = conservativeValue > 0 ? items.filter(item => ['D', 'E'].includes(item.priceClass.key)).reduce((sumValue, item) => sumValue + item.conservativeValue, 0) / conservativeValue : 0;
+    const effortBuffer = roundMoney(items.length * 0.01 + conservativeValue * lowValueShare * asNumber(settings.collectionLowValueEffortPercent ?? 5) / 100);
+    const capitalBinding = collectionCapitalBinding(items);
+    const bindingBuffer = capitalBinding.status === 'HOCH' ? conservativeValue * 0.05 : capitalBinding.status === 'UNBEKANNT' ? conservativeValue * 0.02 : 0;
+    // Max-EK ist hier der gesamte wirtschaftlich tragbare Mittelabfluss. Versand
+    // und Zusatzkosten stecken bereits in totalCost und werden deshalb nicht ein
+    // zweites Mal abgezogen. sellerPriceCeiling zeigt separat den Kartenpreis.
+    const blindMaxEk = roundMoney(Math.max(0, sum('maxPurchaseContribution') - effortBuffer - bindingBuffer));
+    const confirmedMaxEk = roundMoney(Math.max(blindMaxEk, sum('confirmedMaxContribution') - effortBuffer - bindingBuffer));
+    const sellerPriceCeiling = roundMoney(Math.max(0, blindMaxEk - shipping - extra));
+    const firstOffer = roundMoney(Math.max(0, sellerPriceCeiling * asNumber(settings.collectionFirstOfferPercent ?? 75) / 100));
+    const relevantItems = items.filter(item => item.economicRelevant && item.printConfidence !== 'confirmed');
+    const ranked = items.slice().sort((left, right) => right.conservativeValue - left.conservativeValue);
+    const topValueCarriers = ranked.slice(0, 5);
+    const topThreeShare = conservativeValue > 0 ? topValueCarriers.slice(0, 3).reduce((sumValue, item) => sumValue + item.conservativeValue, 0) / conservativeValue * 100 : 0;
+    const concentrationRisk = topThreeShare >= asNumber(settings.collectionConcentrationThresholdPercent ?? 75) ? 'HOCH' : topThreeShare >= 50 ? 'MITTEL' : 'NIEDRIG';
+    const liquidCapital = optionalNumber(options.liquidCapital);
+    const capitalShare = liquidCapital !== null && liquidCapital > 0 ? totalCost / liquidCapital * 100 : null;
+    const capitalRisk = capitalShare === null ? 'UNBEKANNT'
+      : capitalShare > asNumber(settings.collectionCapitalHighPercent ?? 50) ? 'HOCH'
+        : capitalShare >= asNumber(settings.collectionCapitalMediumPercent ?? 25) ? 'MITTEL' : 'NIEDRIG';
+    const uncertaintyCanChangeDecision = relevantItems.length > 0 && totalCost > blindMaxEk * 0.8 && totalCost <= confirmedMaxEk;
+    const conservativeCoverage = totalCost > 0 ? conservativeValue / totalCost : 0;
+    let decision = 'ZU WENIGE DATEN';
+    if (items.length && conservativeValue > 0 && totalCost > 0) {
+      if (totalCost > confirmedMaxEk) decision = 'ABLEHNEN';
+      else if (uncertaintyCanChangeDecision) decision = 'DETAILPRÜFUNG NOTWENDIG';
+      else if (totalCost <= firstOffer && conservativeCoverage >= 1.5) decision = 'KAUFEN';
+      else if (totalCost <= blindMaxEk) decision = 'KAUFEN';
+      else decision = 'VERHANDELN';
+    }
+    const reasons = [
+      `Verkäuferpreis und direkte Kosten: ${totalCost.toFixed(2)} €`,
+      `Konservativer Handelswert: ${conservativeValue.toFixed(2)} €`,
+      `Blind-Max-EK: ${blindMaxEk.toFixed(2)} € · bestätigter Max-EK: ${confirmedMaxEk.toFixed(2)} €`,
+      `Top 3 tragen ${topThreeShare.toFixed(1)} % des konservativen Werts`,
+      `${relevantItems.length} wirtschaftlich relevante unbestätigte Position(en)`,
+      `Kapitalbindung: ${capitalBinding.status} · Bulk: ${bulkValue.toFixed(2)} €`
+    ];
+    const riskDistribution = {
+      confirmed: sumBy(items.filter(item => item.printConfidence === 'confirmed' && !['D', 'E'].includes(item.priceClass.key)), 'conservativeValue'),
+      uncertain: sumBy(items.filter(item => item.printConfidence !== 'confirmed' && !['D', 'E'].includes(item.priceClass.key)), 'conservativeValue'),
+      lowValue: sumBy(items.filter(item => item.priceClass.key === 'D'), 'conservativeValue'),
+      bulk: bulkValue
+    };
+    return {
+      itemCount: items.length, cardCount, items, sellerPrice: roundMoney(sellerPrice), shipping: roundMoney(shipping), extra: roundMoney(extra), totalCost,
+      nominalValue, realisticValue, conservativeValue, potentialValue, uncertaintyValue, bulkValue,
+      blindMaxEk, confirmedMaxEk, sellerPriceCeiling, firstOffer, negotiationReserve: roundMoney(Math.max(0, sellerPriceCeiling - firstOffer)),
+      safetyMargin: roundMoney(Math.max(0, realisticValue - conservativeValue)),
+      safetyMarginPercent: realisticValue > 0 ? Math.round(Math.max(0, realisticValue - conservativeValue) / realisticValue * 1000) / 10 : 0,
+      decision, reasons, relevantItems, topValueCarriers, topThreeShare: Math.round(topThreeShare * 10) / 10,
+      concentrationRisk, capitalBinding: capitalBinding.status, capitalShare: capitalShare === null ? null : Math.round(capitalShare * 10) / 10,
+      capitalRisk, effortBuffer, riskDistribution,
+      automaticInventoryCreated: false, priceDataType: 'CARDMARKET PRICE GUIDE / GESPEICHERTER TAGESWERT'
+    };
+  }
+
+  function sumBy(items, key) {
+    return roundMoney((items || []).reduce((sum, item) => sum + asNumber(item?.[key]), 0));
+  }
+
+  function buildCollectionDecisionSnapshot(collection = {}, analysis = {}, decidedAt = new Date().toISOString()) {
+    return {
+      id: collection.snapshotId || `collection-decision-${String(decidedAt).replace(/[^0-9]/g, '')}`,
+      decidedAt: String(decidedAt), sellerPrice: roundMoney(analysis.sellerPrice), shipping: roundMoney(analysis.shipping),
+      extra: roundMoney(analysis.extra), totalCost: roundMoney(analysis.totalCost),
+      nominalValue: roundMoney(analysis.nominalValue), realisticValue: roundMoney(analysis.realisticValue),
+      conservativeValue: roundMoney(analysis.conservativeValue), potentialValue: roundMoney(analysis.potentialValue),
+      uncertaintyValue: roundMoney(analysis.uncertaintyValue), bulkValue: roundMoney(analysis.bulkValue),
+      blindMaxEk: roundMoney(analysis.blindMaxEk), confirmedMaxEk: roundMoney(analysis.confirmedMaxEk),
+      sellerPriceCeiling: roundMoney(analysis.sellerPriceCeiling), safetyMargin: roundMoney(analysis.safetyMargin),
+      firstOffer: roundMoney(analysis.firstOffer), actualPurchasePrice: optionalNumber(collection.actualPurchasePrice),
+      decision: analysis.decision || 'ZU WENIGE DATEN', capitalBinding: analysis.capitalBinding || 'UNBEKANNT',
+      concentrationRisk: analysis.concentrationRisk || 'UNBEKANNT', reasons: [...(analysis.reasons || [])],
+      items: (analysis.items || []).map(item => ({
+        id: item.id, productId: item.productId, name: item.name, quantity: item.quantity, condition: item.condition,
+        referenceSource: item.referenceSource, referenceValue: item.referenceValue, possibleReferenceValue: item.possibleReferenceValue,
+        conservativeValue: item.conservativeValue, potentialValue: item.potentialValue,
+        maxPurchaseContribution: item.maxPurchaseContribution, confirmedMaxContribution: item.confirmedMaxContribution,
+        factor: item.factor, specificRiskCost: item.specificRiskCost, printConfidence: item.printConfidence,
+        economicRelevant: item.economicRelevant, marketTrend: item.marketTrend, ownSalesDataStatus: item.ownSalesDataStatus
+      })),
+      source: 'phase5_collection_purchase', historical: true
+    };
+  }
+
+  function buildCollectionPurchaseDraft(collection = {}, analysis = {}, options = {}) {
+    const actualPurchasePrice = Math.max(0, asNumber(options.actualPurchasePrice ?? collection.actualPurchasePrice));
+    const originals = Array.isArray(collection.items) ? collection.items : [];
+    const calculated = Array.isArray(analysis.items) ? analysis.items : [];
+    const conservativeWeight = calculated.reduce((sum, item) => sum + Math.max(0, asNumber(item.conservativeValue)), 0);
+    const quantityWeight = originals.reduce((sum, item) => sum + Math.max(1, Math.round(asNumber(item.quantity) || 1)), 0);
+    const pendingItems = originals.map(item => {
+      const calculation = calculated.find(row => String(row.id) === String(item.id)) || {};
+      const quantity = Math.max(1, Math.round(asNumber(item.quantity) || 1));
+      const weight = conservativeWeight > 0 ? Math.max(0, asNumber(calculation.conservativeValue)) / conservativeWeight : quantity / Math.max(1, quantityWeight);
+      return {
+        ...item,
+        quantity,
+        unitPrice: Math.round(actualPurchasePrice * weight / quantity * 1000000) / 1000000,
+        receiptLineKey: `COLLECTION:${String(collection.id || 'analysis')}:${String(item.id || '')}`,
+        receivedBusiness: 0, receivedPrivate: 0, receivedDamaged: 0, cancelledQuantity: 0,
+        plannedBusiness: quantity, plannedPrivate: 0
+      };
+    });
+    return {
+      id: String(options.purchaseId || ''),
+      orderNo: String(options.orderNo || '').trim(),
+      date: String(collection.date || options.date || '').trim(),
+      seller: String(collection.sellerName || collection.sourceType || 'Privater Sammlungsankauf'),
+      country: '', items: pendingItems.reduce((sum, item) => sum + item.quantity, 0),
+      cardValue: roundMoney(actualPurchasePrice), shipping: roundMoney(collection.shipping), extra: roundMoney(collection.extra),
+      refund: 0, status: 'Bestellt', paymentStatus: 'Bezahlt',
+      note: `Aus Sammlungsanalyse „${String(collection.title || 'ohne Namen')}“ übernommen. Bestand entsteht erst nach dem normalen Wareneingang.`,
+      pendingItems, inventoryCreated: false, costAllocationMethod: 'value',
+      sourceCollectionAnalysisId: String(collection.id || ''),
+      collectionDecisionSnapshotId: String(collection.lastDecisionSnapshotId || ''),
+      originalSellerPrice: roundMoney(collection.sellerPrice), recommendedFirstOffer: roundMoney(analysis.firstOffer),
+      decisionMaxEk: roundMoney(analysis.blindMaxEk), actualNegotiatedPrice: roundMoney(actualPurchasePrice)
+    };
+  }
+
   function buildCapitalOverview(state = {}, marketByProduct = {}) {
     const accounts = (state.capitalAccounts || []).filter(row => !row.archived);
     const balances = new Map(accounts.map(row => [row.id, 0]));
@@ -2258,6 +2561,13 @@
     profitThresholds,
     analyzeMarketDecision,
     analyzeInventoryItem,
+    COLLECTION_PRICE_CLASSES,
+    collectionPriceClass,
+    collectionBaseFactor,
+    analyzeCollectionPurchaseItem,
+    analyzeCollectionPurchase,
+    buildCollectionDecisionSnapshot,
+    buildCollectionPurchaseDraft,
     buildCapitalOverview,
     buildAgingSummary,
     matchesSlowMoverFilters,

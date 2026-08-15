@@ -1,0 +1,40 @@
+TCG Business Manager 6.9.0 – Sammlungsankauf und Max-EK
+=========================================================
+
+Neu
+---
+- Neuer Bereich „Sammlungsankauf“ für regelbasierte Händlerentscheidungen.
+- Manuelle DE-/EN-Kartensuche, konkrete Printauswahl, schnelle Mengenerfassung
+  sowie CSV-Import mit bewusst unbestätigter Zuordnung bei unsicheren Daten.
+- Getrennte Anzeige von nominalem Referenzwert, realistischem und konservativem
+  Handelswert, Unsicherheits- und Bulk-Wert.
+- Konfigurierbare Ankaufsklassen A bis E und Händlerfaktoren je Preisniveau.
+- Einbeziehung belastbarer eigener Verkaufsdaten, gespeicherter Markttrends,
+  Kapitalbindung, Mengen-, Print- und Zustandsrisiken.
+- Blind-Max-EK, bestätigter Max-EK, maximaler reiner Verkäuferpreis,
+  empfohlenes Erstangebot und Verhandlungsreserve.
+- Nachvollziehbare Entscheidungen: KAUFEN, VERHANDELN,
+  DETAILPRÜFUNG NOTWENDIG, ABLEHNEN und ZU WENIGE DATEN.
+- Top-Wertträger, Wertkonzentration, Risikoverteilung und Kapitalbudgetwarnung.
+- Unveränderlicher Entscheidungssnapshot mit tatsächlichem Kaufpreis.
+- Bestätigte Ankäufe werden an die vorhandene Einkaufs-/Wareneingangslogik
+  übergeben; es entsteht vorher kein Bestand und keine zweite Einkaufsverwaltung.
+
+Datenmodell
+-----------
+- SQLite-Schema 11 mit collection_purchase_analyses,
+  collection_purchase_items und collection_purchase_decision_snapshots.
+- app_state bleibt die führende Quelle; normalisierte Tabellen sind die
+  auswertbare Materialisierung derselben Daten.
+- Migration mit Sicherung, Transaktion und Rollback; keine erfundenen
+  Sammlungsdaten oder rückwirkenden Änderungen historischer Käufe/Verkäufe.
+
+Sicherheit und fachliche Grenzen
+--------------------------------
+- Cardmarket Price Guide bzw. gespeicherte Tageswerte bleiben ausdrücklich
+  Referenzdaten; es werden keine Live-Angebote oder Verkaufsaussichten behauptet.
+- Unbekannte Prints verwenden nie automatisch den teuersten Kandidaten.
+- Unbekannte Zustände werden als Risiko behandelt, nicht als erfundener Preis.
+- Versand und direkte Kosten werden nur einmal berücksichtigt.
+- Keine automatische Preisänderung und keine automatische Bestandsübernahme.
+- Keine neue Fotoanalyse, OCR, Bounding Boxes oder automatische Bilderkennung.

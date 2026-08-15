@@ -1,0 +1,62 @@
+TCG Business Manager 6.9.0 – PHASE-5-Abschlussprüfung
+=====================================================
+
+Release
+-------
+- Version: 6.9.0 „Sammlungsankauf und Max-EK“
+- SQLite-Schema: 11
+- Installer: dist\TCG Business Manager-Setup-6.9.0.exe
+- SHA-256: 20945FF4FB3C3EF113A65AC5E1109F2AD1BC7A86AEC6975F636D1EAB9915F5C8
+- Normale Installation: C:\Users\stefa\AppData\Local\Programs\TCG Business Manager
+
+Automatisierte Prüfung
+----------------------
+- 211/211 Tests erfolgreich.
+- Syntax-, Paket- und Electron-Prüfung erfolgreich.
+- 500 Positionen in ca. 4–5 ms ausgewertet.
+- Schema-11-Backup, Transaktion und gezielter Rollback erfolgreich geprüft.
+- Keine automatische Bestandsübernahme und keine automatische Preisänderung.
+- Übergabe einer bestätigten Analyse an den normalen Einkauf getestet.
+- Keine neue Fotoanalyse, OCR oder automatische Bilderkennung implementiert.
+
+Echte Datenbankkopie
+--------------------
+- Quelle nur gelesen; Dateigröße und Änderungszeit des Originals unverändert.
+- Kopie: SQLite-Integrität OK; verlustfreie Migration Schema 10 -> 11.
+- Migrationsbackup vor Schema 11 erfolgreich angelegt.
+- 885 Bestandskarten, 14 private Karten, 9 Einkäufe, 49 Verkäufe.
+- 2.122.895 historische Price-Guide-Zeilen.
+- Keine erfundenen Sammlungsanalysen, Positionen oder Snapshots.
+- Temporäre Kopie und temporäre Migrationssicherung entfernt.
+
+Praxistests
+-----------
+- Gemischte Sammlung, Verkäuferpreis 80,00 €: Nominalwert 81,60 €,
+  konservativer Handelswert 65,44 €, Blind-Max-EK 30,62 € -> ABLEHNEN.
+- Dieselbe Sammlung, Verkäuferpreis 30,00 €: Blind-Max-EK 30,62 € und keine
+  unbestätigte wirtschaftlich relevante Position -> KAUFEN.
+- Wenige wertvolle Karten mit großer Printspanne: Blind-Max-EK 3,68 €,
+  bestätigter Max-EK 12,75 €, Gesamtkosten 10,99 € -> DETAILPRÜFUNG NOTWENDIG.
+
+Installierter Smoke-Test
+------------------------
+- Installierter Programmkern meldet Version 6.9.0.
+- Dashboard, Bestand, Einkauf, Verkauf, Verkaufsanalyse, Kapital,
+  Langsamdreher und Sammlungsankauf geladen.
+- Kartenerfassung, DE-/EN-Suche, Price Guide, Marktlogik, eigene Verkaufsdaten,
+  Max-EK, Ergebnisstatus und Entscheidungssnapshot erfolgreich geprüft.
+- Testdatenbank der installierten Anwendung: Schema 11, 86.004 Produkte,
+  2.122.895 Price-Guide-Zeilen; keine Renderer-, JavaScript- oder SQLite-Fehler.
+- Kein automatischer Bestand erzeugt.
+- Desktop- und Startmenü-Verknüpfung zeigen auf die normale Installation.
+- Temporäre Smoke-Test-Daten vollständig entfernt.
+
+Fachliche Grenzen
+-----------------
+- Cardmarket Price Guide ist ein gespeicherter Referenzwert, kein Live-Markt.
+- Sprache, Zustand und Verkäuferland können ohne passende Quelle nicht in den
+  Price Guide hineingerechnet werden.
+- Die echte Datenbasis liefert derzeit oft nur geringe eigene Verkaufserfahrung;
+  das wird bewusst als geringe/keine Datenbasis ausgewiesen.
+- Unbekannte Prints und CSV-Zuordnungen benötigen weiterhin manuelle Bestätigung.
+- Fotoanalyse bleibt bis zu einer späteren, gesonderten Freigabe ausgeschlossen.

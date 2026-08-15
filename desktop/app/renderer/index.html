@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.8.0</title>
+  <title>TCG Business Manager 6.9.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.8.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.9.0 · SQLite</div>
         </div>
       </div>
 
@@ -30,6 +30,7 @@
         <button class="nav-item" data-view="slowmovers">Langsamdreher</button>
         <button class="nav-item" data-view="watchlist">Marktbeobachtung</button>
         <button class="nav-item" data-view="buying">Einkaufsplanung & Nachfrage</button>
+        <button class="nav-item" data-view="collectionpurchases">Sammlungsankauf</button>
         <button class="nav-item" data-view="cardmarket">Cardmarket-Datencenter</button>
         <button class="nav-item" data-view="partners">Händler & Kunden</button>
         <button class="nav-item" data-view="imports">Importe</button>
@@ -528,6 +529,61 @@
         </article>
       </section>
 
+      <section id="view-collectionpurchases" class="view">
+        <article class="panel collection-purchase-panel">
+          <div class="panel-head">
+            <div><h2>Sammlungsankauf prüfen</h2><small>Regelbasierte Händlerentscheidung aus exakten Prints, gespeichertem Cardmarket Price Guide, Markttrend und eigener Verkaufserfahrung. Keine Live-Angebotsdaten.</small></div>
+            <div class="row-actions"><select id="collectionAnalysisSelect"><option value="">Neue Analyse</option></select><button id="newCollectionAnalysisBtn" class="secondary" type="button">Neu</button><button id="saveCollectionSnapshotBtn" class="secondary" type="button">Entscheidung speichern</button><button id="confirmCollectionPurchaseBtn" class="primary" type="button">Ankauf bestätigen</button></div>
+          </div>
+          <div class="buying-input-grid collection-metadata-grid">
+            <label>Titel<input id="collectionTitle" placeholder="z. B. Kleinanzeigen-Sammlung August" /></label>
+            <label>Quelle<select id="collectionSourceType"><option>Kleinanzeigen</option><option>eBay</option><option>Privat</option><option>Cardmarket</option><option>Sonstige</option></select></label>
+            <label>Verkäufername<input id="collectionSellerName" placeholder="optional" /></label>
+            <label>URL<input id="collectionUrl" type="url" placeholder="optional" /></label>
+            <label>Datum<input id="collectionDate" type="date" /></label>
+            <label>Verkäuferpreis (€)<input id="collectionSellerPrice" type="number" min="0" step="0.01" /></label>
+            <label>Versand (€)<input id="collectionShipping" type="number" min="0" step="0.01" /></label>
+            <label>Sonstige Einkaufskosten (€)<input id="collectionExtra" type="number" min="0" step="0.01" /></label>
+          </div>
+          <label>Notizen<textarea id="collectionNotes" rows="2" placeholder="Eigene Einschätzung, fehlende Informationen oder Verhandlungsnotiz"></textarea></label>
+        </article>
+
+        <article class="panel collection-purchase-panel">
+          <div class="panel-head"><div><h2>Schnelle Kartenerfassung</h2><small>Deutsch oder Englisch suchen, Print bewusst wählen und mit Enter zügig weiterarbeiten. Unsichere Zuordnungen werden nie als bestätigt gespeichert.</small></div><label class="secondary file-label">CSV importieren<input id="collectionCsvInput" type="file" accept=".csv,.txt" hidden /></label></div>
+          <div class="collection-quick-entry">
+            <label class="collection-search-field">Kartenname oder Setnummer<input id="collectionCardSearch" placeholder="Deutscher oder englischer Name …" autocomplete="off" /></label>
+            <label>Menge<input id="collectionCardQuantity" type="number" min="1" step="1" value="1" /></label>
+            <label>Zustand<select id="collectionCardCondition"><option>UNBEKANNT</option><option>NM</option><option>EX</option><option>GD</option><option>LP</option><option>PL</option><option>POOR</option></select></label>
+            <label>Sprache<select id="collectionCardLanguage"><option value="">Unbekannt</option><option>DE</option><option>EN</option><option>FR</option><option>IT</option><option>ES</option><option>PT</option></select></label>
+            <label>Print-Sicherheit<select id="collectionCardConfidence"><option value="confirmed">PRINT BESTÄTIGT</option><option value="likely">PRINT WAHRSCHEINLICH</option><option value="unknown">PRINT UNBEKANNT</option></select></label>
+            <button id="addCollectionCardBtn" class="primary" type="button" disabled>Position hinzufügen</button>
+          </div>
+          <div id="collectionCardSearchResults" class="inventory-card-results collection-search-results"></div>
+          <p class="muted">CSV-Felder: Name; Product-ID optional; Setcode optional; Menge; Zustand; Sprache. Ohne eindeutige Produkt-ID bleibt der Print unbekannt und muss geprüft werden.</p>
+        </article>
+
+        <article class="panel collection-purchase-panel">
+          <div class="panel-head"><div><h2>Händlerentscheidung</h2><small>Nominalwert ist nur eine Referenzsumme. Entscheidend sind konservativer Handelswert, Risiken, Kapitalbindung und Max-EK.</small></div></div>
+          <div id="collectionDecisionSummary" class="collection-summary"></div>
+          <div class="two-col collection-analysis-columns">
+            <div><h3>Wertträger</h3><div id="collectionValueCarriers"></div></div>
+            <div><h3>Risikoverteilung</h3><div id="collectionRiskDistribution"></div></div>
+          </div>
+          <div id="collectionDecisionReasons" class="info"></div>
+        </article>
+
+        <article class="panel collection-purchase-panel">
+          <div class="panel-head"><div><h2>Kartenpositionen</h2><small>Sortier- und filterbare Berechnungsgrundlage je Druckvariante.</small></div></div>
+          <div class="filter-panel">
+            <label>Suche<input id="collectionItemFilter" placeholder="Karte, Set, Produkt-ID" /></label>
+            <label>Preisklasse<select id="collectionClassFilter"><option value="">Alle Klassen</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></label>
+            <label>Print-Sicherheit<select id="collectionConfidenceFilter"><option value="">Alle</option><option value="confirmed">Bestätigt</option><option value="likely">Wahrscheinlich</option><option value="unknown">Unbekannt</option></select></label>
+            <label>Sortierung<select id="collectionSort"><option value="value">Konservativer Wert</option><option value="uncertainty">Unsicherheit</option><option value="max">Max-EK-Beitrag</option><option value="name">Kartenname</option></select></label>
+          </div>
+          <div class="table-wrap"><table class="collection-purchase-table"><thead><tr><th>Karte / Produkt-ID</th><th>Set / Rarität</th><th>Menge</th><th>Zustand / Sprache</th><th>Print-Sicherheit</th><th>Referenz</th><th>Konservativ</th><th>Faktor</th><th>Eigene Daten / Median</th><th>Markttrend</th><th>Unsicherheit</th><th>Relevanz</th><th>Max-EK-Beitrag</th><th></th></tr></thead><tbody id="collectionItemTable"><tr><td colspan="14" class="empty">Noch keine Karten erfasst.</td></tr></tbody></table></div>
+        </article>
+      </section>
+
       <section id="view-cardmarket" class="view">
         <div class="metric-grid cm-metric-grid">
           <article class="metric-card"><span>Produkte im Gesamtkatalog</span><strong id="cmProductCount">0</strong><small id="cmCatalogStatus">Noch kein Produktkatalog importiert</small></article>
@@ -855,6 +911,26 @@
               <label>Trend stark ab (%)<input id="settingMarketTrendStrong" type="number" min="0" step="0.5" /></label>
               <label>Referenzbereich innerhalb ± (%)<input id="settingMarketPriceNear" type="number" min="0" step="0.5" /></label>
               <label>Deutliche Referenzabweichung ab (%)<input id="settingMarketPriceFar" type="number" min="0" step="0.5" /></label>
+            </div>
+          </article>
+
+          <article class="panel settings-section">
+            <div class="panel-head"><div><h2>Sammlungsankauf</h2><small>Zentrale Händlerregeln für Phase 5. Faktoren bleiben innerhalb der fachlich vorgesehenen Bandbreiten.</small></div></div>
+            <div class="settings-grid">
+              <label>Ankaufsklasse A ab (€)<input id="settingCollectionClassA" type="number" min="0" step="0.01" /></label>
+              <label>Ankaufsklasse B ab (€)<input id="settingCollectionClassB" type="number" min="0" step="0.01" /></label>
+              <label>Ankaufsklasse C ab (€)<input id="settingCollectionClassC" type="number" min="0" step="0.01" /></label>
+              <label>Ankaufsklasse D ab (€)<input id="settingCollectionClassD" type="number" min="0" step="0.01" /></label>
+              <label>Grundfaktor A (%)<input id="settingCollectionFactorA" type="number" min="55" max="65" step="0.5" /></label>
+              <label>Grundfaktor B (%)<input id="settingCollectionFactorB" type="number" min="40" max="55" step="0.5" /></label>
+              <label>Grundfaktor C (%)<input id="settingCollectionFactorC" type="number" min="25" max="40" step="0.5" /></label>
+              <label>Grundfaktor D (%)<input id="settingCollectionFactorD" type="number" min="10" max="20" step="0.5" /></label>
+              <label>Bulk-Wert pro Karte (€)<input id="settingCollectionBulk" type="number" min="0" max="1" step="0.001" /></label>
+              <label>Erstangebot vom Blind-Max-EK (%)<input id="settingCollectionFirstOffer" type="number" min="25" max="100" step="1" /></label>
+              <label>Economic-Relevance-Schwelle (€)<input id="settingCollectionRelevance" type="number" min="0" step="0.50" /></label>
+              <label>Mindest-Sicherheitsmarge (%)<input id="settingCollectionSafety" type="number" min="1" max="50" step="0.5" /></label>
+              <label>Kapitalwarnung mittel ab (%)<input id="settingCollectionCapitalMedium" type="number" min="1" max="99" step="1" /></label>
+              <label>Kapitalwarnung hoch ab (%)<input id="settingCollectionCapitalHigh" type="number" min="1" max="100" step="1" /></label>
             </div>
           </article>
 

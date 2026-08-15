@@ -466,6 +466,11 @@ CREATE TABLE IF NOT EXISTS purchase_receipt_lines (
   allocated_shipping REAL NOT NULL DEFAULT 0,
   allocated_extra REAL NOT NULL DEFAULT 0,
   unit_cost REAL NOT NULL DEFAULT 0,
+  cart_filler_status TEXT NOT NULL DEFAULT 'unknown',
+  incremental_shipping_cost REAL,
+  incremental_direct_cost REAL,
+  decision_cost_status TEXT NOT NULL DEFAULT 'unknown',
+  confirmed_target_sell_price REAL,
   allocation_method TEXT NOT NULL DEFAULT 'value',
   archived INTEGER NOT NULL DEFAULT 0,
   raw_json TEXT NOT NULL DEFAULT '{}',
@@ -495,6 +500,7 @@ CREATE TABLE IF NOT EXISTS inventory_assets (
   acquisition_cost_status TEXT NOT NULL DEFAULT 'unknown',
   acquisition_date TEXT NOT NULL DEFAULT '',
   original_target_sell REAL,
+  current_target_sell REAL,
   current_listing_price REAL,
   is_listed INTEGER NOT NULL DEFAULT 0,
   holding_profile TEXT NOT NULL DEFAULT '',
@@ -512,7 +518,10 @@ ON inventory_assets(product_id, ownership, status, archived);
 CREATE INDEX IF NOT EXISTS idx_inventory_assets_purchase
 ON inventory_assets(purchase_id, ownership, archived);
 
--- Schema 9: Die JSON-Struktur in app_state bleibt die fuehrende Quelle fuer
+CREATE INDEX IF NOT EXISTS idx_inventory_assets_sale_product
+ON inventory_assets(sale_id, product_id, ownership, archived);
+
+-- Schema 9/10: Die JSON-Struktur in app_state bleibt die fuehrende Quelle fuer
 -- bearbeitbare App-Daten. Diese Spalten und Tabellen sind die normalisierte,
 -- transaktional neu aufbaubare Sicht fuer Auswertungen und spaetere APIs.
 CREATE TABLE IF NOT EXISTS capital_accounts (

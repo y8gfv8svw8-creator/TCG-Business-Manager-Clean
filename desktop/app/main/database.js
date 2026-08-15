@@ -4,7 +4,7 @@ const path = require('path');
 const cardSearch = require('../shared/card-search');
 const businessAutomation = require('../shared/business-automation');
 
-const CURRENT_SCHEMA_VERSION = 9;
+const CURRENT_SCHEMA_VERSION = 10;
 
 function isoNow() {
   return new Date().toISOString();
@@ -139,6 +139,29 @@ function upgradeStateToVersion9(state = {}, now = isoNow()) {
   return result;
 }
 
+function upgradeStateToVersion10(state = {}) {
+  const result = { ...state };
+  const upgradeAsset = item => ({
+    ...item,
+    targetSell: nullableMoney(item?.targetSell)
+  });
+  const upgradePurchase = purchase => ({
+    ...purchase,
+    pendingItems: (Array.isArray(purchase?.pendingItems) ? purchase.pendingItems : []).map(item => ({
+      ...item,
+      cartFillerStatus: ['yes', 'no'].includes(String(item?.cartFillerStatus || '')) ? String(item.cartFillerStatus) : 'unknown',
+      incrementalShippingCost: nullableMoney(item?.incrementalShippingCost),
+      incrementalDirectCost: nullableMoney(item?.incrementalDirectCost),
+      decisionCostStatus: ['known', 'unknown'].includes(String(item?.decisionCostStatus || '')) ? String(item.decisionCostStatus) : 'unknown',
+      confirmedTargetSellPrice: nullableMoney(item?.confirmedTargetSellPrice)
+    }))
+  });
+  result.inventory = (Array.isArray(state.inventory) ? state.inventory : []).map(upgradeAsset);
+  result.privateCollection = (Array.isArray(state.privateCollection) ? state.privateCollection : []).map(upgradeAsset);
+  result.purchases = (Array.isArray(state.purchases) ? state.purchases : []).map(upgradePurchase);
+  return result;
+}
+
 class TcgDatabase {
   constructor({ databasePath, schemaPath, backupRoot }) {
     this.databasePath = databasePath;
@@ -230,6 +253,7 @@ class TcgDatabase {
       if (currentVersion < 6) this.migrateToVersion6();
       if (currentVersion < 7) this.migrateToVersion7();
       if (currentVersion < 9) this.migrateToVersion9();
+      if (currentVersion < 10) this.migrateToVersion10();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -396,6 +420,24 @@ class TcgDatabase {
     if (!row?.state_json) return;
     const updatedAt = row.updated_at || isoNow();
     const state = upgradeStateToVersion9(JSON.parse(row.state_json), updatedAt);
+    this.materializeState(state, updatedAt);
+    this.db.prepare('UPDATE app_state SET state_json = ?, updated_at = ? WHERE id = 1')
+      .run(JSON.stringify(state), updatedAt);
+  }
+
+  migrateToVersion10() {
+    this.ensureDataSources();
+    this.addColumnIfMissing('purchase_receipt_lines', 'cart_filler_status', "TEXT NOT NULL DEFAULT 'unknown'");
+    this.addColumnIfMissing('purchase_receipt_lines', 'incremental_shipping_cost', 'REAL');
+    this.addColumnIfMissing('purchase_receipt_lines', 'incremental_direct_cost', 'REAL');
+    this.addColumnIfMissing('purchase_receipt_lines', 'decision_cost_status', "TEXT NOT NULL DEFAULT 'unknown'");
+    this.addColumnIfMissing('purchase_receipt_lines', 'confirmed_target_sell_price', 'REAL');
+    this.addColumnIfMissing('inventory_assets', 'current_target_sell', 'REAL');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_inventory_assets_sale_product ON inventory_assets(sale_id, product_id, ownership, archived);');
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (!row?.state_json) return;
+    const updatedAt = row.updated_at || isoNow();
+    const state = upgradeStateToVersion10(JSON.parse(row.state_json));
     this.materializeState(state, updatedAt);
     this.db.prepare('UPDATE app_state SET state_json = ?, updated_at = ? WHERE id = 1')
       .run(JSON.stringify(state), updatedAt);
@@ -698,8 +740,10 @@ class TcgDatabase {
         receipt_line_key, purchase_id, order_no, source_row, product_id,
         ordered_quantity, business_quantity, private_quantity, damaged_quantity,
         cancelled_quantity, open_quantity, unit_price, allocated_shipping,
-        allocated_extra, unit_cost, allocation_method, archived, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        allocated_extra, unit_cost, cart_filler_status, incremental_shipping_cost,
+        incremental_direct_cost, decision_cost_status, confirmed_target_sell_price,
+        allocation_method, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(receipt_line_key) DO UPDATE SET
         purchase_id=excluded.purchase_id, order_no=excluded.order_no,
         source_row=excluded.source_row, product_id=excluded.product_id,
@@ -708,6 +752,11 @@ class TcgDatabase {
         cancelled_quantity=excluded.cancelled_quantity, open_quantity=excluded.open_quantity,
         unit_price=excluded.unit_price, allocated_shipping=excluded.allocated_shipping,
         allocated_extra=excluded.allocated_extra, unit_cost=excluded.unit_cost,
+        cart_filler_status=excluded.cart_filler_status,
+        incremental_shipping_cost=excluded.incremental_shipping_cost,
+        incremental_direct_cost=excluded.incremental_direct_cost,
+        decision_cost_status=excluded.decision_cost_status,
+        confirmed_target_sell_price=excluded.confirmed_target_sell_price,
         allocation_method=excluded.allocation_method, archived=0,
         raw_json=excluded.raw_json, updated_at=excluded.updated_at
     `);
@@ -716,9 +765,9 @@ class TcgDatabase {
         inventory_id, ownership, purchase_id, purchase_line_key, sale_id,
         product_id, card_name, set_name, collector_number, rarity, language,
         card_condition, acquisition_cost, acquisition_cost_status, acquisition_date,
-        original_target_sell, current_listing_price, is_listed, holding_profile,
+        original_target_sell, current_target_sell, current_listing_price, is_listed, holding_profile,
         long_term_hold, status, location, archived, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       ON CONFLICT(inventory_id) DO UPDATE SET
         ownership=excluded.ownership, purchase_id=excluded.purchase_id,
         purchase_line_key=excluded.purchase_line_key, sale_id=excluded.sale_id,
@@ -729,6 +778,7 @@ class TcgDatabase {
         acquisition_cost_status=excluded.acquisition_cost_status,
         acquisition_date=excluded.acquisition_date,
         original_target_sell=excluded.original_target_sell,
+        current_target_sell=excluded.current_target_sell,
         current_listing_price=excluded.current_listing_price,
         is_listed=excluded.is_listed, holding_profile=excluded.holding_profile,
         long_term_hold=excluded.long_term_hold, status=excluded.status,
@@ -744,7 +794,7 @@ class TcgDatabase {
       String(item.collectorNumber || ''), String(item.rarity || item.version || ''),
       String(item.language || ''), String(item.condition || ''), numberValue(item.cost),
       legacyCostStatus(item), String(item.purchaseDate || ''), nullableMoney(item.originalTargetSell),
-      nullableMoney(item.listingPrice), item.listed ? 1 : 0,
+      nullableMoney(item.targetSell), nullableMoney(item.listingPrice), item.listed ? 1 : 0,
       String(item.holdingProfile || 'standard'), item.longTermHold ? 1 : 0,
       String(item.status || ''), String(item.location || ''),
       JSON.stringify(item), updatedAt
@@ -889,7 +939,11 @@ class TcgDatabase {
             /^\d+$/.test(String(item.productId || '').trim()) ? String(item.productId).trim() : '',
             receipt.quantity, businessQuantity, privateQuantity, damagedQuantity,
             cancelledQuantity, openQuantity, row.unitPrice, row.allocatedShipping,
-            row.allocatedExtra, row.unitCost, allocationMethod, JSON.stringify(item), updatedAt
+            row.allocatedExtra, row.unitCost,
+            ['yes', 'no'].includes(String(item.cartFillerStatus || '')) ? String(item.cartFillerStatus) : 'unknown',
+            nullableMoney(item.incrementalShippingCost), nullableMoney(item.incrementalDirectCost),
+            String(item.decisionCostStatus || 'unknown') === 'known' ? 'known' : 'unknown',
+            nullableMoney(item.confirmedTargetSellPrice), allocationMethod, JSON.stringify(item), updatedAt
           );
           if (businessQuantity > 0) insertLine(order, item, index, {
             unitPrice: row.unitPrice, allocatedShipping: row.allocatedShipping,
@@ -1142,6 +1196,113 @@ class TcgDatabase {
       ...row,
       changedFields: JSON.parse(row.changedFieldsJson || '[]')
     }));
+  }
+
+  getOwnSalesExperience({ productIds = [], asOf = '' } = {}) {
+    this.open();
+    const ids = Array.isArray(productIds)
+      ? [...new Set(productIds.map(value => String(value || '').trim()).filter(value => /^\d+$/.test(value)))].slice(0, 1000)
+      : [];
+    const clauses = ["tl.trade_type = 'sale'", 'tl.archived = 0', 'orders.archived = 0'];
+    const parameters = [];
+    if (ids.length) {
+      clauses.push(`tl.product_id IN (${ids.map(() => '?').join(',')})`);
+      parameters.push(...ids);
+    }
+    const saleRows = this.db.prepare(`
+      SELECT
+        tl.local_order_id AS sale_id, tl.product_id, tl.card_name, tl.set_name,
+        tl.rarity, tl.quantity, tl.unit_price, tl.unit_cost, tl.unit_net,
+        tl.raw_json, orders.order_no, orders.transaction_date, orders.status,
+        products.name_de, products.name_en, products.set_name AS product_set_name,
+        products.rarity AS product_rarity
+      FROM trade_lines tl
+      JOIN trade_orders orders ON orders.order_key = tl.order_key
+      LEFT JOIN products ON products.product_id = tl.product_id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY orders.transaction_date, tl.line_key
+    `).all(...parameters).filter(row => isRealizedSaleStatus(row.status));
+
+    const assetClauses = ["assets.ownership = 'business'", 'assets.archived = 0', "assets.sale_id <> ''"];
+    const assetParameters = [];
+    if (ids.length) {
+      assetClauses.push(`assets.product_id IN (${ids.map(() => '?').join(',')})`);
+      assetParameters.push(...ids);
+    }
+    const assetRows = this.db.prepare(`
+      SELECT
+        assets.inventory_id, assets.sale_id, assets.product_id,
+        assets.acquisition_cost, assets.acquisition_cost_status,
+        assets.acquisition_date, assets.holding_profile, assets.raw_json,
+        MIN(CASE WHEN history.event_type = 'first_listing' AND history.archived = 0
+          THEN history.changed_at ELSE NULL END) AS first_listing_at
+      FROM inventory_assets assets
+      LEFT JOIN inventory_listing_history history ON history.inventory_id = assets.inventory_id
+      WHERE ${assetClauses.join(' AND ')}
+      GROUP BY assets.inventory_id
+    `).all(...assetParameters);
+    const assetsBySalePrint = new Map();
+    assetRows.forEach(row => {
+      const key = `${row.sale_id}|${row.product_id}`;
+      if (!assetsBySalePrint.has(key)) assetsBySalePrint.set(key, []);
+      assetsBySalePrint.get(key).push(row);
+    });
+    const assetCursors = new Map();
+    const records = saleRows.map((row, lineIndex) => {
+      const quantity = positiveQuantity(row.quantity);
+      const key = `${row.sale_id}|${row.product_id}`;
+      const candidates = assetsBySalePrint.get(key) || [];
+      const cursor = assetCursors.get(key) || 0;
+      const matchedAssets = candidates.slice(cursor, cursor + quantity);
+      assetCursors.set(key, cursor + matchedAssets.length);
+      let lineRaw = {};
+      try { lineRaw = JSON.parse(row.raw_json || '{}'); } catch { lineRaw = {}; }
+      const historicalStatus = String(lineRaw.historicalCostStatus || '').toLowerCase();
+      const assetsHaveKnownCost = matchedAssets.length >= quantity && matchedAssets.every(asset => asset.acquisition_cost_status !== 'unknown');
+      const costKnown = historicalStatus !== 'unknown' && (
+        numberValue(row.unit_cost) > 0 || ['confirmed', 'linked'].includes(historicalStatus) || assetsHaveKnownCost
+      );
+      const daysToSaleSamples = matchedAssets.map(asset => {
+        let rawAsset = {};
+        try { rawAsset = JSON.parse(asset.raw_json || '{}'); } catch { rawAsset = {}; }
+        const start = asset.first_listing_at || businessAutomation.inventoryStartDate({
+          ...rawAsset,
+          purchaseDate: asset.acquisition_date || rawAsset.purchaseDate,
+          holdingProfile: asset.holding_profile || rawAsset.holdingProfile
+        });
+        return start ? businessAutomation.ageInDays(start, row.transaction_date) : null;
+      }).filter(value => value !== null);
+      return {
+        productId: String(row.product_id || ''),
+        orderId: String(row.sale_id || row.order_no || `sale-${lineIndex}`),
+        soldAt: String(row.transaction_date || ''),
+        quantity,
+        sellPrice: numberValue(row.unit_price),
+        fullCost: costKnown ? numberValue(row.unit_cost) : null,
+        costKnown,
+        unitProfit: costKnown ? numberValue(row.unit_net) - numberValue(row.unit_cost) : null,
+        daysToSaleSamples,
+        name: String(row.name_de || row.card_name || row.name_en || ''),
+        germanName: String(row.name_de || ''),
+        englishName: String(row.name_en || ''),
+        setName: String(row.product_set_name || row.set_name || ''),
+        rarity: String(row.product_rarity || row.rarity || ''),
+        holdingProfile: String(matchedAssets[0]?.holding_profile || '')
+      };
+    });
+    const analysis = businessAutomation.analyzeOwnSalesExperience(records, { asOf: asOf || isoNow() });
+    const summary = {
+      realizedSaleLines: records.length,
+      soldQuantity: records.reduce((sum, row) => sum + row.quantity, 0),
+      withPrintId: records.filter(row => /^\d+$/.test(row.productId)).reduce((sum, row) => sum + row.quantity, 0),
+      withReliableDuration: records.reduce((sum, row) => sum + row.daysToSaleSamples.length, 0),
+      withKnownCost: records.filter(row => row.costKnown).reduce((sum, row) => sum + row.quantity, 0),
+      withCalculableProfit: records.filter(row => row.unitProfit !== null).reduce((sum, row) => sum + row.quantity, 0),
+      withCalculableRoi: records.filter(row => row.unitProfit !== null && Number(row.fullCost) > 0).reduce((sum, row) => sum + row.quantity, 0),
+      printCount: analysis.length,
+      sufficientPrintCount: analysis.filter(row => row.dataQuality.sufficient).length
+    };
+    return { calculatedAt: isoNow(), summary, records: analysis };
   }
 
   getTradeRecommendations({ productIds = [], limit = 12 } = {}) {

@@ -196,6 +196,213 @@
     return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
   };
 
+  const SALES_DATA_QUALITY_THRESHOLDS = Object.freeze({ sufficient: 5 });
+  const OWN_TURNOVER_THRESHOLDS = Object.freeze({ veryFast: 7, fast: 21, normal: 45, slow: 90 });
+
+  const finiteValues = values => (values || [])
+    .map(value => optionalNumber(value))
+    .filter(value => value !== null);
+
+  const averageValue = values => {
+    const rows = finiteValues(values);
+    return rows.length ? rows.reduce((sum, value) => sum + value, 0) / rows.length : null;
+  };
+
+  const medianValue = values => {
+    const rows = finiteValues(values).sort((left, right) => left - right);
+    if (!rows.length) return null;
+    const middle = Math.floor(rows.length / 2);
+    return rows.length % 2 ? rows[middle] : (rows[middle - 1] + rows[middle]) / 2;
+  };
+
+  function ownSalesDataQuality(saleCount = 0) {
+    const count = Math.max(0, Math.round(asNumber(saleCount)));
+    if (count === 0) return { key: 'none', label: 'KEINE DATEN', sufficient: false };
+    if (count === 1) return { key: 'very-low', label: 'SEHR GERINGE DATENBASIS', sufficient: false };
+    if (count === 2) return { key: 'low', label: 'GERINGE DATENBASIS', sufficient: false };
+    if (count < SALES_DATA_QUALITY_THRESHOLDS.sufficient) return { key: 'restricted', label: 'EINGESCHRÄNKTE DATENBASIS', sufficient: false };
+    return { key: 'sufficient', label: 'AUSREICHENDE EIGENE DATEN', sufficient: true };
+  }
+
+  function ownTurnoverClass(medianDays, saleCount = 0) {
+    const days = optionalNumber(medianDays);
+    const quality = ownSalesDataQuality(saleCount);
+    if (days === null) return { key: 'unknown', label: 'NICHT BEWERTBAR', displayLabel: 'NICHT BEWERTBAR', sufficient: quality.sufficient };
+    const key = days <= OWN_TURNOVER_THRESHOLDS.veryFast ? 'very-fast'
+      : days <= OWN_TURNOVER_THRESHOLDS.fast ? 'fast'
+        : days <= OWN_TURNOVER_THRESHOLDS.normal ? 'normal'
+          : days <= OWN_TURNOVER_THRESHOLDS.slow ? 'slow' : 'very-slow';
+    const labels = { 'very-fast': 'SEHR SCHNELL', fast: 'SCHNELL', normal: 'NORMAL', slow: 'LANGSAM', 'very-slow': 'SEHR LANGSAM' };
+    return {
+      key,
+      label: labels[key],
+      displayLabel: quality.sufficient ? labels[key] : `Tendenz: ${labels[key].toLocaleLowerCase('de-DE')} – ${quality.label.toLocaleLowerCase('de-DE')}`,
+      sufficient: quality.sufficient
+    };
+  }
+
+  function decisionCostBreakdown(input = {}) {
+    const cardPrice = optionalNumber(input.cardPrice);
+    const fullCost = optionalNumber(input.fullCost);
+    const cartFiller = input.cartFiller === true || input.cartFiller === 'yes' ? true
+      : input.cartFiller === false || input.cartFiller === 'no' ? false : null;
+    const status = String(input.decisionCostStatus || '').toLowerCase();
+    const shippingInput = optionalNumber(input.incrementalShippingCost);
+    const directInput = optionalNumber(input.incrementalDirectCost);
+    const confirmed = status === 'known' || (cartFiller !== null && shippingInput !== null && directInput !== null);
+    const incrementalShipping = confirmed ? Math.max(0, shippingInput ?? 0) : null;
+    const incrementalDirect = confirmed ? Math.max(0, directInput ?? 0) : null;
+    const decisionCost = confirmed && cardPrice !== null
+      ? roundMoney(Math.max(0, cardPrice) + incrementalShipping + incrementalDirect)
+      : null;
+    return {
+      cardPrice: cardPrice === null ? null : roundMoney(Math.max(0, cardPrice)),
+      fullCost: fullCost === null ? null : roundMoney(Math.max(0, fullCost)),
+      cartFiller,
+      incrementalShipping: incrementalShipping === null ? null : roundMoney(incrementalShipping),
+      incrementalDirect: incrementalDirect === null ? null : roundMoney(incrementalDirect),
+      decisionCost,
+      status: decisionCost === null ? 'unknown' : 'known'
+    };
+  }
+
+  function planTargetSellChange(item = {}, nextValue, changedAt = new Date().toISOString(), mode = 'manual') {
+    const next = optionalNumber(nextValue);
+    const current = optionalNumber(item.targetSell ?? item.originalTargetSell);
+    const original = optionalNumber(item.originalTargetSell);
+    if (current === next) return { changed: false, originalTargetSell: original, targetSell: current, historyEntry: null };
+    const firstConfirmation = original === null && next !== null;
+    return {
+      changed: true,
+      originalTargetSell: firstConfirmation ? roundMoney(Math.max(0, next)) : original,
+      targetSell: next === null ? null : roundMoney(Math.max(0, next)),
+      historyEntry: {
+        eventType: 'original_target',
+        changedAt: String(changedAt),
+        oldPrice: current,
+        newPrice: next,
+        changeMode: mode,
+        reason: firstConfirmation ? 'Erster bestätigter Ziel-VK' : 'Ziel-VK geändert'
+      }
+    };
+  }
+
+  function ownSalesPurchaseHint(experience = {}, marketTrend = '') {
+    const quality = experience.dataQuality || ownSalesDataQuality(experience.saleCount);
+    if (!quality.sufficient) return 'ZU WENIG EIGENE DATEN';
+    const turnover = experience.turnoverClass?.key || 'unknown';
+    const roi = optionalNumber(experience.averageRoi);
+    const profit = optionalNumber(experience.averageProfit);
+    const falling = /FALLEND/i.test(String(marketTrend || ''));
+    const fast = ['very-fast', 'fast'].includes(turnover);
+    const slow = ['slow', 'very-slow'].includes(turnover);
+    const profitable = profit !== null && profit > 0 && roi !== null && roi >= 25;
+    if (fast && profitable && falling) return 'WIEDERANKAUF NUR MIT VORSICHT';
+    if (fast && profitable) return 'WIEDERANKAUF PRÜFEN';
+    if (fast && (profit === null || roi === null)) return 'GUTER DREHER · MARGE UNBEKANNT';
+    if (fast && (profit <= 0 || roi < 15)) return 'SCHNELL, ABER NIEDRIGE MARGE';
+    if (slow && profitable) return 'PROFITABEL, ABER LANGSAM';
+    if (slow) return 'VORSICHT BEIM WIEDERANKAUF';
+    if (experience.totalProfit !== null && experience.totalProfit < 0) return 'BISHER SCHWACHE HANDELSERFAHRUNG';
+    return profitable ? 'GUTER DREHER' : 'HANDELSERFAHRUNG BEOBACHTEN';
+  }
+
+  function analyzeOwnSalesExperience(records = [], options = {}) {
+    const asOf = new Date(options.asOf || new Date());
+    const asOfStamp = Number.isNaN(asOf.getTime()) ? Date.now() : asOf.getTime();
+    const grouped = new Map();
+    for (const record of Array.isArray(records) ? records : []) {
+      const productId = String(record.productId || '').trim();
+      if (!/^\d+$/.test(productId)) continue;
+      if (!grouped.has(productId)) grouped.set(productId, []);
+      grouped.get(productId).push(record);
+    }
+    const results = [];
+    for (const [productId, rows] of grouped) {
+      const orderIds = new Set(rows.map((row, index) => String(row.orderId || row.saleId || `sale-${index}`)));
+      const saleCount = orderIds.size;
+      const soldQuantity = rows.reduce((sum, row) => sum + Math.max(1, Math.round(asNumber(row.quantity) || 1)), 0);
+      const expanded = (selector, predicate = () => true) => rows.flatMap(row => {
+        const quantity = Math.max(1, Math.round(asNumber(row.quantity) || 1));
+        const value = selector(row);
+        return predicate(row, value) ? Array(quantity).fill(value) : [];
+      });
+      const dates = rows.map(row => String(row.soldAt || row.saleDate || '').slice(0, 10)).filter(Boolean).sort();
+      const orderDateMap = new Map();
+      rows.forEach((row, index) => {
+        const key = String(row.orderId || row.saleId || `sale-${index}`);
+        const stamp = new Date(row.soldAt || row.saleDate || '').getTime();
+        if (Number.isFinite(stamp)) orderDateMap.set(key, stamp);
+      });
+      const windowCount = days => [...orderDateMap.values()].filter(stamp => stamp <= asOfStamp && stamp >= asOfStamp - days * 86400000).length;
+      const durationSamples = rows.flatMap(row => (Array.isArray(row.daysToSaleSamples) ? row.daysToSaleSamples : [row.daysToSale]))
+        .map(value => optionalNumber(value)).filter(value => value !== null && value >= 0);
+      const sellPrices = expanded(row => optionalNumber(row.sellPrice), (_row, value) => value !== null && value >= 0);
+      const knownCostRows = rows.filter(row => Boolean(row.costKnown) && optionalNumber(row.fullCost) !== null);
+      const fullCosts = knownCostRows.flatMap(row => Array(Math.max(1, Math.round(asNumber(row.quantity) || 1))).fill(optionalNumber(row.fullCost)));
+      const profitRows = knownCostRows.filter(row => optionalNumber(row.unitProfit) !== null);
+      const profits = profitRows.flatMap(row => Array(Math.max(1, Math.round(asNumber(row.quantity) || 1))).fill(optionalNumber(row.unitProfit)));
+      const rois = profitRows.flatMap(row => {
+        const cost = optionalNumber(row.fullCost);
+        const profit = optionalNumber(row.unitProfit);
+        return cost !== null && cost > 0 && profit !== null
+          ? Array(Math.max(1, Math.round(asNumber(row.quantity) || 1))).fill(profit / cost * 100) : [];
+      });
+      const averageDays = averageValue(durationSamples);
+      const medianDays = medianValue(durationSamples);
+      const dataQuality = ownSalesDataQuality(saleCount);
+      const turnoverClass = ownTurnoverClass(medianDays, saleCount);
+      const totalProfit = profits.length ? roundMoney(profits.reduce((sum, value) => sum + value, 0)) : null;
+      const result = {
+        productId,
+        name: String(rows.find(row => row.name)?.name || ''),
+        germanName: String(rows.find(row => row.germanName)?.germanName || ''),
+        englishName: String(rows.find(row => row.englishName)?.englishName || ''),
+        setName: String(rows.find(row => row.setName)?.setName || ''),
+        rarity: String(rows.find(row => row.rarity)?.rarity || ''),
+        holdingProfile: String(rows.find(row => row.holdingProfile)?.holdingProfile || ''),
+        saleCount, soldQuantity, lastSale: dates.at(-1) || '', firstSale: dates[0] || '',
+        sales30: windowCount(30), sales90: windowCount(90), sales180: windowCount(180),
+        durationKnownCount: durationSamples.length,
+        durationUnknownCount: Math.max(0, soldQuantity - durationSamples.length),
+        averageDays: averageDays === null ? null : Math.round(averageDays * 10) / 10,
+        medianDays: medianDays === null ? null : Math.round(medianDays * 10) / 10,
+        minimumDays: durationSamples.length ? Math.min(...durationSamples) : null,
+        maximumDays: durationSamples.length ? Math.max(...durationSamples) : null,
+        averageCardPrice: averageValue(sellPrices) === null ? null : roundMoney(averageValue(sellPrices)),
+        averageSellPrice: averageValue(sellPrices) === null ? null : roundMoney(averageValue(sellPrices)),
+        medianSellPrice: medianValue(sellPrices) === null ? null : roundMoney(medianValue(sellPrices)),
+        minimumSellPrice: sellPrices.length ? roundMoney(Math.min(...sellPrices)) : null,
+        maximumSellPrice: sellPrices.length ? roundMoney(Math.max(...sellPrices)) : null,
+        knownCostQuantity: fullCosts.length,
+        unknownCostQuantity: Math.max(0, soldQuantity - fullCosts.length),
+        averageFullCost: averageValue(fullCosts) === null ? null : roundMoney(averageValue(fullCosts)),
+        averageProfit: averageValue(profits) === null ? null : roundMoney(averageValue(profits)),
+        medianProfit: medianValue(profits) === null ? null : roundMoney(medianValue(profits)),
+        averageRoi: averageValue(rois) === null ? null : Math.round(averageValue(rois) * 10) / 10,
+        totalProfit, dataQuality, turnoverClass,
+        observationDays: dates.length ? Math.max(1, Math.floor((asOfStamp - new Date(dates[0]).getTime()) / 86400000) + 1) : 0,
+        priceAction: 'KEINE AUTOMATISCHE PREISÄNDERUNG'
+      };
+      result.purchaseHint = ownSalesPurchaseHint(result, options.marketTrendByProduct?.[productId] || '');
+      results.push(result);
+    }
+    return results.sort((left, right) => right.saleCount - left.saleCount || right.soldQuantity - left.soldQuantity || left.name.localeCompare(right.name, 'de'));
+  }
+
+  function combineAgingWithOwnSales(analysis = {}, experience = {}, marketTrend = '') {
+    if (!experience?.dataQuality?.sufficient || experience.medianDays == null) return { ...analysis, ownSalesExperience: experience || null };
+    const age = optionalNumber(analysis.inventoryAgeDays);
+    const medianDays = Number(experience.medianDays);
+    const falling = /FALLEND/i.test(String(marketTrend || analysis.marketDecision?.trend?.status || ''));
+    let recommendation = analysis.recommendation;
+    const factors = [...(analysis.factors || [])];
+    factors.push(`Eigene Historie: Median ${medianDays} Tage aus ${experience.saleCount} Verkäufen`);
+    if (age !== null && age <= medianDays * 1.25 && !falling && ['PREIS PRÜFEN', 'KAPITALBINDUNG PRÜFEN', 'LANGSAMDREHER'].includes(recommendation)) recommendation = 'BEOBACHTEN';
+    if (age !== null && age > Math.max(medianDays * 2, medianDays + 21) && falling) recommendation = 'KAPITALBINDUNG PRÜFEN';
+    return { ...analysis, recommendation, factors, ownSalesExperience: experience };
+  }
+
   function estimatePackagingPerCard(state = {}, settings = state.settings || {}) {
     const sales = Array.isArray(state.sales) ? state.sales : [];
     let totalCost = 0;
@@ -505,8 +712,20 @@
         cancelled: wholeQuantity(request.cancelled ?? current.cancelled),
         listBusiness: Boolean(request.listBusiness ?? costRow.item.listBusiness),
         listingPrice: Math.max(0, asNumber(request.listingPrice ?? costRow.item.receiptListingPrice)),
-        suggestedSell: Math.max(0, asNumber(request.suggestedSell ?? costRow.item.suggestedSell))
+        suggestedSell: Math.max(0, asNumber(request.suggestedSell ?? costRow.item.suggestedSell)),
+        confirmedTargetSellPrice: optionalNumber(request.confirmedTargetSellPrice ?? costRow.item.confirmedTargetSellPrice),
+        cartFillerStatus: ['yes', 'no'].includes(String((request.cartFillerStatus ?? costRow.item.cartFillerStatus) || ''))
+          ? String(request.cartFillerStatus ?? costRow.item.cartFillerStatus) : 'unknown',
+        incrementalShippingCost: optionalNumber(request.incrementalShippingCost ?? costRow.item.incrementalShippingCost),
+        incrementalDirectCost: optionalNumber(request.incrementalDirectCost ?? costRow.item.incrementalDirectCost)
       };
+      next.decisionCost = decisionCostBreakdown({
+        cardPrice: costRow.unitPrice,
+        fullCost: costRow.unitCost,
+        cartFiller: next.cartFillerStatus,
+        incrementalShippingCost: next.incrementalShippingCost,
+        incrementalDirectCost: next.incrementalDirectCost
+      });
       const assigned = next.business + next.private + next.damaged + next.cancelled;
       if (assigned > current.quantity) errors.push(`${costRow.item.name || 'Karte'}: Aufteilung ${assigned} ist groesser als Bestellmenge ${current.quantity}.`);
       if (next.business < current.materializedBusiness || next.private < current.materializedPrivate || next.damaged < current.materializedDamaged) {
@@ -1800,7 +2019,7 @@
     const currentPrice = item.listed ? optionalNumber(item.listingPrice) : optionalNumber(item.desiredSalePrice || item.listingPrice);
     const pricePosition = classifyPricePosition(currentPrice, currentReference, settings);
     const costThresholds = profitThresholds(item, settings);
-    const originalTarget = optionalNumber(item.originalTargetSell ?? item.targetSell);
+    const originalTarget = optionalNumber(item.targetSell ?? item.originalTargetSell);
     const targetScenario = calculateSaleScenario(originalTarget, item, settings);
     const currentScenario = calculateSaleScenario(currentPrice, item, settings);
     const referenceScenario = calculateSaleScenario(currentReference, item, settings);
@@ -2042,6 +2261,15 @@
     buildCapitalOverview,
     buildAgingSummary,
     matchesSlowMoverFilters,
+    SALES_DATA_QUALITY_THRESHOLDS,
+    OWN_TURNOVER_THRESHOLDS,
+    ownSalesDataQuality,
+    ownTurnoverClass,
+    decisionCostBreakdown,
+    planTargetSellChange,
+    ownSalesPurchaseHint,
+    analyzeOwnSalesExperience,
+    combineAgingWithOwnSales,
     planInventoryMovementReversal,
     buildPerformanceReport,
     buildDataQualityIssues,

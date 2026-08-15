@@ -1,0 +1,87 @@
+TCG Business Manager 6.8.0 – PHASE-4-Abschlussprüfung
+Stand: 15.08.2026
+
+VERSION UND BUILD
+- Version: 6.8.0
+- Titel: Verkaufsdaten, Liquidität und Einkaufslernen
+- Installer: dist\TCG Business Manager-Setup-6.8.0.exe
+- SHA-256: 542BC9A4282292AF34506FCDB6A09422987518A7658808CBB0FF588765747612
+- Die vorhandene Version 6.7.1 wurde nicht überschrieben.
+
+AUTOMATISIERTE PRÜFUNGEN
+- Syntax- und Paketprüfung: erfolgreich
+- Regressionstests: 157 von 157 erfolgreich
+- Fehler / übersprungene Tests: 0 / 0
+- Neue PHASE-4-Tests: 41
+- Git-Diff-Prüfung: keine Whitespace-Fehler
+
+INSTALLER-SMOKE-TEST
+- Gepackte Anwendung und regulär installierte Anwendung geprüft.
+- Installationspfad:
+  C:\Users\stefa\AppData\Local\Programs\TCG Business Manager
+- Version 6.8.0, SQLite-Schema 10 und vollständig geladene Oberfläche bestätigt.
+- Erfolgreich geprüft: Dashboard, Bestand, Einzelkartendetail,
+  Langsamdreher, Kapital, Verkaufsanalyse, Einkaufsansicht, Ziel-VK,
+  eigene Verkaufserfahrung, deutsche und englische Suche, Price Guide,
+  PHASE-3-Markttrend und PHASE-3-Empfehlung.
+- Keine Renderer-, JavaScript- oder SQLite-Fehler.
+- Keine automatische Preisänderung und keine unzulässige
+  Verkaufswahrscheinlichkeits- oder 0-bis-100-Liquiditätsaussage.
+- Desktop- und Startmenü-Verknüpfung zeigen auf die reguläre Installation.
+- Die kurzzeitig durch die abgeschottete Build-Umgebung entstandene falsche
+  Installationsposition ist nicht mehr vorhanden.
+
+ECHTE DATENBANK / TESTKOPIE
+- Echte Datenbank wurde von automatisierten Tests nicht verändert.
+- Ausgangsschema der echten Datenbank: 9
+- Verlustfreie Migration der Testkopie auf Schema 10: erfolgreich
+- SQLite-Integrität der Testkopie: ok
+- Bestand: 885
+- Private Karten: 14
+- Einkäufe: 9
+- Verkäufe: 49
+- Temporäre Testkopie und Migrationssicherung wurden entfernt.
+
+AKTUELLE LERNBASIS
+- Realisierte Verkaufspositionen: 111
+- Verkaufte Stückzahl: 168
+- Davon mit belastbarer Print-ID: 168
+- Davon mit belastbarer Liegedauer: 12
+- Davon mit bekanntem Vollkosten-EK: 32
+- Davon mit berechenbarem Gewinn: 32
+- Davon mit berechenbarem ROI: 5
+- Unterschiedliche ausgewertete Prints: 99
+- Prints mit mindestens fünf eigenen Verkäufen: 0
+- Abfragezeit auf der finalen echten Datenbankkopie: 14,3 ms
+
+PRAXISBEISPIELE
+- Mehrere Verkäufe: CM 894733, Aiwass, göttlicher Geist des Gesetzes;
+  2 Verkäufe / 3 Stück, geringe Datenbasis, Liegedauer unbekannt,
+  Ø VK 0,09 EUR, Ø bekannter Gewinn 0,21 EUR, ROI nicht berechenbar,
+  Umschlag nicht bewertbar, Hinweis ZU WENIG EIGENE DATEN.
+- Genau ein Verkauf: CM 885431, Weberin der Märchenschweife;
+  1 Verkauf / 5 Stück, sehr geringe Datenbasis, Liegedauer unbekannt,
+  Ø VK 0,10 EUR, Gewinn und ROI nicht berechenbar,
+  Umschlag nicht bewertbar, Hinweis ZU WENIG EIGENE DATEN.
+- Unbekannter EK: CM 894733 enthält Verkäufe mit unbekanntem EK;
+  sie zählen für Häufigkeit, aber nicht für unbekannte Gewinn-/ROI-Werte.
+- Bekannte Marge: CM 843418, Albtraumlehrling;
+  1 Verkauf / 3 Stück, Median 6 Tage, Ø VK 1,60 EUR,
+  Ø Gewinn -0,08 EUR, Ø ROI -4,9 %, Gesamtgewinn -0,24 EUR,
+  Tendenz sehr schnell bei sehr geringer Datenbasis,
+  Hinweis ZU WENIG EIGENE DATEN.
+
+BEKANNTE EINSCHRÄNKUNGEN
+- Kein Print erreicht aktuell die Schwelle von fünf eigenen Verkäufen;
+  deshalb wird noch keine belastbare eigene Umschlagklasse behauptet.
+- Historische Liegedauer ist nur für 12 verkaufte Exemplare belegt.
+- Ein berechenbarer ROI ist nur für 5 verkaufte Exemplare vorhanden.
+- Ohne Cardmarket-API bleiben Marktdaten gespeicherte Price-Guide-Referenzen,
+  keine Live-Angebotsdaten.
+- Kategorie-/Halteprofil-Gesamtanalysen bleiben eine optionale spätere
+  Ergänzung; die print-genaue Analyse ist vollständig umgesetzt.
+- Foto-/Sammlungsanalyse und Collection Purchase Analyzer wurden nicht begonnen.
+
+ERGEBNIS
+- PHASE 4 ist technisch releasefähig.
+- PHASE 5 wurde nicht begonnen.

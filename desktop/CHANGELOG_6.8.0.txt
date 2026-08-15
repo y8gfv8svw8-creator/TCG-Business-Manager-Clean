@@ -1,0 +1,40 @@
+TCG Business Manager 6.8.0 – Verkaufsdaten, Liquidität und Einkaufslernen
+
+- Neue print-genaue Verkaufsanalyse aus den eigenen abgeschlossenen Verkäufen.
+- Eigene Verkaufserfahrung zeigt Verkäufe, Stückzahl, letzten Verkauf sowie
+  Verkaufsfrequenz der letzten 30, 90 und 180 Tage.
+- Liegedauer wird mit Median, Durchschnitt, Minimum und Maximum ausgewertet;
+  unbekannte oder unbelegte Startdaten bleiben ausgeschlossen.
+- Zentrale Datenqualitätsstufen verhindern belastbare Liquiditätsaussagen bei
+  zu wenigen Verkäufen. Es gibt bewusst keinen 0-bis-100-Liquiditätsscore.
+- Zentrale Umschlagklassen von SEHR SCHNELL bis SEHR LANGSAM verwenden den
+  robusten Median; unter fünf Verkäufen werden sie nur als Tendenz angezeigt.
+- Gewinn, ROI und durchschnittlicher EK verwenden ausschließlich den bekannten
+  Vollkosten-EK. Verkäufe mit unbekanntem EK bleiben für Häufigkeit und
+  Liegedauer nutzbar, nicht aber für Profitabilitätswerte.
+- Regelbasierte Einkaufshinweise kombinieren eigene Erfahrung nachvollziehbar
+  mit dem getrennt dargestellten PHASE-3-Markttrend.
+- Einzelkartendetails enthalten den neuen Abschnitt MEINE VERKAUFSERFAHRUNG.
+- Dashboard ergänzt schnelle und langsame Dreher, ausreichende Datenbasis,
+  Wiederankaufshinweise und bekannten Gewinn der Top-Prints.
+- Ziel-VK kann beim Handelskauf optional bestätigt und später geändert werden;
+  ursprünglicher Ziel-VK und Änderungen bleiben historisch nachvollziehbar.
+- Ziel-VK-Vorschläge werden niemals ohne erkennbare Benutzeraktion übernommen.
+- Kartenpreis, Vollkosten-EK und Entscheidungs-/Grenzkosten-EK werden getrennt
+  gespeichert und angezeigt.
+- Für neue Einkäufe können Warenkorbfüller, zusätzlicher Versand und weitere
+  direkte Grenzkosten ausdrücklich erfasst werden. Fehlende Angaben bleiben
+  unbekannt und werden für Altbestand nicht erfunden.
+- Realisierter Gewinn und ROI bleiben unverändert auf Vollkostenbasis; der
+  Entscheidungs-EK verändert keine historische Gewinnrechnung.
+- Aging kann eine ausreichende eigene Median-Liegedauer berücksichtigen, ohne
+  den unabhängigen Markttrend zu überdecken.
+- Performance: Verkaufslernen nutzt gezielte normalisierte Handels- und
+  Bestandsabfragen; vollständige Marktpreis-, Ereignis- oder app_state-Scans
+  pro Renderdurchlauf werden vermieden.
+- SQLite-Schema 10 ergänzt ausschließlich neue bestätigte Einkaufs-/Ziel-Fakten
+  und erhält alle fehlenden historischen Angaben als NULL beziehungsweise
+  unbekannt.
+- Keine automatische Preisänderung, Bestellung oder Cardmarket-Aktion.
+- Foto-/Sammlungsanalyse und Collection Purchase Analyzer bleiben unverändert
+  für eine spätere Phase zurückgestellt.

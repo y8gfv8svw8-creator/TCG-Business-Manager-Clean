@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getDatabaseStatus: () => ipcRenderer.invoke('data:get-status'),
   getTradeDatabaseStatus: () => ipcRenderer.invoke('data:get-trade-database-status'),
   getBusinessEvents: payload => ipcRenderer.invoke('data:get-business-events', payload),
+  getOwnSalesExperience: payload => ipcRenderer.invoke('data:get-own-sales-experience', payload),
   getTradeRecommendations: payload => ipcRenderer.invoke('data:get-trade-recommendations', payload),
   getDataSources: () => ipcRenderer.invoke('data:get-data-sources'),
   upsertProducts: rows => ipcRenderer.invoke('data:upsert-products', rows),

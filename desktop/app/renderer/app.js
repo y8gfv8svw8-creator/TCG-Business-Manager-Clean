@@ -1132,26 +1132,37 @@ function toggleTheme() {
   saveState();
 }
 
-function renderAll() {
+const viewRenderers = {
+  dashboard: renderDashboard,
+  inventory: renderInventory,
+  private: renderPrivateCollection,
+  purchases: renderPurchases,
+  sales: renderSales,
+  salesanalysis: renderSalesAnalysis,
+  materials: renderMaterials,
+  expenses: renderExpenses,
+  capital: renderCapitalView,
+  slowmovers: renderSlowMovers,
+  watchlist: renderWatchlist,
+  buying: renderBuyingPlanner,
+  collectionpurchases: renderCollectionPurchases,
+  partners: renderPartners,
+  imports: renderImports,
+  reports: renderReports,
+  settings: renderSettings
+};
+
+function renderCurrentView(name = currentViewName || document.querySelector(".view.active")?.id?.replace(/^view-/, "") || "dashboard") {
   syncWatchStock();
   syncAutomaticWatchPrices();
-  renderDashboard();
-  renderInventory();
-  renderPrivateCollection();
-  renderPurchases();
-  renderSales();
-  renderSalesAnalysis();
-  renderMaterials();
-  renderExpenses();
-  renderCapitalView();
-  renderSlowMovers();
-  renderWatchlist();
-  renderBuyingPlanner();
-  renderCollectionPurchases();
-  renderPartners();
-  renderImports();
-  renderReports();
-  renderSettings();
+  viewRenderers[name]?.();
+}
+
+// Bestehende Aufrufer behalten den Namen. Tatsächlich wird bewusst nur noch
+// die sichtbare Seite aktualisiert; andere Seiten werden beim Öffnen frisch
+// aus demselben Programmstand aufgebaut.
+function renderAll() {
+  renderCurrentView();
 }
 
 function initializeUiDisclosures(){
@@ -6021,7 +6032,12 @@ window.addEventListener("mouseup",event=>{
   else if(event.button===4){event.preventDefault();navigateForward();}
 });
 
-["inventorySearch","privateSearch","purchaseSearch","salesSearch","salesAnalysisSearch","salesAnalysisMinSales","salesAnalysisMinRoi","salesAnalysisMinAverageProfit","salesAnalysisMinTotalProfit","salesAnalysisLastSaleFrom","salesAnalysisPriceMin","salesAnalysisPriceMax","watchSearch","materialSearch","expenseSearch","slowMoverSearch","slowMoverPriceMin","slowMoverPriceMax"].forEach(id=>document.getElementById(id)?.addEventListener("input",renderAll));
+let activeViewInputRenderTimer = null;
+function scheduleActiveViewRender() {
+  clearTimeout(activeViewInputRenderTimer);
+  activeViewInputRenderTimer = setTimeout(renderAll, 140);
+}
+["inventorySearch","privateSearch","purchaseSearch","salesSearch","salesAnalysisSearch","salesAnalysisMinSales","salesAnalysisMinRoi","salesAnalysisMinAverageProfit","salesAnalysisMinTotalProfit","salesAnalysisLastSaleFrom","salesAnalysisPriceMin","salesAnalysisPriceMax","watchSearch","materialSearch","expenseSearch","slowMoverSearch","slowMoverPriceMin","slowMoverPriceMax"].forEach(id=>document.getElementById(id)?.addEventListener("input",scheduleActiveViewRender));
 // Auswahlfelder erst nach der bestätigten Auswahl neu zeichnen. Ein Neuaufbau
 // während des Öffnens würde das native Auswahlmenü sofort wieder schließen.
 ["inventoryStatusFilter","inventorySetFilter","inventoryRarityFilter","inventoryLanguageFilter","inventoryConditionFilter","inventoryStockFilter","inventoryAgeFilter","inventoryQualityFilter","inventoryProfitFilter","inventorySort","privateSetFilter","privateRarityFilter","privateLanguageFilter","privateConditionFilter","privateSaleIntentFilter","purchaseStatusFilter","purchaseSellerFilter","purchasePaymentFilter","purchaseAllocationFilter","salesStatusFilter","salesCustomerFilter","salesPaymentFilter","salesProfitFilter","salesAnalysisQuality","salesAnalysisTurnover","salesAnalysisProfile","salesAnalysisSet","salesAnalysisRarity","salesAnalysisSort","watchStatusFilter","watchPriorityFilter","watchStockFilter","watchDataFilter","watchPricingFilter","wantlistFilter","wantlistPurposeFilter","wantlistRecommendationFilter","wantlistShowArchived","expenseCategoryFilter","expenseTypeFilter","slowMoverAgeFilter","slowMoverPriceGroup","slowMoverProfile","slowMoverCost","slowMoverLongTerm","slowMoverLanguage","slowMoverCondition","slowMoverTrend","slowMoverRecommendation","slowMoverProfitTarget","slowMoverSort"].forEach(id=>document.getElementById(id)?.addEventListener("change",renderAll));

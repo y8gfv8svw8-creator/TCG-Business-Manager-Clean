@@ -1,0 +1,14 @@
+TCG Business Manager 6.9.1 – Schnellere Navigation
+===================================================
+
+Verbessert
+----------
+- Seitenwechsel bauen nur noch den gerade geöffneten Programmbereich neu auf.
+- Nicht sichtbare, rechenintensive Bereiche werden erst beim Öffnen aktualisiert.
+- Such- und Zahlenfilter werden nach einer kurzen Eingabepause ausgewertet.
+- Bestehende Daten-, Preis- und Speicherlogik bleiben unverändert.
+
+Sicherheit
+----------
+- Keine Änderung am SQLite-Schema.
+- Keine automatische Preis- oder Bestandsänderung.

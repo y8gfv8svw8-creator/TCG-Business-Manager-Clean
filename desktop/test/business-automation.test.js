@@ -107,6 +107,29 @@ test('warnt vor Inseraten unter Einstand und fallenden Watchlist-Preisen', () =>
   assert.equal(alerts.find(alert=>alert.type==='Preisrückgang').searchTerm,'456');
 });
 
+test('Dashboard-Aufgaben enthalten nur unmittelbar ausführbare Arbeitsschritte', () => {
+  const tasks = automation.buildWorkflowTasks({
+    purchases: [
+      { id:'p-ready', orderNo:'100', status:'Eingetroffen', pendingItems:[{ quantity:2, receivedBusiness:1 }] },
+      { id:'p-transit', orderNo:'101', status:'Unterwegs', pendingItems:[{ quantity:1 }] }
+    ],
+    sales: [
+      { id:'s-pick', orderNo:'200', customer:'A', status:'Bezahlt', workflowStage:'Kommissioniert', quantity:2 },
+      { id:'s-pack', orderNo:'201', customer:'B', status:'Kommissioniert', workflowStage:'Verpackt', quantity:1 },
+      { id:'s-ship', orderNo:'202', customer:'C', status:'Verpackt', workflowStage:'Verpackt', quantity:1 },
+      { id:'s-wait', orderNo:'203', customer:'D', status:'Versendet', workflowStage:'Versendet', quantity:1 }
+    ]
+  });
+  assert.deepEqual(tasks.map(task=>task.title),[
+    'Wareneingang aufteilen',
+    'Bestellung kommissionieren',
+    'Bestellung verpacken',
+    'Bestellung versenden'
+  ]);
+  assert.ok(tasks.every(task=>task.recordId&&task.actionLabel));
+  assert.equal(tasks.some(task=>task.recordId==='p-transit'||task.recordId==='s-wait'),false);
+});
+
 test('berechnet kurzfristige Max-EK- und Markt-VK-Werte ohne Trend als Verkaufspreis zu behandeln', () => {
   const settings = { safetyPercent: 5, feePercent: 5, packaging: 0.20, minProfit: 1, minRoi: 30 };
   const first = automation.calculateAutomaticPriceTargets({ low: 8, trend: 10, avg7: 9, avg30: 8 }, settings);

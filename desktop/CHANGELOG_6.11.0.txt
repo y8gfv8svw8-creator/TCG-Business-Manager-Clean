@@ -1,0 +1,34 @@
+TCG Business Manager 6.11.0 – Aufgaben und schnellere Bedienung
+================================================================
+
+Dashboard
+---------
+- Aufgaben, Warnungen und Automatik sind klar voneinander getrennt.
+- Unter Aufgaben erscheinen nur unmittelbar ausführbare Arbeitsschritte wie
+  Wareneingang aufteilen, kommissionieren, verpacken und versenden.
+- Finanzkennzahlen wurden verständlicher benannt und direkt im Dashboard erklärt.
+- Cashflow, realisierter Gewinn, Betriebsergebnis, gebundenes Kartenkapital und
+  Handelsvermögen zum EK sind ausdrücklich voneinander abgegrenzt.
+
+Verkaufsablauf
+--------------
+- Beim Kommissionieren können alle Karten mit einem Klick ausgewählt werden.
+- Eine vollständig ausgewählte Kommissionierliste klappt automatisch ein.
+- Nach der Kommissionierung bleibt die Kartenliste platzsparend eingeklappt und
+  kann bei Bedarf wieder geöffnet werden.
+
+Eingabe und Kartenzuordnung
+---------------------------
+- Beim ersten Fokus eines Textfeldes wird der vorhandene Inhalt vollständig markiert.
+- Ein sichtbares Kreuz leert das gerade aktive Textfeld mit einem Klick.
+- Die Druckvarianten-Auswahl zeigt Unterschiede zwischen Treffern deutlicher an.
+- Jede Druckvariante besitzt einen direkten Cardmarket-Prüflink.
+- Die Oberfläche erklärt ausdrücklich: Die Cardmarket-Produkt-ID bestimmt die
+  Druckvariante, nicht automatisch die Kartensprache.
+- Die Kartensprache des physischen Exemplars wird separat gewählt; bei identischen
+  Quelldaten wird keine sichere Unterscheidung erfunden.
+
+Datensicherheit
+---------------
+- Keine Datenbankmigration; SQLite-Schema 12 bleibt unverändert.
+- Keine automatische Preisänderung und keine automatische Karten- oder Sprachzuordnung.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.10.0</title>
+  <title>TCG Business Manager 6.11.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.10.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.11.0 · SQLite</div>
         </div>
       </div>
 
@@ -69,28 +69,54 @@
         <div class="metric-grid">
           <article class="metric-card"><span>Bestandskarten</span><strong id="mInventoryCount">0</strong><small>verfügbare physische Karten</small></article>
           <article class="metric-card"><span>Bestandswert</span><strong id="mInventoryValue">0,00 €</strong><small>Summe der Inseratspreise</small></article>
-          <article class="metric-card"><span>Investiertes Kapital</span><strong id="mInvestedCapital">0,00 €</strong><small>Einstand des verfügbaren Bestands</small></article>
-          <article id="monthlyRevenueCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Einnahmen dieses Monats anzeigen"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>bezahlte und abgeschlossene Verkäufe</small><span class="metric-detail-link">Details anzeigen →</span></article>
-          <article id="monthlyExpensesCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Ausgaben dieses Monats anzeigen"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Karten, Versand, Material und Sonstiges</small><span class="metric-detail-link">Details anzeigen →</span></article>
-          <article class="metric-card"><span>Cashflow Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>Geldeingänge minus tatsächliche Auszahlungen</small></article>
-          <article class="metric-card"><span>Realisierter Gewinn</span><strong id="mRealizedProfit">0,00 €</strong><small>Abgeschlossene Verkäufe nach direkten Kosten</small></article>
-          <article class="metric-card"><span>Betriebsergebnis</span><strong id="mOperatingResult">0,00 €</strong><small>Realisierter Gewinn minus allgemeine Betriebsausgaben</small></article>
+          <article class="metric-card"><span>Gebundenes Kartenkapital</span><strong id="mInvestedCapital">0,00 €</strong><small>bekannter EK der aktuell verfügbaren Geschäftskarten</small></article>
+          <article id="monthlyRevenueCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Einnahmen dieses Monats anzeigen"><span>Einnahmen Monat</span><strong id="mMonthlyRevenue">0,00 €</strong><small>eingegangene Verkaufserlöse inklusive Käufer-Versand</small><span class="metric-detail-link">Details anzeigen →</span></article>
+          <article id="monthlyExpensesCard" class="metric-card metric-card-clickable" role="button" tabindex="0" aria-label="Details zu den Ausgaben dieses Monats anzeigen"><span>Ausgaben Monat</span><strong id="mMonthlyExpenses">0,00 €</strong><small>Einkäufe, Porto, Material und Betriebsausgaben</small><span class="metric-detail-link">Details anzeigen →</span></article>
+          <article class="metric-card"><span>Cashflow Monat</span><strong id="mMonthlyProfit">0,00 €</strong><small>alle Geldeingänge minus alle tatsächlichen Auszahlungen</small></article>
+          <article class="metric-card"><span>Realisierter Gewinn Monat</span><strong id="mRealizedProfit">0,00 €</strong><small>Verkaufserlös minus Wareneinsatz und direkte Verkaufskosten</small></article>
+          <article class="metric-card"><span>Betriebsergebnis Monat</span><strong id="mOperatingResult">0,00 €</strong><small>realisierter Gewinn minus allgemeine Betriebsausgaben</small></article>
           <article class="metric-card"><span>Offene Einkäufe</span><strong id="mOpenPurchases">0</strong><small>bestellt / unterwegs</small></article>
           <article class="metric-card"><span>Kaufchancen</span><strong id="mBuyOpportunities">0</strong><small>Watchlist: Kaufen / Top Deal</small></article>
           <article class="metric-card"><span>Liquides Kapital</span><strong id="mLiquidCapital">0,00 €</strong><small>Cardmarket, Bank, Kasse und Sonstiges</small></article>
-          <article class="metric-card"><span>Handelsvermögen zum EK</span><strong id="mTradingWealth">0,00 €</strong><small>Liquidität + bekannter aktueller Karten-EK</small></article>
+          <article class="metric-card"><span>Handelsvermögen zum EK</span><strong id="mTradingWealth">0,00 €</strong><small>Liquidität + bekannter Bestands-EK; kein Inseratswert</small></article>
           <article class="metric-card"><span>Realisierter Umsatz</span><strong id="mRealizedRevenue">0,00 €</strong><small>abgeschlossene und abgerechnete Verkäufe</small></article>
           <article class="metric-card"><span>Realisierte Marge</span><strong id="mRealizedMargin">–</strong><small>nur mit bekanntem Wareneinsatz</small></article>
           <article class="metric-card"><span>Realisierte Verkäufe</span><strong id="mRealizedSalesCount">0</strong><small>abgeschlossen oder abgerechnet</small></article>
         </div>
 
+        <details class="metric-explainer">
+          <summary>Kennzahlen kurz erklärt</summary>
+          <div class="metric-explainer-grid">
+            <div><strong>Cashflow</strong><span>Zeigt nur, wie viel Geld im Monat tatsächlich herein- und herausgegangen ist. Er sagt nicht, ob ein Verkauf Gewinn gebracht hat.</span></div>
+            <div><strong>Realisierter Gewinn</strong><span>Wird erst bei abgeschlossenen oder abgerechneten Verkäufen gebucht und zieht Wareneinsatz, Gebühren, Porto und direktes Material ab.</span></div>
+            <div><strong>Betriebsergebnis</strong><span>Zieht vom realisierten Gewinn zusätzlich allgemeine Kosten wie Regal, Software oder Bürobedarf ab.</span></div>
+            <div><strong>Handelsvermögen zum EK</strong><span>Liquides Kapital plus bekannte Einstandspreise des aktuellen Bestands. Unbekannte EK und Inseratswerte werden nicht erfunden.</span></div>
+          </div>
+        </details>
+
         <div class="dashboard-grid">
+          <article class="panel panel-wide task-overview-panel">
+            <div class="panel-head">
+              <div><h2>Aufgaben</h2><small>Nur Vorgänge, bei denen du jetzt selbst etwas erledigen musst.</small></div>
+              <div class="panel-head-actions"><button class="link-button" data-view-jump="sales">Verkäufe öffnen</button></div>
+            </div>
+            <div id="workflowTasksOverview"></div>
+          </article>
+
+          <article class="panel panel-wide warning-overview-panel">
+            <div class="panel-head">
+              <div><h2>Warnungen</h2><small>Datenfehler, Preisrisiken und unvollständige Angaben – getrennt von deinen täglichen Aufgaben.</small></div>
+              <div class="panel-head-actions"><button class="link-button" data-view-jump="reports">Alle Warnungen und Prüfungen</button></div>
+            </div>
+            <div id="automationWarnings"></div>
+          </article>
+
           <article class="panel panel-wide automation-overview-panel">
             <div class="panel-head">
-              <div><h2>Automatik, Aufgaben &amp; Warnungen</h2><small>Prüft Bestandsabläufe, Preisrisiken und unvollständige Geschäftsdaten.</small></div>
-              <div class="panel-head-actions"><button id="repairWorkflowsBtn" class="secondary" type="button">Daten reparieren</button><button class="link-button" data-view-jump="reports">Alle Prüfungen</button></div>
+              <div><h2>Automatik</h2><small>Status der automatischen Prüfungen, Datensicherung und Konsistenzkontrolle.</small></div>
+              <div class="panel-head-actions"><button id="repairWorkflowsBtn" class="secondary" type="button">Daten reparieren</button></div>
             </div>
-            <div id="automationOverview"></div>
+            <div id="automationStatus"></div>
           </article>
 
           <article class="panel">

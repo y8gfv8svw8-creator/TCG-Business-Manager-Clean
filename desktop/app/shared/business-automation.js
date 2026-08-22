@@ -1679,6 +1679,39 @@
     };
   }
 
+  function buildWorkflowTasks(state = {}) {
+    const tasks = [];
+    (state.purchases || []).forEach(purchase => {
+      const openLines = (purchase.pendingItems || []).map((item, index) => normalizePurchaseReceiptLine(item, index)).filter(item => item.open > 0);
+      if (!['Eingetroffen', 'Teilweise eingetroffen'].includes(purchase.status) || !openLines.length) return;
+      tasks.push({
+        id: `purchase:${purchase.id}:receipt`, kind: 'purchase', recordId: purchase.id,
+        title: 'Wareneingang aufteilen', actionLabel: 'Einkauf öffnen',
+        details: `Einkauf #${purchase.orderNo || '-'} · ${openLines.reduce((sum, item) => sum + item.open, 0)} Karte(n) noch zuzuordnen`
+      });
+    });
+    (state.sales || []).forEach(sale => {
+      if (['Abgeschlossen', 'Abgerechnet', 'Erstattet', 'Rückgabe eingetroffen', 'Storniert'].includes(sale.status)) return;
+      let stage = String(sale.workflowStage || '').trim();
+      if (!stage) {
+        if (sale.status === 'Bezahlt') stage = 'Kommissioniert';
+        else if (sale.status === 'Kommissioniert') stage = 'Verpackt';
+        else stage = sale.status || 'Offen';
+      }
+      let title = '';
+      if (stage === 'Kommissioniert') title = 'Bestellung kommissionieren';
+      else if (stage === 'Verpackt' && sale.status === 'Verpackt') title = 'Bestellung versenden';
+      else if (stage === 'Verpackt') title = 'Bestellung verpacken';
+      if (!title) return;
+      tasks.push({
+        id: `sale:${sale.id}:${stage}:${sale.status || ''}`, kind: 'sale', recordId: sale.id,
+        title, actionLabel: 'Bestellung öffnen',
+        details: `Verkauf #${sale.orderNo || '-'} · ${sale.customer || 'Kunde unbekannt'} · ${Math.max(0, asNumber(sale.quantity) || (sale.items || []).reduce((sum, item) => sum + Math.max(1, asNumber(item.quantity)), 0))} Karte(n)`
+      });
+    });
+    return tasks;
+  }
+
   function settlementValue(row) {
     const direct = pick(row, ['amount', 'betrag', 'value', 'total', 'payout', 'auszahlung', 'credit', 'gutschrift', 'balance change', 'kontobewegung']);
     if (direct !== '') return asNumber(direct);
@@ -2585,6 +2618,7 @@
     buildDataQualityIssues,
     buildPriceAlerts,
     buildWorkflowStatus,
+    buildWorkflowTasks,
     reconcileSettlementRows
   };
 });

@@ -7,6 +7,8 @@
 
   const CONFIDENCE_VALUES = Object.freeze(['unknown', 'low', 'medium', 'high', 'confirmed']);
   const REVIEW_VALUES = Object.freeze(['unreviewed', 'in_review', 'reviewed', 'rejected']);
+  const OBSERVATION_SOURCE_VALUES = Object.freeze(['manual', 'automatic']);
+  const DETECTION_REVIEW_VALUES = Object.freeze(['manual', 'suggested', 'confirmed', 'rejected']);
 
   const text = value => String(value == null ? '' : value).trim();
   const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -21,6 +23,22 @@
   function normalizeReviewStatus(value) {
     const normalized = text(value).toLowerCase();
     return REVIEW_VALUES.includes(normalized) ? normalized : 'unreviewed';
+  }
+
+  function normalizeObservationSource(value) {
+    const normalized = text(value).toLowerCase();
+    return OBSERVATION_SOURCE_VALUES.includes(normalized) ? normalized : 'manual';
+  }
+
+  function normalizeDetectionReviewState(value, source = 'manual') {
+    const normalized = text(value).toLowerCase();
+    if (DETECTION_REVIEW_VALUES.includes(normalized)) return normalized;
+    return normalizeObservationSource(source) === 'automatic' ? 'suggested' : 'manual';
+  }
+
+  function normalizeDetectionSignals(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([key, item]) => text(key) && (item == null || ['string', 'number', 'boolean'].includes(typeof item) || (Array.isArray(item) && item.every(entry => ['string', 'number', 'boolean'].includes(typeof entry))))));
   }
 
   function normalizeBoundingBox(value) {
@@ -99,12 +117,19 @@
       .map(normalizePrintCandidate).filter(Boolean);
     const selectedProductId = cleanProductId(observation?.selectedProductId);
     const requestedPrintConfidence = normalizeConfidence(observation?.printConfidence);
+    const observationSource = normalizeObservationSource(observation?.observationSource);
+    const detectionScore = finite(observation?.detectionScore);
     return {
       ...observation,
       id: text(observation?.id) || `${analysisId || 'analysis'}:observation:${index}`,
       analysisId: text(analysisId || observation?.analysisId),
       photoId: text(observation?.photoId),
       boundingBox: normalizeBoundingBox(observation?.boundingBox),
+      observationSource,
+      detectionConfidence: observationSource === 'automatic' ? normalizeConfidence(observation?.detectionConfidence) : 'unknown',
+      detectionScore: observationSource === 'automatic' && detectionScore !== null ? Math.max(0, Math.min(1, round6(detectionScore))) : null,
+      detectionSignals: observationSource === 'automatic' ? normalizeDetectionSignals(observation?.detectionSignals) : {},
+      detectionReviewState: normalizeDetectionReviewState(observation?.detectionReviewState, observationSource),
       row: text(observation?.row),
       column: text(observation?.column),
       selectedName: text(observation?.selectedName),
@@ -154,19 +179,81 @@
     return { photos, photoObservations: observations, physicalCards };
   }
 
+  function boundingBoxIoU(left, right) {
+    const a = normalizeBoundingBox(left?.boundingBox || left);
+    const b = normalizeBoundingBox(right?.boundingBox || right);
+    if (!a || !b) return 0;
+    const x0 = Math.max(a.x, b.x);
+    const y0 = Math.max(a.y, b.y);
+    const x1 = Math.min(a.x + a.width, b.x + b.width);
+    const y1 = Math.min(a.y + a.height, b.y + b.height);
+    const intersection = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+    const union = a.width * a.height + b.width * b.height - intersection;
+    return union > 0 ? Math.max(0, Math.min(1, intersection / union)) : 0;
+  }
+
+  function mergeDetectionSuggestions(existingObservations = [], photoId = '', detections = [], options = {}) {
+    const targetPhotoId = text(photoId);
+    const coverageThreshold = Math.max(0.1, Math.min(0.95, Number(options.coverageThreshold || 0.50)));
+    const now = text(options.now) || new Date().toISOString();
+    const idFactory = typeof options.idFactory === 'function' ? options.idFactory : index => `${targetPhotoId}:automatic:${Date.now()}:${index}`;
+    const existing = (Array.isArray(existingObservations) ? existingObservations : []).map(row => ({ ...row }));
+    const added = [];
+    let skipped = 0;
+    (Array.isArray(detections) ? detections : []).forEach((detection, index) => {
+      const boundingBox = normalizeBoundingBox(detection?.boundingBox);
+      if (!boundingBox) { skipped += 1;return; }
+      const covered = [...existing, ...added].some(row => text(row.photoId) === targetPhotoId && boundingBoxIoU(row.boundingBox, boundingBox) >= coverageThreshold);
+      if (covered) { skipped += 1;return; }
+      const score = finite(detection?.detectionScore);
+      added.push(normalizeObservation({
+        id: text(idFactory(index)),
+        analysisId: text(options.analysisId),
+        photoId: targetPhotoId,
+        boundingBox,
+        row: text(detection?.row),
+        column: text(detection?.column),
+        observationSource: 'automatic',
+        detectionConfidence: normalizeConfidence(detection?.detectionConfidence),
+        detectionScore: score === null ? null : score,
+        detectionSignals: normalizeDetectionSignals(detection?.detectionSignals),
+        detectionReviewState: 'suggested',
+        selectedName: '',
+        nameCandidates: [],
+        nameConfidence: 'unknown',
+        selectedProductId: '',
+        printCandidates: [],
+        printConfidence: 'unknown',
+        recognitionSignals: [],
+        economicRelevant: false,
+        detailPhotoRequired: false,
+        reviewStatus: 'unreviewed',
+        physicalCardId: '',
+        linkedCollectionItemId: '',
+        createdAt: now,
+        updatedAt: now
+      }, text(options.analysisId), existing.length + index));
+    });
+    return { observations: [...existing, ...added], added, skipped, coverageThreshold };
+  }
+
   function summarizePhotoEvidence(analysis = {}) {
     const normalized = normalizeAnalysisPhotoEvidence(analysis);
-    const linkedPhysicalIds = new Set(normalized.photoObservations.map(row => row.physicalCardId).filter(Boolean));
+    const visibleObservations = normalized.photoObservations.filter(row => row.detectionReviewState !== 'rejected');
+    const linkedPhysicalIds = new Set(visibleObservations.map(row => row.physicalCardId).filter(Boolean));
     const linkedItemIds = new Set(normalized.physicalCards.map(row => row.linkedCollectionItemId).filter(Boolean));
     return {
       photoCount: normalized.photos.length,
-      observationCount: normalized.photoObservations.length,
+      observationCount: visibleObservations.length,
+      automaticSuggestedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'suggested').length,
+      automaticConfirmedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'confirmed').length,
+      rejectedDetectionCount: normalized.photoObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'rejected').length,
       physicalCardCount: normalized.physicalCards.length,
       observedPhysicalCardCount: linkedPhysicalIds.size,
       economicallyLinkedPhysicalCardCount: normalized.physicalCards.filter(row => row.linkedCollectionItemId).length,
       economicallyLinkedItemCount: linkedItemIds.size,
-      unlinkedObservationCount: normalized.photoObservations.filter(row => !row.physicalCardId).length,
-      detailPhotoRequiredCount: normalized.photoObservations.filter(row => row.detailPhotoRequired).length
+      unlinkedObservationCount: visibleObservations.filter(row => !row.physicalCardId).length,
+      detailPhotoRequiredCount: visibleObservations.filter(row => row.detailPhotoRequired).length
     };
   }
 
@@ -188,8 +275,13 @@
   return Object.freeze({
     CONFIDENCE_VALUES,
     REVIEW_VALUES,
+    OBSERVATION_SOURCE_VALUES,
+    DETECTION_REVIEW_VALUES,
     normalizeConfidence,
     normalizeReviewStatus,
+    normalizeObservationSource,
+    normalizeDetectionReviewState,
+    normalizeDetectionSignals,
     normalizeBoundingBox,
     normalizeNameCandidate,
     normalizePrintCandidate,
@@ -197,6 +289,8 @@
     normalizeObservation,
     normalizePhysicalCard,
     normalizeAnalysisPhotoEvidence,
+    boundingBoxIoU,
+    mergeDetectionSuggestions,
     summarizePhotoEvidence,
     removePhotoEvidence,
     isPrintExplicitlyConfirmed

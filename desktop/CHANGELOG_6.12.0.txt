@@ -1,0 +1,27 @@
+TCG Business Manager 6.12.0 – Automatische Kartenflächen-Erkennung
+
+NEU
+- Bereits gespeicherte Sammlungsfotos können deterministisch auf 0, 1 oder mehrere wahrscheinliche Kartenflächen geprüft werden.
+- Automatische Bounding-Box-Vorschläge zeigen eine eigene Detection-Confidence und technische Erkennungssignale.
+- Vorschläge lassen sich bestätigen, verschieben, über Zahlenfelder vergrößern/verkleinern, ignorieren oder löschen.
+- Manuelle Kartenbereiche bleiben weiterhin möglich und sind visuell von automatischen Vorschlägen getrennt.
+- Einfache Bildqualitätshinweise für Dunkelheit, Überbelichtung, geringen Kontrast, mögliche Unschärfe und zu kleine Bilder.
+- Regelmäßige Binderanordnungen unterstützen lediglich Reihe/Spalte; es wird kein blindes 3x3-Raster erzeugt.
+- Reproduzierbares Evaluations-Harness mit IoU, True/False Positives, False Negatives, Precision, Recall, F1 und mittlerer IoU.
+
+DATENSICHERHEIT
+- Detection-Confidence, Name-Confidence und Print-Confidence bleiben vollständig getrennte Fakten.
+- Automatische Erkennung setzt weder Kartenname noch Print, Preis, Kartenmenge, Einkauf, Bestand oder physische Kartenverknüpfung.
+- Erneute Analyse schützt manuelle, bestätigte und ignorierte Bereiche sowie vorhandene Name-/Print-/Physical-Card-Daten.
+- IoU-Duplikatunterdrückung behält pro überlappender Fläche den stärksten Vorschlag (Schwellenwert 0,45).
+- Ignorierte automatische Vorschläge bleiben gespeichert, aber unsichtbar, damit sie bei einem erneuten Scan nicht wieder erscheinen.
+
+TECHNIK
+- Vorhandene Canvas-/RGBA-Bildpipeline wiederverwendet; keine neue native Bildbibliothek und kein OpenCV.
+- SQLite-Schema bleibt unverändert bei Version 12; die zusätzlichen Vorschlags- und Qualitätseigenschaften werden im vorhandenen Evidenzmodell dauerhaft gespeichert.
+- Vollständige Regressionstests und eigener Electron-Oberflächentest mit temporären, programmatisch erzeugten Bildern.
+
+BEKANNTE GRENZEN
+- Die erste deterministische Erkennung ist für klare Kartenrahmen, mehrere getrennte Karten und typische Binderanordnungen ausgelegt.
+- Starke Spiegelungen, verdeckte Karten, extreme Perspektive, sehr ähnliche Hintergründe und schlechte Fotos können Karten übersehen oder zusätzliche Vorschläge erzeugen.
+- Jeder Vorschlag muss deshalb vom Benutzer geprüft werden; es erfolgt keine automatische Kartenidentifikation oder Ankaufentscheidung.

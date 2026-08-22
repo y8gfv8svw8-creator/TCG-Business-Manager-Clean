@@ -3205,7 +3205,7 @@ function activeCollectionPhoto(analysis=activeCollectionAnalysis()){
 function activeCollectionObservation(analysis=activeCollectionAnalysis()){
   if(!analysis)return null;
   const photo=activeCollectionPhoto(analysis);if(!photo)return null;
-  let observation=analysis.photoObservations.find(row=>row.id===activeCollectionObservationId&&row.photoId===photo.id)||null;
+  let observation=analysis.photoObservations.find(row=>row.id===activeCollectionObservationId&&row.photoId===photo.id&&row.detectionReviewState!=="rejected")||null;
   activeCollectionObservationId=observation?.id||"";return observation;
 }
 
@@ -3218,8 +3218,13 @@ async function loadCollectionPhotoData(photo){
 }
 
 function collectionObservationLabel(observation,index){
-  return observation.selectedName||observation.nameCandidates?.[0]?.name||`Karte ${index+1}`;
+  if(observation.selectedName||observation.nameCandidates?.[0]?.name)return observation.selectedName||observation.nameCandidates[0].name;
+  if(observation.observationSource==="automatic")return `Vorschlag ${Math.round(Number(observation.detectionScore||0)*100)} %`;
+  return `Manuell ${index+1}`;
 }
+
+function collectionDetectionConfidenceLabel(value){return ({high:"Hoch",medium:"Mittel",low:"Niedrig",unknown:"Unbekannt"})[value]||"Unbekannt";}
+function collectionQualityWarningLabel(value){return ({very_dark:"Foto ist sehr dunkel",overexposed:"Foto ist stark überbelichtet",low_contrast:"Sehr geringer Kontrast",possibly_blurred:"Foto möglicherweise unscharf",image_too_small:"Bild ist für eine zuverlässige Erkennung zu klein"})[value]||value;}
 
 function renderCollectionPhotoPreviews(analysis){
   (analysis.photos||[]).forEach(async photo=>{
@@ -3232,8 +3237,11 @@ function renderCollectionPhotoPreviews(analysis){
 
 function renderCollectionObservationEditor(analysis,observation){
   const fields=document.getElementById("collectionObservationEditorFields"),remove=document.getElementById("deleteCollectionObservationBtn"),hint=document.getElementById("collectionObservationHint");
-  fields.hidden=!observation;remove.hidden=!observation;hint.textContent=observation?`Beobachtung ${analysis.photoObservations.filter(row=>row.photoId===observation.photoId).findIndex(row=>row.id===observation.id)+1} wird manuell geprüft.`:"Rechteck zeichnen oder auswählen.";
+  fields.hidden=!observation;remove.hidden=!observation;hint.textContent=observation?`${observation.observationSource==="automatic"?"Automatischer Vorschlag":"Manuelle Markierung"} ${analysis.photoObservations.filter(row=>row.photoId===observation.photoId&&row.detectionReviewState!=="rejected").findIndex(row=>row.id===observation.id)+1} wird geprüft.`:"Rechteck zeichnen oder auswählen.";
   if(!observation){document.getElementById("collectionObservationNameResults").innerHTML="";document.getElementById("collectionObservationPrintResults").innerHTML="";return;}
+  const automatic=observation.observationSource==="automatic",detection=document.getElementById("collectionObservationDetection"),actions=document.getElementById("collectionDetectionActions");
+  detection.innerHTML=automatic?`<strong>Automatisch erkannte Kartenfläche</strong><span>Detection-Confidence: ${escapeHtml(collectionDetectionConfidenceLabel(observation.detectionConfidence))} · ${Math.round(Number(observation.detectionScore||0)*100)} %</span><small>Diese Sicherheit sagt nur, ob dort wahrscheinlich eine Karte liegt. Sie bestätigt weder Kartenname noch Print.</small>`:'<strong>Manuell markierter Kartenbereich</strong><small>Keine automatische Detection-Confidence. Kartenname und Print werden weiterhin getrennt geprüft.</small>';
+  actions.hidden=!automatic||observation.detectionReviewState==="confirmed";
   const box=observation.boundingBox||{};
   [["collectionBBoxX",box.x],["collectionBBoxY",box.y],["collectionBBoxWidth",box.width],["collectionBBoxHeight",box.height],["collectionObservationRow",observation.row],["collectionObservationColumn",observation.column]].forEach(([id,value])=>{document.getElementById(id).value=value??"";});
   document.getElementById("collectionObservationNameConfidence").value=observation.nameConfidence||"unknown";
@@ -3255,14 +3263,17 @@ function renderCollectionPhotoEvidence(analysis){
   const workspace=document.getElementById("collectionPhotoWorkspace"),list=document.getElementById("collectionPhotoList"),summary=document.getElementById("collectionPhotoEvidenceSummary");
   if(!analysis){workspace.hidden=true;list.innerHTML='<div class="empty">Zuerst eine Sammlungsanalyse anlegen.</div>';summary.innerHTML="";return;}
   normalizeCollectionPhotoEvidence(analysis);const evidence=window.TcgCollectionPhotoModel?.summarizePhotoEvidence?.(analysis)||{};
-  summary.innerHTML=`<div><small>Fotos</small><strong>${evidence.photoCount||0}</strong></div><div><small>Markierte Kartenbereiche</small><strong>${evidence.observationCount||0}</strong></div><div><small>Manuell angelegte physische Karten</small><strong>${evidence.physicalCardCount||0}</strong></div><div><small>Unverknüpfte Beobachtungen</small><strong>${evidence.unlinkedObservationCount||0}</strong></div><div><small>Detailfoto erforderlich</small><strong>${evidence.detailPhotoRequiredCount||0}</strong></div>`;
+  summary.innerHTML=`<div><small>Fotos</small><strong>${evidence.photoCount||0}</strong></div><div><small>Sichtbare Kartenbereiche</small><strong>${evidence.observationCount||0}</strong></div><div><small>Automatische Vorschläge</small><strong>${evidence.automaticSuggestedCount||0}</strong></div><div><small>Bestätigte Vorschläge</small><strong>${evidence.automaticConfirmedCount||0}</strong></div><div><small>Manuell angelegte physische Karten</small><strong>${evidence.physicalCardCount||0}</strong></div><div><small>Detailfoto erforderlich</small><strong>${evidence.detailPhotoRequiredCount||0}</strong></div>`;
   const photo=activeCollectionPhoto(analysis);workspace.hidden=!photo;
   list.innerHTML=analysis.photos.length?analysis.photos.map(row=>`<button type="button" class="collection-photo-choice ${row.id===photo?.id?"active":""}" data-select-collection-photo="${escapeHtml(row.id)}"><img data-collection-photo-preview="${escapeHtml(row.id)}" alt=""><span><strong>Bild ${row.sequence}</strong><small>${escapeHtml(row.binderPage||"keine Binder-Seite")}</small><small>${escapeHtml(row.originalFileName||"")}</small></span></button>`).join(""):'<div class="empty">Noch keine Fotos gespeichert.</div>';
   if(!photo){renderCollectionObservationEditor(analysis,null);return;}
   document.getElementById("collectionPhotoSequence").value=photo.sequence||1;document.getElementById("collectionPhotoBinderPage").value=photo.binderPage||"";
+  const status=document.getElementById("collectionPhotoDetectionStatus"),quality=document.getElementById("collectionPhotoQuality"),photoSuggestions=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.observationSource==="automatic"&&row.detectionReviewState!=="rejected");
+  status.textContent=photo.lastDetectionAt?`Letzte automatische Analyse: ${new Date(photo.lastDetectionAt).toLocaleString("de-DE")} · ${photoSuggestions.length} sichtbare automatische Vorschläge.`:"Noch keine automatische Flächenerkennung für dieses Foto ausgeführt.";
+  const qualityData=photo.detectionQuality||{},warnings=Array.isArray(qualityData.warnings)?qualityData.warnings:[];quality.hidden=!photo.lastDetectionAt;quality.classList.toggle("warning",warnings.length>0);quality.innerHTML=photo.lastDetectionAt?`<strong>Bildqualität</strong><span>Helligkeit ${Number(qualityData.brightness||0).toFixed(0)} · Kontrast ${Number(qualityData.contrast||0).toFixed(0)} · Kantenschärfe ${Number(qualityData.sharpness||0).toFixed(0)}</span><small>${warnings.length?warnings.map(collectionQualityWarningLabel).join(" · "):"Keine deutliche technische Qualitätswarnung. Reflexionen und Folien können die Erkennung trotzdem beeinflussen."}</small>`:"";
   const image=document.getElementById("collectionPhotoImage");image.dataset.photoId=photo.id;image.removeAttribute("src");
-  const photoObservations=analysis.photoObservations.filter(row=>row.photoId===photo.id);const overlay=document.getElementById("collectionPhotoOverlay");
-  overlay.innerHTML=photoObservations.map((observation,index)=>{const box=observation.boundingBox;return `<div class="collection-photo-box ${observation.id===activeCollectionObservationId?"active":""}" data-observation-box="${escapeHtml(observation.id)}" style="left:${box.x*100}%;top:${box.y*100}%;width:${box.width*100}%;height:${box.height*100}%"><span>${escapeHtml(collectionObservationLabel(observation,index))}</span></div>`;}).join("");
+  const photoObservations=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.detectionReviewState!=="rejected");const overlay=document.getElementById("collectionPhotoOverlay");
+  overlay.innerHTML=photoObservations.map((observation,index)=>{const box=observation.boundingBox,source=observation.observationSource==="automatic"?"automatic":"manual",review=observation.detectionReviewState||"manual";return `<div class="collection-photo-box source-${source} detection-${review} ${observation.id===activeCollectionObservationId?"active":""}" data-observation-box="${escapeHtml(observation.id)}" style="left:${box.x*100}%;top:${box.y*100}%;width:${box.width*100}%;height:${box.height*100}%"><span>${escapeHtml(collectionObservationLabel(observation,index))}</span></div>`;}).join("");
   renderCollectionObservationEditor(analysis,activeCollectionObservation(analysis));renderCollectionPhotoPreviews(analysis);
 }
 
@@ -3288,9 +3299,26 @@ async function deleteActiveCollectionPhoto(){
   collectionPhotoDataUrls.delete(photo.relativePath);Object.assign(analysis,window.TcgCollectionPhotoModel.removePhotoEvidence(analysis,photo.id));activeCollectionPhotoId=analysis.photos[0]?.id||"";activeCollectionObservationId="";saveState();renderCollectionPurchases();
 }
 
+async function detectActiveCollectionPhoto(){
+  const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis),button=document.getElementById("detectCollectionCardsBtn");
+  if(!analysis||!photo)return;
+  if(!window.TcgScannerImageProcessing?.detectCollectionCardsFromDataUrl){alert("Die automatische Kartenflächenerkennung ist in dieser Installation nicht verfügbar.");return;}
+  const dataUrl=await loadCollectionPhotoData(photo);if(!dataUrl){alert("Das Sammlungsfoto konnte nicht geladen werden.");return;}
+  const originalLabel=button.textContent;button.disabled=true;button.textContent="Kartenflächen werden gesucht …";
+  try{
+    const result=await window.TcgScannerImageProcessing.detectCollectionCardsFromDataUrl(dataUrl);
+    const merged=window.TcgCollectionPhotoModel.mergeDetectionSuggestions(analysis.photoObservations,photo.id,result.detections,{analysisId:analysis.id,idFactory:()=>uid()});
+    analysis.photoObservations=merged.observations;photo.detectionQuality=result.photoQuality||{};photo.lastDetectionAt=new Date().toISOString();photo.detectionSummary={detectionCount:Number(result.detections?.length||0),addedCount:merged.added.length,skippedCount:merged.skipped,iouThreshold:Number(result.parameters?.iouThreshold||.45)};
+    activeCollectionObservationId=merged.added[0]?.id||activeCollectionObservationId;saveState();renderCollectionPhotoEvidence(analysis);
+    const qualityWarnings=Array.isArray(result.photoQuality?.warnings)?result.photoQuality.warnings.length:0;
+    alert(`${merged.added.length} neue Kartenfläche(n) als prüfbare Vorschläge angelegt.${merged.skipped?` ${merged.skipped} bereits vorhandene oder ignorierte Fläche(n) wurden nicht doppelt angelegt.`:""}${qualityWarnings?" Bitte zusätzlich die Hinweise zur Bildqualität beachten.":""}`);
+  }catch(error){console.error("Sammlungsfoto-Erkennung fehlgeschlagen:",error);alert(`Kartenflächen konnten nicht erkannt werden: ${error.message}`);}
+  finally{button.disabled=false;button.textContent=originalLabel;}
+}
+
 function createCollectionObservation(boundingBox){
   const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);const normalized=window.TcgCollectionPhotoModel?.normalizeBoundingBox?.(boundingBox);if(!analysis||!photo||!normalized)return null;
-  const now=new Date().toISOString(),observation={id:uid(),analysisId:analysis.id,photoId:photo.id,boundingBox:normalized,row:"",column:"",selectedName:"",nameCandidates:[],nameConfidence:"unknown",selectedProductId:"",printCandidates:[],printConfidence:"unknown",recognitionSignals:[],economicRelevant:false,detailPhotoRequired:false,reviewStatus:"unreviewed",physicalCardId:"",linkedCollectionItemId:"",createdAt:now,updatedAt:now};
+  const now=new Date().toISOString(),observation={id:uid(),analysisId:analysis.id,photoId:photo.id,boundingBox:normalized,observationSource:"manual",detectionConfidence:"unknown",detectionScore:null,detectionSignals:{},detectionReviewState:"manual",row:"",column:"",selectedName:"",nameCandidates:[],nameConfidence:"unknown",selectedProductId:"",printCandidates:[],printConfidence:"unknown",recognitionSignals:[],economicRelevant:false,detailPhotoRequired:false,reviewStatus:"unreviewed",physicalCardId:"",linkedCollectionItemId:"",createdAt:now,updatedAt:now};
   analysis.photoObservations.push(observation);activeCollectionObservationId=observation.id;saveState();renderCollectionPhotoEvidence(analysis);return observation;
 }
 
@@ -6685,6 +6713,7 @@ document.getElementById("collectionCsvInput").addEventListener("change",async ev
 document.getElementById("collectionPhotoInput").addEventListener("change",async event=>{const files=[...(event.target.files||[])];event.target.value="";try{await addCollectionPhotos(files);}catch(error){console.error(error);alert(`Sammlungsfoto konnte nicht gespeichert werden: ${error.message}`);}});
 document.getElementById("collectionPhotoList").addEventListener("click",event=>{const button=event.target.closest("[data-select-collection-photo]");if(!button)return;activeCollectionPhotoId=button.dataset.selectCollectionPhoto;activeCollectionObservationId="";renderCollectionPhotoEvidence(activeCollectionAnalysis());});
 document.getElementById("deleteCollectionPhotoBtn").onclick=()=>deleteActiveCollectionPhoto().catch(error=>{console.error(error);alert(`Foto konnte nicht gelöscht werden: ${error.message}`);});
+document.getElementById("detectCollectionCardsBtn").onclick=()=>detectActiveCollectionPhoto();
 ["collectionPhotoSequence","collectionPhotoBinderPage"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);if(!photo)return;photo.sequence=Math.max(1,Math.round(Number(document.getElementById("collectionPhotoSequence").value||1)));photo.binderPage=document.getElementById("collectionPhotoBinderPage").value.trim();saveState();renderCollectionPhotoEvidence(analysis);}));
 
 let collectionPhotoPointerAction=null;
@@ -6707,7 +6736,9 @@ window.addEventListener("pointerup",()=>{
 });
 
 ["collectionBBoxX","collectionBBoxY","collectionBBoxWidth","collectionBBoxHeight","collectionObservationRow","collectionObservationColumn","collectionObservationNameConfidence","collectionObservationPrintConfidence","collectionObservationReviewStatus","collectionObservationSignals","collectionObservationEconomicRelevant","collectionObservationDetailRequired"].forEach(id=>document.getElementById(id).addEventListener("change",updateActiveObservationFromFields));
-document.getElementById("deleteCollectionObservationBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;analysis.photoObservations=analysis.photoObservations.filter(row=>row.id!==observation.id);activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("confirmCollectionDetectionBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation||observation.observationSource!=="automatic")return;observation.detectionReviewState="confirmed";observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("rejectCollectionDetectionBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation||observation.observationSource!=="automatic")return;observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("deleteCollectionObservationBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;if(observation.observationSource==="automatic"){observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();}else analysis.photoObservations=analysis.photoObservations.filter(row=>row.id!==observation.id);activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
 let collectionObservationNameTimer,collectionObservationPrintTimer;
 document.getElementById("collectionObservationNameSearch").addEventListener("input",event=>{clearTimeout(collectionObservationNameTimer);collectionObservationNameTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"name"),180);});
 document.getElementById("collectionObservationPrintSearch").addEventListener("input",event=>{clearTimeout(collectionObservationPrintTimer);collectionObservationPrintTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"print"),180);});

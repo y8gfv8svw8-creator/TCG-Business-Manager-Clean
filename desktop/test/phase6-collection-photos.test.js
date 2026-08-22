@@ -185,15 +185,23 @@ test('Foto-Metadaten, Kandidaten und physische Verknüpfung werden normalisiert 
   const database = new TcgDatabase({ databasePath, schemaPath, backupRoot }).open();
   database.saveState({ settings: { autoBackup: false }, inventory: [], privateCollection: [], purchases: [], sales: [], collectionPurchaseAnalyses: [{
     id: 'a1', title: 'Fotos', items: [{ id: 'i1', productId: '123', name: 'Blitzsturm' }], decisionSnapshots: [],
-    photos: [{ id: 'p1', sequence: 1, binderPage: '4', relativePath: 'Daten/Sammlungsfotos/test/bild.png', originalFileName: 'bild.png', mimeType: 'image/png', fileSize: 50, width: 100, height: 200, sha256: 'abc', createdAt: '2026-08-20' }],
+    photos: [{ id: 'p1', sequence: 1, binderPage: '4', relativePath: 'Daten/Sammlungsfotos/test/bild.png', originalFileName: 'bild.png', mimeType: 'image/png', fileSize: 50, width: 100, height: 200, sha256: 'abc', createdAt: '2026-08-20', lastDetectionAt: '2026-08-22T12:00:00.000Z', detectionQuality: { brightness: 120, contrast: 35, sharpness: 14, warnings: [] } }],
     physicalCards: [{ id: 'physical-1', label: 'Blitzsturm Exemplar', linkedCollectionItemId: 'i1', productId: '123', name: 'Blitzsturm', createdAt: '2026-08-20' }],
-    photoObservations: [{ id: 'o1', photoId: 'p1', boundingBox: { x: .1, y: .2, width: .3, height: .4 }, row: '2', column: '3', selectedName: 'Blitzsturm', nameCandidates: [{ name: 'Blitzsturm' }], nameConfidence: 'high', selectedProductId: '123', printCandidates: [{ productId: '123' }], printConfidence: 'confirmed', physicalCardId: 'physical-1', linkedCollectionItemId: 'i1', createdAt: '2026-08-20' }]
+    photoObservations: [
+      { id: 'o1', photoId: 'p1', boundingBox: { x: .1, y: .2, width: .3, height: .4 }, observationSource: 'manual', detectionReviewState: 'manual', row: '2', column: '3', selectedName: 'Blitzsturm', nameCandidates: [{ name: 'Blitzsturm' }], nameConfidence: 'high', selectedProductId: '123', printCandidates: [{ productId: '123' }], printConfidence: 'confirmed', physicalCardId: 'physical-1', linkedCollectionItemId: 'i1', createdAt: '2026-08-20' },
+      { id: 'auto-suggested', photoId: 'p1', boundingBox: { x: .45, y: .05, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'medium', detectionScore: .72, detectionSignals: { edgeStrength: .84, gridSupport: true }, detectionReviewState: 'suggested', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' },
+      { id: 'auto-confirmed', photoId: 'p1', boundingBox: { x: .7, y: .05, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'high', detectionScore: .88, detectionSignals: { edgeStrength: .91 }, detectionReviewState: 'confirmed', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' },
+      { id: 'auto-rejected', photoId: 'p1', boundingBox: { x: .45, y: .55, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'low', detectionScore: .61, detectionSignals: { possiblePerspective: true }, detectionReviewState: 'rejected', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' }
+    ]
   }] });
   const photoCount = database.db.prepare('SELECT COUNT(*) count FROM collection_purchase_photos WHERE archived=0').get().count;
-  const observation = database.db.prepare('SELECT * FROM collection_card_observations WHERE archived=0').get();
+  const observation = database.db.prepare("SELECT * FROM collection_card_observations WHERE observation_id='o1' AND archived=0").get();
   const physicalCount = database.db.prepare('SELECT COUNT(*) count FROM collection_physical_cards WHERE archived=0').get().count;
   const loaded=database.loadState().state.collectionPurchaseAnalyses[0];
-  assert.equal(photoCount, 1);assert.equal(physicalCount, 1);assert.equal(observation.selected_product_id, '123');assert.equal(observation.name_confidence, 'high');assert.equal(observation.print_confidence, 'confirmed');assert.equal(loaded.photos[0].binderPage,'4');assert.deepEqual(loaded.photoObservations[0].boundingBox,{x:.1,y:.2,width:.3,height:.4});database.close();
+  assert.equal(photoCount, 1);assert.equal(physicalCount, 1);assert.equal(observation.selected_product_id, '123');assert.equal(observation.name_confidence, 'high');assert.equal(observation.print_confidence, 'confirmed');assert.equal(loaded.photos[0].binderPage,'4');assert.equal(loaded.photos[0].detectionQuality.contrast,35);assert.deepEqual(loaded.photoObservations[0].boundingBox,{x:.1,y:.2,width:.3,height:.4});
+  const suggested=loaded.photoObservations.find(row=>row.id==='auto-suggested'),confirmed=loaded.photoObservations.find(row=>row.id==='auto-confirmed'),rejected=loaded.photoObservations.find(row=>row.id==='auto-rejected');
+  assert.equal(suggested.observationSource,'automatic');assert.equal(suggested.detectionConfidence,'medium');assert.equal(suggested.detectionScore,.72);assert.equal(suggested.nameConfidence,'unknown');assert.equal(suggested.printConfidence,'unknown');assert.equal(confirmed.detectionReviewState,'confirmed');assert.equal(rejected.detectionReviewState,'rejected');
+  const rescan=model.mergeDetectionSuggestions(loaded.photoObservations,'p1',[{boundingBox:rejected.boundingBox,detectionConfidence:'high',detectionScore:.9}],{analysisId:'a1'});assert.equal(rescan.added.length,0);database.close();
 });
 
 test('ungültige Bounding Box verhindert die gesamte SQLite-Speicherung', t => {

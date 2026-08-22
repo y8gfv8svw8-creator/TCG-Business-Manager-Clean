@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.11.0</title>
+  <title>TCG Business Manager 6.12.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.11.0 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.12.0 · SQLite</div>
         </div>
       </div>
 
@@ -586,8 +586,11 @@
               <div class="collection-photo-meta">
                 <label>Bildnummer<input id="collectionPhotoSequence" type="number" min="1" step="1" /></label>
                 <label>Binder-Seite (optional)<input id="collectionPhotoBinderPage" placeholder="z. B. Seite 4" /></label>
+                <button id="detectCollectionCardsBtn" class="primary" type="button">Karten automatisch erkennen</button>
                 <button id="deleteCollectionPhotoBtn" class="danger" type="button">Foto löschen</button>
               </div>
+              <div id="collectionPhotoDetectionStatus" class="collection-detection-status muted">Noch keine automatische Flächenerkennung für dieses Foto ausgeführt.</div>
+              <div id="collectionPhotoQuality" class="collection-photo-quality" hidden></div>
               <p class="muted">Ziehe mit der Maus ein Rechteck um genau eine sichtbare Karte. Vorhandene Rechtecke lassen sich verschieben; Größe und Position können rechts exakt korrigiert werden.</p>
               <div id="collectionPhotoStage" class="collection-photo-stage" aria-label="Sammlungsfoto mit Kartenmarkierungen">
                 <img id="collectionPhotoImage" alt="Ausgewähltes Sammlungsfoto" draggable="false" />
@@ -597,6 +600,8 @@
             <aside class="collection-observation-editor">
               <div class="panel-head"><div><h3>Kartenbeobachtung</h3><small id="collectionObservationHint">Rechteck zeichnen oder auswählen.</small></div><button id="deleteCollectionObservationBtn" class="icon-button danger-text" type="button" hidden>Entfernen</button></div>
               <div id="collectionObservationEditorFields" hidden>
+                <div id="collectionObservationDetection" class="collection-observation-detection"></div>
+                <div id="collectionDetectionActions" class="row-actions" hidden><button id="confirmCollectionDetectionBtn" class="primary" type="button">Vorschlag bestätigen</button><button id="rejectCollectionDetectionBtn" class="secondary" type="button">Vorschlag ignorieren</button></div>
                 <div class="bbox-grid">
                   <label>X<input id="collectionBBoxX" type="number" min="0" max="1" step="0.001" /></label>
                   <label>Y<input id="collectionBBoxY" type="number" min="0" max="1" step="0.001" /></label>

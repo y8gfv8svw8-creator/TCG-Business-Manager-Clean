@@ -82,7 +82,7 @@ async function main() {
         databaseStatus,rendererErrors};
     })()`);
     const viewsOk=result&&Object.values(result.viewChecks||{}).every(Boolean);
-    if(!result||!result.title?.includes('6.11.0')||result.ready!=='complete'||!viewsOk||!result.collectionView||!result.entryFields||!result.germanSearch||!result.englishSearch||!result.priceGuide||!result.maxEk||!result.snapshot||!result.noAutomaticInventory||!result.phase3Bridge||!result.phase4Bridge||result.databaseStatus?.schemaVersion!==12||result.rendererErrors?.length){
+    if(!result||!result.title?.includes('6.12.0')||result.ready!=='complete'||!viewsOk||!result.collectionView||!result.entryFields||!result.germanSearch||!result.englishSearch||!result.priceGuide||!result.maxEk||!result.snapshot||!result.noAutomaticInventory||!result.phase3Bridge||!result.phase4Bridge||result.databaseStatus?.schemaVersion!==12||result.rendererErrors?.length){
       throw new Error(`PHASE-5-Oberflächentest unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result,null,2)}\n`);

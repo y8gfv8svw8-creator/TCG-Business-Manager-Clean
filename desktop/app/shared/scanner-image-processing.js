@@ -54,11 +54,34 @@
     );
   }
 
+  function boundingBoxOverlap(left, right) {
+    const expected = normalizedBoundingBox(left?.boundingBox || left);
+    const detected = normalizedBoundingBox(right?.boundingBox || right);
+    if (!expected || !detected) return { iou: 0, coverage: 0, detectedCoverage: 0, areaRatio: 0 };
+    const x0 = Math.max(expected.x, detected.x);
+    const y0 = Math.max(expected.y, detected.y);
+    const x1 = Math.min(expected.x + expected.width, detected.x + detected.width);
+    const y1 = Math.min(expected.y + expected.height, detected.y + detected.height);
+    const intersection = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+    const expectedArea = expected.width * expected.height;
+    const detectedArea = detected.width * detected.height;
+    const union = expectedArea + detectedArea - intersection;
+    return {
+      iou: union > 0 ? intersection / union : 0,
+      coverage: expectedArea > 0 ? intersection / expectedArea : 0,
+      detectedCoverage: detectedArea > 0 ? intersection / detectedArea : 0,
+      areaRatio: expectedArea > 0 ? detectedArea / expectedArea : 0
+    };
+  }
+
   function downsampleRgba(data, width, height, maxDimension = 480) {
     const scale = Math.min(1, maxDimension / Math.max(width, height));
     const targetWidth = Math.max(24, Math.round(width * scale));
     const targetHeight = Math.max(24, Math.round(height * scale));
     const gray = new Float32Array(targetWidth * targetHeight);
+    const red = new Uint8Array(targetWidth * targetHeight);
+    const green = new Uint8Array(targetWidth * targetHeight);
+    const blue = new Uint8Array(targetWidth * targetHeight);
     let sum = 0;
     let sumSquares = 0;
     let dark = 0;
@@ -70,6 +93,7 @@
         const offset = (sourceY * width + sourceX) * 4;
         const value = data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114;
         const index = y * targetWidth + x;
+        red[index] = data[offset];green[index] = data[offset + 1];blue[index] = data[offset + 2];
         gray[index] = value;
         sum += value;
         sumSquares += value * value;
@@ -81,6 +105,9 @@
     const mean = sum / count;
     return {
       gray,
+      red,
+      green,
+      blue,
       width: targetWidth,
       height: targetHeight,
       scale,
@@ -91,7 +118,7 @@
     };
   }
 
-  function gradientAnalysis(gray, width, height) {
+  function gradientAnalysis(gray, width, height, colors = null) {
     const gradientX = new Float32Array(gray.length);
     const gradientY = new Float32Array(gray.length);
     const magnitude = new Float32Array(gray.length);
@@ -102,8 +129,20 @@
     for (let y = 1; y < height - 1; y += 1) {
       for (let x = 1; x < width - 1; x += 1) {
         const index = y * width + x;
-        const gx = Math.abs(gray[index + 1] - gray[index - 1]);
-        const gy = Math.abs(gray[index + width] - gray[index - width]);
+        const lumaX = Math.abs(gray[index + 1] - gray[index - 1]);
+        const lumaY = Math.abs(gray[index + width] - gray[index - width]);
+        const colorX = colors ? Math.hypot(
+          colors.red[index + 1] - colors.red[index - 1],
+          colors.green[index + 1] - colors.green[index - 1],
+          colors.blue[index + 1] - colors.blue[index - 1]
+        ) / Math.sqrt(3) : 0;
+        const colorY = colors ? Math.hypot(
+          colors.red[index + width] - colors.red[index - width],
+          colors.green[index + width] - colors.green[index - width],
+          colors.blue[index + width] - colors.blue[index - width]
+        ) / Math.sqrt(3) : 0;
+        const gx = Math.max(lumaX, colorX * 0.88);
+        const gy = Math.max(lumaY, colorY * 0.88);
         const value = Math.min(511, Math.round(gx + gy));
         gradientX[index] = gx;
         gradientY[index] = gy;
@@ -294,9 +333,47 @@
     return { value: ratios.reduce((sum, value) => sum + value, 0) / 4, sides: ratios };
   }
 
+  function boundaryContrast(rect, context) {
+    const { integralGray, integralRed, integralGreen, integralBlue, sampleContrast } = context;
+    const bandX = Math.max(2, Math.round(rect.width * 0.025));
+    const bandY = Math.max(2, Math.round(rect.height * 0.018));
+    const trimX = Math.max(2, Math.round(rect.width * 0.08));
+    const trimY = Math.max(2, Math.round(rect.height * 0.08));
+    const grayDifferences = [
+      Math.abs(regionMean(integralGray, rect.left - bandX * 2, rect.top + trimY, bandX, rect.height - trimY * 2)
+        - regionMean(integralGray, rect.left + bandX, rect.top + trimY, bandX, rect.height - trimY * 2)),
+      Math.abs(regionMean(integralGray, rect.left + rect.width + bandX, rect.top + trimY, bandX, rect.height - trimY * 2)
+        - regionMean(integralGray, rect.left + rect.width - bandX * 2, rect.top + trimY, bandX, rect.height - trimY * 2)),
+      Math.abs(regionMean(integralGray, rect.left + trimX, rect.top - bandY * 2, rect.width - trimX * 2, bandY)
+        - regionMean(integralGray, rect.left + trimX, rect.top + bandY, rect.width - trimX * 2, bandY)),
+      Math.abs(regionMean(integralGray, rect.left + trimX, rect.top + rect.height + bandY, rect.width - trimX * 2, bandY)
+        - regionMean(integralGray, rect.left + trimX, rect.top + rect.height - bandY * 2, rect.width - trimX * 2, bandY))
+    ];
+    const colorDistance = (leftRect, rightRect) => {
+      const color = source => Math.hypot(
+        regionMean(integralRed, ...source) - regionMean(integralRed, ...rightRect),
+        regionMean(integralGreen, ...source) - regionMean(integralGreen, ...rightRect),
+        regionMean(integralBlue, ...source) - regionMean(integralBlue, ...rightRect)
+      ) / Math.sqrt(3);
+      return color(leftRect);
+    };
+    const colorDifferences = [
+      colorDistance([rect.left - bandX * 2, rect.top + trimY, bandX, rect.height - trimY * 2], [rect.left + bandX, rect.top + trimY, bandX, rect.height - trimY * 2]),
+      colorDistance([rect.left + rect.width + bandX, rect.top + trimY, bandX, rect.height - trimY * 2], [rect.left + rect.width - bandX * 2, rect.top + trimY, bandX, rect.height - trimY * 2]),
+      colorDistance([rect.left + trimX, rect.top - bandY * 2, rect.width - trimX * 2, bandY], [rect.left + trimX, rect.top + bandY, rect.width - trimX * 2, bandY]),
+      colorDistance([rect.left + trimX, rect.top + rect.height + bandY, rect.width - trimX * 2, bandY], [rect.left + trimX, rect.top + rect.height - bandY * 2, rect.width - trimX * 2, bandY])
+    ];
+    const grayAverage = grayDifferences.reduce((sum, value) => sum + value, 0) / grayDifferences.length;
+    const colorAverage = colorDifferences.reduce((sum, value) => sum + value, 0) / colorDifferences.length;
+    return Math.max(
+      clamp(grayAverage / Math.max(14, sampleContrast * 0.62), 0, 1),
+      clamp(colorAverage / 36, 0, 1)
+    );
+  }
+
   function scoreCardRectangle(rect, context, componentStrength = 0, rotation = null) {
     const { width, height, gradients, integralX, integralY } = context;
-    if (rect.left < 1 || rect.top < 1 || rect.left + rect.width >= width - 1 || rect.top + rect.height >= height - 1) return null;
+    if (rect.left < 0 || rect.top < 0 || rect.left + rect.width > width || rect.top + rect.height > height) return null;
     const aspect = rect.width / rect.height;
     if (aspect < 0.46 || aspect > 0.92) return null;
     const areaRatio = rect.width * rect.height / (width * height);
@@ -315,15 +392,17 @@
     const edgeStrength = clamp((sideAverage - gradients.mean * 0.8) / Math.max(8, gradients.threshold * 0.55), 0, 1);
     const edgeBalance = clamp(Math.min(...sides) / maximumSide, 0, 1);
     const continuity = edgeContinuity(rect, gradients, width, height, Math.max(1, band));
+    const contrast = boundaryContrast(rect, context);
     const strongSideCount = continuity.sides.filter(value => value >= 0.35).length;
     const strongComponent = componentStrength >= 0.65;
-    if ((!componentStrength && (strongSideCount < 4 || continuity.value < 0.42))
+    if ((!componentStrength && (strongSideCount < 2 || continuity.value < 0.28 || (strongSideCount < 3 && contrast < 0.42)))
       || (componentStrength && !strongComponent && (strongSideCount < 3 || continuity.value < 0.38))
-      || (strongComponent && continuity.value < 0.04)) return null;
+      || (strongComponent && (continuity.value < 0.18 || (edgeStrength < 0.08 && edgeBalance < 0.20)))) return null;
     const aspectScore = clamp(1 - Math.abs(aspect - CARD_ASPECT) / 0.25, 0, 1);
     const areaScore = clamp(areaRatio / 0.025, 0.35, 1);
-    const calculatedScore = clamp(edgeStrength * 0.29 + continuity.value * 0.27 + edgeBalance * 0.12 + aspectScore * 0.16 + areaScore * 0.05 + componentStrength * 0.11, 0, 1);
-    const score = strongComponent ? Math.max(calculatedScore, 0.55 + aspectScore * 0.16 + continuity.value * 0.08) : calculatedScore;
+    const score = clamp(edgeStrength * 0.25 + continuity.value * 0.24 + edgeBalance * 0.10
+      + aspectScore * 0.18 + contrast * 0.14 + areaScore * 0.04 + componentStrength * 0.05, 0, 1);
+    const outerBoundaryScore = clamp(continuity.value * 0.48 + edgeBalance * 0.20 + contrast * 0.32, 0, 1);
     return {
       ...rect,
       score,
@@ -334,9 +413,59 @@
         edgeBalance: Math.round(edgeBalance * 1000) / 1000,
         aspectRatio: Math.round(aspect * 1000) / 1000,
         aspectScore: Math.round(aspectScore * 1000) / 1000,
+        boundaryContrast: Math.round(contrast * 1000) / 1000,
+        outerBoundaryScore: Math.round(outerBoundaryScore * 1000) / 1000,
         areaRatio: Math.round(areaRatio * 10000) / 10000,
         rotationDegrees: rotation == null ? null : Math.round(rotation * 10) / 10,
         sideContinuity: continuity.sides.map(value => Math.round(value * 1000) / 1000)
+      }
+    };
+  }
+
+  function scorePerspectiveCardRectangle(rect, context) {
+    const { width, height, gradients, integralX, integralY } = context;
+    if (rect.left < 0 || rect.top < 0 || rect.left + rect.width > width || rect.top + rect.height > height) return null;
+    const aspect = rect.width / Math.max(1, rect.height);
+    const areaRatio = rect.width * rect.height / Math.max(1, width * height);
+    if (aspect < 0.48 || aspect > 0.94 || areaRatio < 0.075 || areaRatio > 0.30) return null;
+    const band = Math.max(3, Math.round(Math.min(rect.width, rect.height) * 0.06));
+    const trimX = Math.max(2, Math.round(rect.width * 0.06));
+    const trimY = Math.max(2, Math.round(rect.height * 0.06));
+    const sides = [
+      regionMean(integralX, rect.left - band, rect.top + trimY, band * 2 + 1, rect.height - trimY * 2),
+      regionMean(integralX, rect.left + rect.width - band - 1, rect.top + trimY, band * 2 + 1, rect.height - trimY * 2),
+      regionMean(integralY, rect.left + trimX, rect.top - band, rect.width - trimX * 2, band * 2 + 1),
+      regionMean(integralY, rect.left + trimX, rect.top + rect.height - band - 1, rect.width - trimX * 2, band * 2 + 1)
+    ];
+    const continuity = edgeContinuity(rect, gradients, width, height, band);
+    const strongSideCount = continuity.sides.filter(value => value >= 0.34).length;
+    const contrast = boundaryContrast(rect, context);
+    if (strongSideCount < 2 || continuity.value < 0.30 || (strongSideCount < 3 && contrast < 0.28)) return null;
+    const orderedSides = [...sides].sort((left, right) => left - right);
+    const robustSideBalance = clamp(orderedSides[1] / Math.max(1, orderedSides[3]), 0, 1);
+    const sideAverage = sides.reduce((sum, value) => sum + value, 0) / 4;
+    const edgeStrength = clamp((sideAverage - gradients.mean * 0.72) / Math.max(8, gradients.threshold * 0.50), 0, 1);
+    const aspectScore = clamp(1 - Math.abs(aspect - CARD_ASPECT) / 0.28, 0, 1);
+    const score = clamp(edgeStrength * 0.20 + continuity.value * 0.30 + robustSideBalance * 0.12
+      + aspectScore * 0.16 + contrast * 0.17 + Math.min(1, areaRatio / 0.13) * 0.05, 0, 1);
+    const outerBoundaryScore = clamp(continuity.value * 0.55 + robustSideBalance * 0.20 + contrast * 0.25, 0, 1);
+    if (score < 0.42 || outerBoundaryScore < 0.38) return null;
+    return {
+      ...rect,
+      score,
+      candidateSource: "perspective_window",
+      signals: {
+        edgeStrength: Math.round(edgeStrength * 1000) / 1000,
+        edgeContinuity: Math.round(continuity.value * 1000) / 1000,
+        edgeBalance: Math.round(robustSideBalance * 1000) / 1000,
+        aspectRatio: Math.round(aspect * 1000) / 1000,
+        aspectScore: Math.round(aspectScore * 1000) / 1000,
+        boundaryContrast: Math.round(contrast * 1000) / 1000,
+        outerBoundaryScore: Math.round(outerBoundaryScore * 1000) / 1000,
+        areaRatio: Math.round(areaRatio * 10000) / 10000,
+        rotationDegrees: null,
+        sideContinuity: continuity.sides.map(value => Math.round(value * 1000) / 1000),
+        perspectiveCorridor: true
       }
     };
   }
@@ -350,20 +479,257 @@
     return intersection / Math.max(1, inner.width * inner.height);
   }
 
+  function isAnchoredOuterCandidate(candidate) {
+    return (candidate.candidateSource === "edge_component" || candidate.candidateSource === "contrast_component")
+      && candidate.signals.areaRatio <= 0.30
+      && candidate.signals.outerBoundaryScore >= 0.75
+      && candidate.signals.edgeBalance >= 0.45;
+  }
+
   function deduplicateRectangles(candidates, iouThreshold = 0.45) {
-    const sorted = [...candidates].sort((left, right) => right.score - left.score);
+    const priority = candidate => {
+      return candidate.score + (isAnchoredOuterCandidate(candidate) ? 0.24 : 0);
+    };
+    const sorted = [...candidates].sort((left, right) => priority(right) - priority(left)
+      || right.score - left.score || right.width * right.height - left.width * left.height);
     const kept = [];
     for (const candidate of sorted) {
-      if (kept.some(existing => rectIntersectionRatio(candidate, existing) >= iouThreshold)) continue;
+      let rejected = false;
+      for (let index = kept.length - 1; index >= 0; index -= 1) {
+        const existing = kept[index];
+        const candidateArea = candidate.width * candidate.height;
+        const existingArea = existing.width * existing.height;
+        const overlap = rectIntersectionRatio(candidate, existing);
+        if (overlap >= iouThreshold) { rejected = true;break; }
+        if (isAnchoredOuterCandidate(existing)
+          && candidateArea <= existingArea * 1.25
+          && rectContainment(candidate, existing) >= 0.28) { rejected = true;break; }
+        if (isAnchoredOuterCandidate(existing)
+          && !isAnchoredOuterCandidate(candidate)
+          && candidateArea > existingArea
+          && rectContainment(existing, candidate) >= 0.55) { rejected = true;break; }
+        const candidateInside = candidateArea < existingArea * 0.78 && rectContainment(candidate, existing) >= 0.86;
+        if (candidateInside && existing.score >= candidate.score - 0.08) { rejected = true;break; }
+        const existingInside = existingArea < candidateArea * 0.78 && rectContainment(existing, candidate) >= 0.86;
+        if (existingInside && candidate.score >= existing.score - 0.05) kept.splice(index, 1);
+      }
+      const containedHigherScored = kept.filter(existing => existing.score >= candidate.score
+        && existing.width * existing.height < candidate.width * candidate.height * 0.72
+        && rectContainment(existing, candidate) >= 0.78);
+      if (containedHigherScored.length >= 2) rejected = true;
+      if (rejected) continue;
       kept.push(candidate);
     }
-    return kept.filter(outer => {
-      if (outer.candidateSource !== "window_scan") return true;
-      const contained = kept.filter(inner => inner !== outer
-        && inner.width * inner.height < outer.width * outer.height * 0.58
-        && rectContainment(inner, outer) >= 0.82);
-      return contained.length < 2;
+    return kept;
+  }
+
+  function recalibrateCandidateScales(candidates) {
+    const eligible = candidates.filter(row => row.score >= 0.48
+      && row.signals.aspectScore >= 0.42
+      && row.signals.areaRatio >= 0.012
+      && row.signals.areaRatio <= 0.38);
+    if (eligible.length < 2) return candidates;
+    const scaleRows = eligible.map(candidate => {
+      const representatives = [];
+      const comparable = eligible.filter(other => {
+        const widthRatio = other.width / Math.max(1, candidate.width);
+        const heightRatio = other.height / Math.max(1, candidate.height);
+        return widthRatio >= 0.78 && widthRatio <= 1.28 && heightRatio >= 0.78 && heightRatio <= 1.28;
+      }).sort((left, right) => right.score - left.score);
+      comparable.forEach(other => {
+        const centerX = other.left + other.width / 2;
+        const centerY = other.top + other.height / 2;
+        const duplicatePosition = representatives.some(existing => {
+          const dx = Math.abs(centerX - existing.left - existing.width / 2) / Math.max(other.width, existing.width);
+          const dy = Math.abs(centerY - existing.top - existing.height / 2) / Math.max(other.height, existing.height);
+          return (dx < 0.58 && dy < 0.58) || rectIntersectionRatio(other, existing) >= 0.24;
+        });
+        if (!duplicatePosition) representatives.push(other);
+      });
+      const count = representatives.length;
+      const coherence = Math.min(count, 4) - Math.max(0, count - 6) * 0.22;
+      return { candidate, count, rank: coherence + Math.sqrt(candidate.signals.areaRatio) * 0.7 + candidate.score * 0.35 };
     });
+    const maximumRepeatedCount = Math.max(...scaleRows.map(row => row.count));
+    const repeatedOuterScales = scaleRows.filter(row => row.count >= 3 && row.count >= maximumRepeatedCount * 0.50)
+      .sort((left, right) => right.candidate.signals.areaRatio - left.candidate.signals.areaRatio || right.rank - left.rank);
+    const dominant = repeatedOuterScales[0]
+      || [...scaleRows].sort((left, right) => right.rank - left.rank || right.candidate.signals.areaRatio - left.candidate.signals.areaRatio)[0];
+    if (!dominant || dominant.count < 2) return candidates;
+    const dominantArea = dominant.candidate.width * dominant.candidate.height;
+    return candidates.map(candidate => {
+      const area = candidate.width * candidate.height;
+      const deviation = Math.abs(Math.log(Math.max(1, area) / Math.max(1, dominantArea)));
+      const relativeSizeSupport = clamp(1 - deviation / 0.72, 0, 1);
+      const innerScalePenalty = area < dominantArea * 0.56 ? 0.24 : 0;
+      const outerScalePenalty = area > dominantArea * 2.1 ? 0.08 : 0;
+      const score = clamp(candidate.score + relativeSizeSupport * 0.15 - innerScalePenalty - outerScalePenalty, 0, 1);
+      return {
+        ...candidate,
+        score,
+        signals: {
+          ...candidate.signals,
+          relativeSizeSupport: Math.round(relativeSizeSupport * 1000) / 1000,
+          repeatedSizeCount: dominant.count,
+          innerScalePenalty: innerScalePenalty > 0
+        }
+      };
+    });
+  }
+
+  function boostOuterContainment(candidates) {
+    return candidates.map(candidate => {
+      const candidateArea = candidate.width * candidate.height;
+      if (candidate.signals.areaRatio < 0.035) return candidate;
+      const nested = candidates.filter(inner => {
+        if (inner === candidate || inner.score < 0.40) return false;
+        const innerArea = inner.width * inner.height;
+        if (innerArea < candidateArea * 0.06 || innerArea > candidateArea * 0.66) return false;
+        const centerX = inner.left + inner.width / 2;
+        const centerY = inner.top + inner.height / 2;
+        const marginX = candidate.width * 0.04;
+        const marginY = candidate.height * 0.04;
+        return centerX >= candidate.left + marginX && centerX <= candidate.left + candidate.width - marginX
+          && centerY >= candidate.top + marginY && centerY <= candidate.top + candidate.height - marginY;
+      }).sort((left, right) => right.score - left.score);
+      const representatives = [];
+      nested.forEach(inner => {
+        const duplicate = representatives.some(existing => rectIntersectionRatio(inner, existing) >= 0.34
+          || (Math.abs(inner.left + inner.width / 2 - existing.left - existing.width / 2) < candidate.width * 0.10
+            && Math.abs(inner.top + inner.height / 2 - existing.top - existing.height / 2) < candidate.height * 0.10));
+        if (!duplicate) representatives.push(inner);
+      });
+      const support = Math.min(3, representatives.length);
+      if (!support) return candidate;
+      return {
+        ...candidate,
+        score: clamp(candidate.score + support * 0.065, 0, 1),
+        signals: { ...candidate.signals, nestedInteriorSupport: support }
+      };
+    });
+  }
+
+  function boostRegularTwoByTwoGrid(candidates, enabled = true) {
+    if (!enabled) return candidates;
+    const preliminary = candidates.filter(row => row.score >= 0.42
+      && row.signals.areaRatio >= 0.085
+      && row.signals.areaRatio <= 0.25
+      && row.signals.aspectScore >= 0.52
+      && row.signals.outerBoundaryScore >= 0.40)
+      .sort((left, right) => right.score - left.score);
+    const pool = [];
+    preliminary.forEach(candidate => {
+      if (pool.length >= 120 || pool.some(existing => rectIntersectionRatio(candidate, existing) >= 0.72)) return;
+      pool.push(candidate);
+    });
+    if (pool.length < 4) return candidates;
+    const center = row => ({ x: row.left + row.width / 2, y: row.top + row.height / 2 });
+    const horizontalPairs = [];
+    for (let leftIndex = 0; leftIndex < pool.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < pool.length; rightIndex += 1) {
+        let left = pool[leftIndex];let right = pool[rightIndex];
+        if (center(left).x > center(right).x) [left, right] = [right, left];
+        const averageWidth = (left.width + right.width) / 2;
+        const averageHeight = (left.height + right.height) / 2;
+        const widthRatio = left.width / Math.max(1, right.width);
+        const heightRatio = left.height / Math.max(1, right.height);
+        const deltaX = (center(right).x - center(left).x) / Math.max(1, averageWidth);
+        const deltaY = Math.abs(center(right).y - center(left).y) / Math.max(1, averageHeight);
+        if (widthRatio < 0.70 || widthRatio > 1.43 || heightRatio < 0.70 || heightRatio > 1.43
+          || deltaX < 0.90 || deltaX > 1.70 || deltaY > 0.30 || rectIntersectionRatio(left, right) > 0.12) continue;
+        horizontalPairs.push({ left, right, centerY: (center(left).y + center(right).y) / 2, averageWidth, averageHeight,
+          score: left.score + right.score - deltaY * 0.55 - Math.abs(deltaX - 1.12) * 0.26
+            - Math.abs(Math.log(widthRatio)) * 0.12 - Math.abs(Math.log(heightRatio)) * 0.12 });
+      }
+    }
+    const rows = horizontalPairs.sort((left, right) => right.score - left.score).slice(0, 100);
+    let best = null;
+    for (let topIndex = 0; topIndex < rows.length; topIndex += 1) {
+      for (let bottomIndex = topIndex + 1; bottomIndex < rows.length; bottomIndex += 1) {
+        let top = rows[topIndex];let bottom = rows[bottomIndex];
+        if (top.centerY > bottom.centerY) [top, bottom] = [bottom, top];
+        const members = [top.left, top.right, bottom.left, bottom.right];
+        if (new Set(members).size < 4) continue;
+        const averageHeight = members.reduce((sum, row) => sum + row.height, 0) / 4;
+        const averageWidth = members.reduce((sum, row) => sum + row.width, 0) / 4;
+        const verticalDistance = (bottom.centerY - top.centerY) / Math.max(1, averageHeight);
+        const leftAlignment = Math.abs(center(top.left).x - center(bottom.left).x) / Math.max(1, averageWidth);
+        const rightAlignment = Math.abs(center(top.right).x - center(bottom.right).x) / Math.max(1, averageWidth);
+        if (verticalDistance < 0.90 || verticalDistance > 1.70 || leftAlignment > 0.34 || rightAlignment > 0.34) continue;
+        const areaLogs = members.map(row => Math.log(Math.max(1, row.width * row.height)));
+        const areaVariation = Math.max(...areaLogs) - Math.min(...areaLogs);
+        if (areaVariation > 0.72) continue;
+        const layoutMinLeft = Math.min(...members.map(row => row.left));
+        const layoutMinTop = Math.min(...members.map(row => row.top));
+        const layoutMaxRight = Math.max(...members.map(row => row.left + row.width));
+        const layoutMaxBottom = Math.max(...members.map(row => row.top + row.height));
+        const layoutImageArea = members.reduce((sum, row) => sum + (row.width * row.height) / Math.max(0.0001, row.signals.areaRatio), 0) / 4;
+        const layoutEnvelopeRatio = (layoutMaxRight - layoutMinLeft) * (layoutMaxBottom - layoutMinTop) / Math.max(1, layoutImageArea);
+        const averageAreaRatio = members.reduce((sum, row) => sum + row.signals.areaRatio, 0) / 4;
+        const layoutScore = top.score + bottom.score - leftAlignment * 0.30 - rightAlignment * 0.30
+          - Math.abs(verticalDistance - 1.12) * 0.10 - areaVariation * 0.12
+          + clamp(layoutEnvelopeRatio, 0, 0.90) * 0.90 + clamp(averageAreaRatio, 0, 0.24) * 0.45;
+        if (!best || layoutScore > best.score) best = { members, score: layoutScore };
+      }
+    }
+    if (!best) return candidates;
+    const minLeft = Math.min(...best.members.map(row => row.left));
+    const minTop = Math.min(...best.members.map(row => row.top));
+    const maxRight = Math.max(...best.members.map(row => row.left + row.width));
+    const maxBottom = Math.max(...best.members.map(row => row.top + row.height));
+    const estimatedImageArea = best.members.reduce((sum, row) => sum + (row.width * row.height) / Math.max(0.0001, row.signals.areaRatio), 0) / 4;
+    const envelopeRatio = (maxRight - minLeft) * (maxBottom - minTop) / Math.max(1, estimatedImageArea);
+    if (envelopeRatio < 0.38) return candidates;
+    const anchoredRegions = [];
+    candidates.filter(isAnchoredOuterCandidate).forEach(candidate => {
+      const centerX = candidate.left + candidate.width / 2;
+      const centerY = candidate.top + candidate.height / 2;
+      const duplicateRegion = anchoredRegions.some(existing => {
+        const averageWidth = (candidate.width + existing.width) / 2;
+        const averageHeight = (candidate.height + existing.height) / 2;
+        return Math.abs(centerX - existing.left - existing.width / 2) < averageWidth * 0.72
+          && Math.abs(centerY - existing.top - existing.height / 2) < averageHeight * 0.72;
+      });
+      if (!duplicateRegion) anchoredRegions.push(candidate);
+    });
+    if (anchoredRegions.length >= 7) return candidates;
+    const selected = new Set(best.members);
+    return candidates.map(candidate => selected.has(candidate) ? {
+      ...candidate,
+      score: clamp(candidate.score + 0.28, 0, 1),
+      signals: { ...candidate.signals, regularGridSupport: true }
+    } : candidate);
+  }
+
+  function expandedOuterCandidates(candidates, context) {
+    const { width, height } = context;
+    const seeds = deduplicateRectangles(candidates.filter(row => row.score >= 0.45
+      && row.signals.areaRatio >= 0.008
+      && row.signals.areaRatio <= 0.16), 0.62).slice(0, 80);
+    const expanded = [];
+    for (const seed of seeds) {
+      const centerX = seed.left + seed.width / 2;
+      for (const scale of [1.35, 1.55, 1.80, 2.05, 2.30, 2.60, 3.00, 3.50, 4.00]) {
+        const candidateHeight = Math.round(seed.height * scale);
+        const candidateWidth = Math.round(candidateHeight * CARD_ASPECT);
+        if (candidateHeight < 28 || candidateHeight >= height * 0.72 || candidateWidth >= width * 0.62) continue;
+        for (const verticalCenter of [0.43, 0.50, 0.57]) {
+          for (const horizontalOffset of [-0.06, 0, 0.06]) {
+            const left = Math.round(centerX - candidateWidth / 2 + candidateWidth * horizontalOffset);
+            const top = Math.round(seed.top + seed.height / 2 - candidateHeight * verticalCenter);
+            const bounded = boundedRect({ left, top, width: candidateWidth, height: candidateHeight }, width, height);
+            if (bounded.width < candidateWidth * 0.84 || bounded.height < candidateHeight * 0.84) continue;
+            const scored = scoreCardRectangle(bounded, context);
+            if (!scored || scored.signals.outerBoundaryScore < 0.35 || scored.signals.boundaryContrast < 0.18 || scored.score < 0.35) continue;
+            scored.candidateSource = "outer_expansion";
+            scored.score = clamp(scored.score + scored.signals.outerBoundaryScore * 0.06, 0, 1);
+            scored.signals.expandedFromInnerCandidate = true;
+            expanded.push(scored);
+          }
+        }
+      }
+    }
+    return expanded;
   }
 
   function assignGridPositions(candidates) {
@@ -398,51 +764,94 @@
   function detectCollectionCardsFromRgba(data, width, height, options = {}) {
     if (!data || width < 40 || height < 40) return { detections: [], photoQuality: { warnings: ["image_too_small"] }, parameters: { iouThreshold: 0.45 } };
     const sample = downsampleRgba(data, width, height, options.maxDimension || 480);
-    const gradients = gradientAnalysis(sample.gray, sample.width, sample.height);
+    const gradients = gradientAnalysis(sample.gray, sample.width, sample.height, sample);
     const photoQuality = imageQualityFromAnalysis(sample, gradients);
     if (photoQuality.warnings.includes("low_contrast") && gradients.mean < 4) return { detections: [], photoQuality, parameters: { iouThreshold: 0.45, minimumScore: 0.60 } };
     const integralX = integralImage(gradients.gradientX, sample.width, sample.height);
     const integralY = integralImage(gradients.gradientY, sample.width, sample.height);
-    const context = { width: sample.width, height: sample.height, gradients, integralX, integralY };
+    const integralGray = integralImage(sample.gray, sample.width, sample.height);
+    const integralRed = integralImage(sample.red, sample.width, sample.height);
+    const integralGreen = integralImage(sample.green, sample.width, sample.height);
+    const integralBlue = integralImage(sample.blue, sample.width, sample.height);
+    const context = { width: sample.width, height: sample.height, gradients, integralX, integralY, integralGray, integralRed, integralGreen, integralBlue, sampleContrast: sample.contrast };
     const candidates = [];
     for (const component of foregroundComponents(sample)) {
       const scored = scoreCardRectangle(component, context, clamp(component.fillRatio * 1.8, 0, 1), component.rotation);
-      if (scored && scored.score >= 0.52) { scored.candidateSource = "contrast_component";candidates.push(scored); }
+      if (scored && scored.score >= 0.44) { scored.candidateSource = "contrast_component";candidates.push(scored); }
     }
     for (const component of binaryEdgeComponents(gradients, sample.width, sample.height)) {
       const perimeter = Math.max(1, 2 * (component.width + component.height));
       const strength = clamp(component.edgePixels / perimeter, 0, 1);
       const scored = scoreCardRectangle(component, context, strength, component.rotation);
-      if (scored && scored.score >= 0.48) candidates.push(scored);
+      if (scored && scored.score >= 0.42) candidates.push(scored);
     }
-    const heightRatios = options.heightRatios || [0.18, 0.23, 0.29, 0.36, 0.45, 0.56, 0.70, 0.86];
+    const heightRatios = options.heightRatios || [0.16, 0.20, 0.24, 0.29, 0.34, 0.39, 0.44, 0.50, 0.57, 0.65, 0.74, 0.84];
     for (const heightRatio of heightRatios) {
       const candidateHeight = Math.round(sample.height * heightRatio);
       if (candidateHeight < 26) continue;
       for (const aspect of [0.60, 0.68, 0.76]) {
         const candidateWidth = Math.round(candidateHeight * aspect);
         if (candidateWidth < 18 || candidateWidth >= sample.width - 4) continue;
-        const stepX = Math.max(3, Math.round(candidateWidth * 0.11));
-        const stepY = Math.max(3, Math.round(candidateHeight * 0.09));
+        const stepX = Math.max(3, Math.round(candidateWidth * 0.085));
+        const stepY = Math.max(3, Math.round(candidateHeight * 0.075));
         const band = Math.max(1, Math.round(Math.min(candidateWidth, candidateHeight) * 0.025));
-        for (let top = 2; top + candidateHeight < sample.height - 2; top += stepY) {
-          for (let left = 2; left + candidateWidth < sample.width - 2; left += stepX) {
+        for (let top = 0; top + candidateHeight <= sample.height; top += stepY) {
+          for (let left = 0; left + candidateWidth <= sample.width; left += stepX) {
             const vertical = (regionMean(integralX, left - band, top, band * 2 + 1, candidateHeight) + regionMean(integralX, left + candidateWidth - band - 1, top, band * 2 + 1, candidateHeight)) / 2;
             const horizontal = (regionMean(integralY, left, top - band, candidateWidth, band * 2 + 1) + regionMean(integralY, left, top + candidateHeight - band - 1, candidateWidth, band * 2 + 1)) / 2;
             if (Math.min(vertical, horizontal) < Math.max(gradients.mean * 1.05, gradients.threshold * 0.10)) continue;
             const scored = scoreCardRectangle({ left, top, width: candidateWidth, height: candidateHeight }, context);
-            if (scored && scored.score >= 0.54) candidates.push(scored);
+            if (scored && scored.score >= 0.40) candidates.push(scored);
           }
         }
       }
     }
+    // A second, deliberately large-card-only pass tolerates slanted binder
+    // sleeves and perspective by evaluating a corridor around the proposed
+    // outer border. It contributes candidates only; layout evidence may boost
+    // them later but never invents a card rectangle on its own.
+    if (sample.height / Math.max(1, sample.width) >= 1.12) for (const heightRatio of [0.36, 0.41, 0.46, 0.51, 0.56]) {
+      const candidateHeight = Math.round(sample.height * heightRatio);
+      for (const aspect of [0.62, 0.70, 0.78, 0.86]) {
+        const candidateWidth = Math.round(candidateHeight * aspect);
+        if (candidateWidth < 24 || candidateWidth >= sample.width - 2) continue;
+        const stepX = Math.max(5, Math.round(candidateWidth * 0.085));
+        const stepY = Math.max(5, Math.round(candidateHeight * 0.065));
+        for (let top = 0; top + candidateHeight <= sample.height; top += stepY) {
+          for (let left = 0; left + candidateWidth <= sample.width; left += stepX) {
+            const scored = scorePerspectiveCardRectangle({ left, top, width: candidateWidth, height: candidateHeight }, context);
+            if (scored) candidates.push(scored);
+          }
+        }
+      }
+    }
+    candidates.push(...expandedOuterCandidates(candidates, context));
     const minimumScore = clamp(Number(options.minimumScore ?? 0.60), 0.45, 0.95);
-    const reliableComponents = candidates.filter(row => row.candidateSource !== "window_scan" && row.score >= 0.67);
-    const consideredCandidates = reliableComponents.length
-      ? candidates.filter(row => row.candidateSource !== "window_scan" || row.score >= 0.74)
-      : candidates;
+    const calibratedCandidates = boostRegularTwoByTwoGrid(
+      recalibrateCandidateScales(boostOuterContainment(candidates)),
+      sample.height / Math.max(1, sample.width) >= 1.12
+    );
+    const regularGridCandidates = calibratedCandidates.filter(row => row.signals.regularGridSupport);
+    const consideredCandidates = regularGridCandidates.length === 4 ? regularGridCandidates : calibratedCandidates;
+    const anchoredOuterCandidates = [];
+    consideredCandidates.filter(isAnchoredOuterCandidate)
+      .sort((left, right) => right.score - left.score)
+      .forEach(candidate => {
+        const centerX = candidate.left + candidate.width / 2;
+        const centerY = candidate.top + candidate.height / 2;
+        const samePhysicalRegion = anchoredOuterCandidates.some(existing => {
+          const averageWidth = (candidate.width + existing.width) / 2;
+          const averageHeight = (candidate.height + existing.height) / 2;
+          return Math.abs(centerX - existing.left - existing.width / 2) < averageWidth * 0.72
+            && Math.abs(centerY - existing.top - existing.height / 2) < averageHeight * 0.72;
+        });
+        if (!samePhysicalRegion) anchoredOuterCandidates.push(candidate);
+      });
+    const requireStrongOuterEvidence = anchoredOuterCandidates.length >= 2 && anchoredOuterCandidates.length <= 5;
     const deduplicated = assignGridPositions(deduplicateRectangles(consideredCandidates, Number(options.iouThreshold || 0.45)))
-      .filter(row => row.score >= minimumScore)
+      .filter(row => row.score >= (requireStrongOuterEvidence ? Math.max(minimumScore, 0.80) : minimumScore)
+        && (!requireStrongOuterEvidence || isAnchoredOuterCandidate(row)
+          || (row.signals.outerBoundaryScore >= 0.55 && row.signals.edgeContinuity >= 0.45)))
       .slice(0, Math.max(1, Number(options.maximumDetections || 80)));
     const detections = deduplicated.map(row => {
       const score = Math.round(row.score * 1000) / 1000;
@@ -453,7 +862,8 @@
           width: Math.round(row.width / sample.width * 1e6) / 1e6,
           height: Math.round(row.height / sample.height * 1e6) / 1e6
         },
-        detectionConfidence: score >= 0.78 ? "high" : score >= 0.66 ? "medium" : "low",
+        detectionConfidence: score >= 0.82 && row.signals.outerBoundaryScore >= 0.62 && row.signals.relativeSizeSupport >= 0.55
+          ? "high" : score >= 0.68 && row.signals.outerBoundaryScore >= 0.45 ? "medium" : "low",
         detectionScore: score,
         observationSource: "automatic",
         row: row.row,
@@ -467,10 +877,23 @@
         }
       };
     }).filter(row => normalizedBoundingBox(row.boundingBox));
+    const debugCandidates = options.debugCandidates ? calibratedCandidates
+      .filter(row => row.signals.areaRatio >= 0.055)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 200)
+      .map(row => ({
+        left: row.left,
+        top: row.top,
+        width: row.width,
+        height: row.height,
+        score: row.score,
+        source: row.candidateSource,
+        signals: row.signals
+      })) : undefined;
     return {
       detections,
       photoQuality,
-      parameters: { iouThreshold: Number(options.iouThreshold || 0.45), minimumScore, maxDimension: options.maxDimension || 480 }
+      parameters: { iouThreshold: Number(options.iouThreshold || 0.45), minimumScore, maxDimension: options.maxDimension || 480, debugCandidates }
     };
   }
 
@@ -487,19 +910,32 @@
     return { ...detectCollectionCardsFromRgba(pixels.data, pixels.width, pixels.height, options), imageWidth: image.naturalWidth, imageHeight: image.naturalHeight };
   }
 
-  function evaluateCollectionDetections(expected = [], detected = [], iouThreshold = 0.50) {
+  function evaluateCollectionDetections(expected = [], detected = [], configuration = 0.50) {
+    const options = typeof configuration === "number" ? { iouThreshold: configuration } : (configuration || {});
+    const iouThreshold = clamp(Number(options.iouThreshold ?? 0.50), 0, 1);
+    const minimumCoverage = clamp(Number(options.minimumCoverage ?? 0), 0, 1);
+    const strictOuterBoxes = Boolean(options.strictOuterBoxes || minimumCoverage > 0);
     const expectedBoxes = expected.map(row => normalizedBoundingBox(row?.boundingBox || row)).filter(Boolean);
     const detectedBoxes = detected.map(row => normalizedBoundingBox(row?.boundingBox || row)).filter(Boolean);
     const pairs = [];
-    expectedBoxes.forEach((expectedBox, expectedIndex) => detectedBoxes.forEach((detectedBox, detectedIndex) => pairs.push({ expectedIndex, detectedIndex, iou: boundingBoxIoU(expectedBox, detectedBox) })));
-    pairs.sort((left, right) => right.iou - left.iou);
+    expectedBoxes.forEach((expectedBox, expectedIndex) => detectedBoxes.forEach((detectedBox, detectedIndex) => {
+      pairs.push({ expectedIndex, detectedIndex, ...boundingBoxOverlap(expectedBox, detectedBox) });
+    }));
+    pairs.sort((left, right) => right.iou - left.iou || right.coverage - left.coverage);
     const usedExpected = new Set();
     const usedDetected = new Set();
     const matches = [];
     for (const pair of pairs) {
-      if (pair.iou < iouThreshold || usedExpected.has(pair.expectedIndex) || usedDetected.has(pair.detectedIndex)) continue;
+      if (pair.iou < iouThreshold || (strictOuterBoxes && pair.coverage < minimumCoverage)
+        || usedExpected.has(pair.expectedIndex) || usedDetected.has(pair.detectedIndex)) continue;
       usedExpected.add(pair.expectedIndex);usedDetected.add(pair.detectedIndex);matches.push(pair);
     }
+    const innerCropPairs = pairs.filter(pair => !usedExpected.has(pair.expectedIndex)
+      && !usedDetected.has(pair.detectedIndex)
+      && pair.detectedCoverage >= 0.82
+      && pair.coverage < Math.max(minimumCoverage, 0.72)
+      && pair.areaRatio < 0.78);
+    const innerCropDetections = new Set(innerCropPairs.map(row => row.detectedIndex)).size;
     const truePositives = matches.length;
     const falsePositives = detectedBoxes.length - truePositives;
     const falseNegatives = expectedBoxes.length - truePositives;
@@ -513,10 +949,16 @@
       falseNegatives,
       matches,
       meanIoU: matches.length ? matches.reduce((sum, row) => sum + row.iou, 0) / matches.length : 0,
+      meanCoverage: matches.length ? matches.reduce((sum, row) => sum + row.coverage, 0) / matches.length : 0,
+      meanAreaRatio: matches.length ? matches.reduce((sum, row) => sum + row.areaRatio, 0) / matches.length : 0,
+      innerCropDetections,
+      innerCropPairs,
       precision,
       recall,
       f1: precision + recall ? 2 * precision * recall / (precision + recall) : 0,
-      iouThreshold
+      iouThreshold,
+      minimumCoverage,
+      strictOuterBoxes
     };
   }
 
@@ -760,6 +1202,7 @@
     REGION_LAYOUTS,
     boundedRect,
     boundingBoxIoU,
+    boundingBoxOverlap,
     fallbackBounds,
     detectCardBoundsFromRgba,
     candidateBoundsFromRgba,

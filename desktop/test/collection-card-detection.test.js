@@ -33,7 +33,13 @@ function paintCard(target, box, options = {}) {
     const title = localY >= box.height * .08 && localY < box.height * .15;
     const artwork = localX > box.width * .10 && localX < box.width * .90 && localY > box.height * .20 && localY < box.height * .60;
     const offset = (y * target.width + x) * 4;
-    const color = edge ? [24, 27, 31] : title ? [220, 188, 122] : artwork ? [52 + (x % 28), 92 + (y % 35), 128] : [199, 142, 103];
+    const reflection = options.reflection && localX > box.width * .12 && localX < box.width * .88
+      && Math.abs(localX - box.width * .18 - localY * .34) < box.width * .09;
+    const color = reflection ? [247, 247, 242]
+      : edge ? (options.borderColor || [24, 27, 31])
+        : title ? (options.titleColor || [220, 188, 122])
+          : artwork ? (options.artworkColor || [52 + (x % 28), 92 + (y % 35), 128])
+            : (options.bodyColor || [199, 142, 103]);
     target.data[offset] = color[0];target.data[offset + 1] = color[1];target.data[offset + 2] = color[2];target.data[offset + 3] = 255;
   }
   const corners = [
@@ -45,6 +51,43 @@ function paintCard(target, box, options = {}) {
   const maxX = Math.min(target.width, Math.max(...corners.map(row => row.x)));
   const maxY = Math.min(target.height, Math.max(...corners.map(row => row.y)));
   target.boxes.push({ x: minX / target.width, y: minY / target.height, width: (maxX - minX) / target.width, height: (maxY - minY) / target.height });
+}
+
+function paintOutline(target, box, color = [44, 47, 52], thickness = 5) {
+  for (let y = Math.max(0, box.y); y < Math.min(target.height, box.y + box.height); y += 1) {
+    for (let x = Math.max(0, box.x); x < Math.min(target.width, box.x + box.width); x += 1) {
+      if (x >= box.x + thickness && x < box.x + box.width - thickness
+        && y >= box.y + thickness && y < box.y + box.height - thickness) continue;
+      const offset = (y * target.width + x) * 4;
+      target.data[offset] = color[0];target.data[offset + 1] = color[1];target.data[offset + 2] = color[2];
+    }
+  }
+}
+
+let difficultPortraitResult = null;
+function difficultPortraitFixture() {
+  if (difficultPortraitResult) return difficultPortraitResult;
+  const target = image(760, 940, [164, 158, 147]);
+  for (let y = 0; y < target.height; y += 80) paintOutline(target, { x: 0, y, width: target.width, height: 2 }, [160, 154, 145], 2);
+  paintOutline(target, { x: 18, y: 22, width: 724, height: 890 }, [117, 113, 108], 3);
+  paintCard(target, { x: 62, y: 58, width: 270, height: 382 }, {
+    border: 5, borderColor: [145, 139, 132], artworkColor: [12, 38, 92]
+  });
+  paintOutline(target, { x: 407, y: 43, width: 287, height: 410 }, [215, 207, 184], 5);
+  paintCard(target, { x: 416, y: 55, width: 270, height: 390 }, { reflection: true });
+  paintCard(target, { x: 55, y: 505, width: 282, height: 405 }, { reflection: true, angle: -2 });
+  paintCard(target, { x: 408, y: 500, width: 278, height: 398 }, { angle: 2 });
+  const result = detect(target, { maxDimension: 420 });
+  difficultPortraitResult = {
+    target,
+    result,
+    evaluation: imageProcessing.evaluateCollectionDetections(target.boxes, result.detections, {
+      iouThreshold: .38,
+      minimumCoverage: .72,
+      strictOuterBoxes: true
+    })
+  };
+  return difficultPortraitResult;
 }
 
 function detect(target, options = {}) {
@@ -101,12 +144,65 @@ test('leicht schräge Karte bleibt ein unsicherer aber brauchbarer Vorschlag', (
   assert.ok(result.detections[0].detectionConfidence !== 'unknown');
 });
 
+test('schwache Außenkanten verlieren nicht gegen starke Artwork-Kanten', () => {
+  const fixture = difficultPortraitFixture();
+  assert.equal(fixture.evaluation.truePositives, 4);
+  assert.equal(fixture.evaluation.innerCropDetections, 0);
+  // A rotated card is compared against its axis-aligned outer envelope; a
+  // mean coverage near 80 % still means all four full-card regions pass the
+  // stricter per-card 72 % outer-box requirement.
+  assert.ok(fixture.evaluation.meanCoverage >= .79);
+});
+
+test('Binderfolie, Reflexion, Größenunterschiede und leichte Rotation erzeugen keine Doppelboxen', () => {
+  const fixture = difficultPortraitFixture();
+  assert.equal(fixture.result.detections.length, 4);
+  assert.ok(fixture.evaluation.precision >= .95);
+  assert.ok(fixture.result.detections.every(row => row.detectionSignals.outerBoundaryScore >= .38));
+});
+
+test('große Hintergrundrahmen und Muster werden nicht als zusätzliche Karten gewertet', () => {
+  const fixture = difficultPortraitFixture();
+  assert.equal(fixture.evaluation.falsePositives, 0);
+  assert.ok(fixture.result.detections.every(row => row.boundingBox.width < .50 && row.boundingBox.height < .58));
+});
+
 test('IoU-Evaluation meldet Treffer, Fehlvorschläge und fehlende Karten reproduzierbar', () => {
   const expected = [{ x: .1, y: .1, width: .2, height: .3 }, { x: .6, y: .1, width: .2, height: .3 }];
   const detected = [{ boundingBox: { x: .11, y: .11, width: .2, height: .3 } }, { boundingBox: { x: .1, y: .6, width: .2, height: .3 } }];
   const result = imageProcessing.evaluateCollectionDetections(expected, detected, .5);
   assert.deepEqual({ tp: result.truePositives, fp: result.falsePositives, fn: result.falseNegatives }, { tp: 1, fp: 1, fn: 1 });
   assert.equal(result.precision, .5);assert.equal(result.recall, .5);assert.equal(result.f1, .5);
+});
+
+test('strenge Evaluation wertet ein inneres Artwork-Rechteck nicht als ganze Karte', () => {
+  const expected = [{ x: .10, y: .10, width: .30, height: .44 }];
+  const innerArtwork = [{ boundingBox: { x: .14, y: .19, width: .22, height: .22 } }];
+  const result = imageProcessing.evaluateCollectionDetections(expected, innerArtwork, {
+    iouThreshold: .20,
+    minimumCoverage: .72,
+    strictOuterBoxes: true
+  });
+  assert.equal(result.truePositives, 0);
+  assert.equal(result.falsePositives, 1);
+  assert.equal(result.falseNegatives, 1);
+  assert.equal(result.innerCropDetections, 1);
+  assert.ok(result.innerCropPairs[0].coverage < .5);
+  assert.ok(result.innerCropPairs[0].areaRatio < .5);
+});
+
+test('strenge Evaluation protokolliert Abdeckung und Flächenverhältnis einer Vollkarte', () => {
+  const expected = [{ x: .10, y: .10, width: .30, height: .44 }];
+  const detected = [{ boundingBox: { x: .105, y: .105, width: .29, height: .43 } }];
+  const result = imageProcessing.evaluateCollectionDetections(expected, detected, {
+    iouThreshold: .50,
+    minimumCoverage: .72,
+    strictOuterBoxes: true
+  });
+  assert.equal(result.truePositives, 1);
+  assert.ok(result.meanCoverage > .90);
+  assert.ok(result.meanAreaRatio > .90 && result.meanAreaRatio < 1.05);
+  assert.equal(result.innerCropDetections, 0);
 });
 
 test('IoU ist für identische, getrennte und teilweise überlappende Boxen korrekt', () => {

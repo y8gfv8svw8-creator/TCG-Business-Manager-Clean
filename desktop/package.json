@@ -1,7 +1,7 @@
 {
   "name": "tcg-business-manager",
   "productName": "TCG Business Manager",
-  "version": "6.12.1",
+  "version": "6.12.2",
   "private": true,
   "description": "Lokale SQLite-Warenwirtschaft, Kartenbestand, Finanzanalyse und Marktbeobachtung für den europäischen TCG-Handel.",
   "main": "app/main/main.js",
@@ -9,7 +9,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "check": "node --check app/main/main.js && node --check app/main/database.js && node --check app/main/preload.js && node --check app/main/scanner-server.js && node --check app/main/card-scanner-recognizer.js && node --check app/main/cardmarket-api-adapter.js && node --check app/main/collection-photo-store.js && node --check app/shared/app-config.js && node --check app/shared/card-search.js && node --check app/shared/scanner-recognition.js && node --check app/shared/scanner-image-processing.js && node --check app/shared/business-automation.js && node --check app/shared/collection-photo-model.js && node --check app/renderer/app.js && node --check app/renderer/cardmarket-data-center.js && node --check scripts/qa-electron-smoke.js && node --check scripts/qa-phase2-electron-smoke.js && node --check scripts/qa-phase3-electron-smoke.js && node --check scripts/qa-phase4-electron-smoke.js && node --check scripts/qa-phase5-electron-smoke.js && node --check scripts/qa-phase6-electron-smoke.js && node --check scripts/qa-collection-detection-electron-smoke.js && node --check scripts/qa-usability-electron-smoke.js && node --check scripts/phase1-real-db-check.js && node --check scripts/phase2-real-db-check.js && node --check scripts/phase3-real-db-check.js && node --check scripts/phase4-real-db-check.js && node --check scripts/phase5-real-db-check.js",
+    "check": "node --check app/main/main.js && node --check app/main/database.js && node --check app/main/preload.js && node --check app/main/scanner-server.js && node --check app/main/card-scanner-recognizer.js && node --check app/main/cardmarket-api-adapter.js && node --check app/main/collection-photo-store.js && node --check app/shared/app-config.js && node --check app/shared/card-search.js && node --check app/shared/scanner-recognition.js && node --check app/shared/scanner-image-processing.js && node --check app/shared/business-automation.js && node --check app/shared/collection-photo-model.js && node --check app/renderer/app.js && node --check app/renderer/cardmarket-data-center.js && node --check scripts/qa-electron-smoke.js && node --check scripts/qa-phase2-electron-smoke.js && node --check scripts/qa-phase3-electron-smoke.js && node --check scripts/qa-phase4-electron-smoke.js && node --check scripts/qa-phase5-electron-smoke.js && node --check scripts/qa-phase6-electron-smoke.js && node --check scripts/qa-collection-detection-electron-smoke.js && node --check scripts/evaluate-collection-detection-real-photos.js && node --check scripts/qa-usability-electron-smoke.js && node --check scripts/phase1-real-db-check.js && node --check scripts/phase2-real-db-check.js && node --check scripts/phase3-real-db-check.js && node --check scripts/phase4-real-db-check.js && node --check scripts/phase5-real-db-check.js",
     "test": "node --test test/*.test.js",
     "verify": "npm run check && electron --version",
     "qa:phase3-real-db": "node scripts/phase3-real-db-check.js",
@@ -20,6 +20,7 @@
     "qa:phase5-ui": "node scripts/qa-phase5-electron-smoke.js",
     "qa:phase6-ui": "node scripts/qa-phase6-electron-smoke.js",
     "qa:collection-detection-ui": "node scripts/qa-collection-detection-electron-smoke.js",
+    "qa:collection-detection-real": "node scripts/evaluate-collection-detection-real-photos.js",
     "qa:usability-ui": "node scripts/qa-usability-electron-smoke.js",
     "dist:win": "electron-builder --win nsis --x64"
   },

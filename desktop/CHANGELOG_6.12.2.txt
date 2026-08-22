@@ -1,0 +1,31 @@
+TCG Business Manager 6.12.2 – Robuste Erkennung vollständiger Kartenflächen
+
+ERKENNUNG
+- Binderfotos mit mehreren Karten werden robuster über vollständige Außenflächen statt
+  über dominante Artwork- oder Textfeld-Kanten ausgewertet.
+- Schwache Kartenränder, Folien, Reflexionen, leichte Rotation, Perspektive und
+  unterschiedliche Kartengrößen werden als getrennte Bildsignale berücksichtigt.
+- Regelmäßige 2x2-Anordnungen unterstützen die Auswahl bereits erkannter Flächen,
+  ohne ein blindes Raster oder zusätzliche Karten zu erfinden.
+- Große Hintergrundrahmen sowie innere Artwork-Ausschnitte werden gezielter unterdrückt.
+- Detection-Confidence und technische Signale bleiben von Kartenname, Print und Preis
+  vollständig getrennt.
+
+QUALITÄTSSICHERUNG
+- Die strenge Evaluation misst zusätzlich Kartenabdeckung, Flächenverhältnis und
+  ausdrücklich erkannte innere Ausschnitte.
+- Reproduzierbarer Entwicklungs-/Holdout-Ablauf für ausdrücklich ausgewählte lokale
+  Realfotos; Dateinamen und Bilder werden nicht in das Repository übernommen.
+- Neue Regressionstests für schwache Außenkanten, Reflexionen, Binderfolien,
+  Größenunterschiede, Rotation und störende Hintergrundrahmen.
+
+DATENSICHERHEIT
+- Keine automatische Kartenidentifikation, Print-Zuordnung, Bestandsbuchung,
+  Ankaufentscheidung oder Preisänderung.
+- SQLite-Schema bleibt unverändert bei Version 12.
+- Keine Änderung an Einkaufs-, Verkaufs-, Preis-, Kapital- oder Bestandsberechnungen.
+
+BEKANNTE GRENZEN
+- Automatische Flächen bleiben prüfpflichtige Vorschläge. Starke Verdeckung, extreme
+  Perspektive oder sehr undeutliche Außenkanten können weiterhin eine Karte übersehen
+  oder einen zusätzlichen Vorschlag erzeugen.

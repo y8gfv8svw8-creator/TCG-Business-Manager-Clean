@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { TcgDatabase } = require('../app/main/database');
 
 const root = path.resolve(__dirname, '..');
 const executable = path.join(root, 'dist', 'win-unpacked', 'TCG Business Manager.exe');
@@ -8,7 +9,21 @@ const qaData = path.join(root, 'dist', 'qa-runtime-data');
 const qaChromiumData = path.join(qaData, 'Chromium');
 const port = 9227;
 let childOutput = '';
+fs.rmSync(qaData, { recursive: true, force: true });
 fs.mkdirSync(qaChromiumData, { recursive: true });
+
+const startupAnalysisId = 'qa-startup-existing-collection';
+const startupDatabase = new TcgDatabase({
+  databasePath: path.join(qaData, 'Daten', 'tcg_business_manager.sqlite'),
+  schemaPath: path.join(root, 'database', 'schema.sql'),
+  backupRoot: path.join(qaData, 'Backups')
+}).open();
+startupDatabase.saveState({
+  settings: { autoBackup: false },
+  inventory: [], privateCollection: [], purchases: [], sales: [], watchlist: [],
+  collectionPurchaseAnalyses: [{ id: startupAnalysisId, title: 'Vorhandener Sammlungsankauf', items: [], photos: [], photoObservations: [], physicalCards: [] }]
+});
+startupDatabase.close();
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -54,6 +69,7 @@ async function main() {
     await delay(1200);
     const result = await evaluate(page.webSocketDebuggerUrl, `(async()=>{
       renderAll();
+      const startupCollectionStateLoaded=state.collectionPurchaseAnalyses?.some(row=>row.id==='${startupAnalysisId}')===true;
       document.documentElement.dataset.theme='dark';
       const contrast=(foreground,background)=>{
         const rgb=value=>(value.match(/[\\d.]+/g)||[]).slice(0,3).map(Number);
@@ -168,6 +184,7 @@ async function main() {
       showView('reports');
       return {
         ready:document.readyState,
+        startupCollectionStateLoaded,
         title:document.title,
         sqliteStatus:document.getElementById('saveStatus')?.textContent||'',
         navigation:document.querySelectorAll('.nav-item').length,
@@ -201,7 +218,7 @@ async function main() {
         desktopBridge:typeof window.desktopApp?.saveState==='function'
       };
     })()`);
-    if (!result || result.ready !== 'complete' || !result.inventoryActive || !result.capitalActive || !result.slowMoversActive || !result.slowMoverFilterWorks || !result.phase2NoAutomaticPriceChange || !result.phase2DashboardComplete || !result.snapshotRepairSafe || !result.zeroStockFilter || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || !result.scannerRecognitionParser || !result.scannerImageProcessing || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
+    if (!result || result.ready !== 'complete' || !result.startupCollectionStateLoaded || !result.inventoryActive || !result.capitalActive || !result.slowMoversActive || !result.slowMoverFilterWorks || !result.phase2NoAutomaticPriceChange || !result.phase2DashboardComplete || !result.snapshotRepairSafe || !result.zeroStockFilter || !result.receiptRepairOpened || !result.receiptRepairFlow || !result.directProductIdAssignment || !result.batchQueued || !result.batchInventoryCreated || !result.allocationsStayWithTheirLines || !result.allInventoryAssignable || !result.mismatchedAllocationRepairsIdentity || !result.reportsActive || !result.hasCashflow || !result.hasScanner || !result.scannerOcrBridge || !result.scannerRecognitionParser || !result.scannerImageProcessing || !result.scannerSeriesQueue || result.darkContrastMinimum < 4.5 || !result.desktopBridge) {
       throw new Error(`Desktop-Prüfung unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

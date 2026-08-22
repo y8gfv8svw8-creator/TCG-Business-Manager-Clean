@@ -1,0 +1,8 @@
+TCG Business Manager 6.12.3 – Sicherer Start mit vorhandenen Sammlungsankäufen
+
+- Behebt einen Startfehler, durch den die Oberfläche bei bereits vorhandenen
+  Sammlungsankäufen fälschlich einen leeren Programmstand angezeigt hat.
+- Die vollständigen Daten werden beim Start wieder direkt aus SQLite geladen.
+- Die vorhandene Schutzsperre verhindert weiterhin, dass ein gefüllter
+  SQLite-Stand durch einen leeren Oberflächenzustand überschrieben wird.
+- Keine Datenbankmigration; Schema 12 bleibt unverändert.

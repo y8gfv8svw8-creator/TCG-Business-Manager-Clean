@@ -832,7 +832,9 @@ function saveState({ allowDestructiveReset = false } = {}) {
 const money = n => new Intl.NumberFormat("de-DE",{style:"currency",currency:"EUR"}).format(Number(n||0));
 const pct = n => `${Number(n||0).toFixed(1).replace(".",",")} %`;
 const fmtDate = v => v ? new Intl.DateTimeFormat("de-DE").format(new Date(v)) : "";
-const todayISO = () => new Date().toISOString().slice(0,10);
+// Wird bereits waehrend des initialen SQLite-Abgleichs in migrateState verwendet.
+// Als Funktionsdeklaration ist der Helfer vor der ersten Zustandsmigration verfuegbar.
+function todayISO() { return new Date().toISOString().slice(0,10); }
 const daysBetween = (a,b=new Date()) => a ? Math.max(0, Math.floor((new Date(b)-new Date(a))/86400000)) : 0;
 const uid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `tcg-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 

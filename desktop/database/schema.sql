@@ -679,3 +679,96 @@ CREATE TABLE IF NOT EXISTS collection_purchase_decision_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_collection_purchase_snapshots_analysis
 ON collection_purchase_decision_snapshots(analysis_id, decided_at DESC, archived);
+
+-- Schema 12: Sammlungsfotos sind verwaltete Dateien außerhalb der SQLite-DB.
+-- In app_state und diesen normalisierten Tabellen liegen ausschließlich
+-- Metadaten, prüfbare Beobachtungen und bewusste manuelle Verknüpfungen.
+CREATE TABLE IF NOT EXISTS collection_purchase_photos (
+  photo_id TEXT PRIMARY KEY,
+  analysis_id TEXT NOT NULL,
+  sequence_no INTEGER NOT NULL DEFAULT 1,
+  binder_page TEXT NOT NULL DEFAULT '',
+  relative_path TEXT NOT NULL,
+  original_file_name TEXT NOT NULL DEFAULT '',
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL DEFAULT 0,
+  pixel_width INTEGER NOT NULL DEFAULT 0,
+  pixel_height INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(analysis_id) REFERENCES collection_purchase_analyses(analysis_id) ON DELETE CASCADE,
+  UNIQUE(relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_purchase_photos_analysis
+ON collection_purchase_photos(analysis_id, sequence_no, archived);
+
+CREATE TABLE IF NOT EXISTS collection_physical_cards (
+  physical_card_id TEXT PRIMARY KEY,
+  analysis_id TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  linked_collection_item_id TEXT NOT NULL DEFAULT '',
+  product_id TEXT NOT NULL DEFAULT '',
+  card_name TEXT NOT NULL DEFAULT '',
+  review_status TEXT NOT NULL DEFAULT 'unreviewed',
+  created_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(analysis_id) REFERENCES collection_purchase_analyses(analysis_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_physical_cards_analysis
+ON collection_physical_cards(analysis_id, archived);
+
+CREATE INDEX IF NOT EXISTS idx_collection_physical_cards_product
+ON collection_physical_cards(product_id, archived);
+
+CREATE TABLE IF NOT EXISTS collection_card_observations (
+  observation_id TEXT PRIMARY KEY,
+  analysis_id TEXT NOT NULL,
+  photo_id TEXT NOT NULL,
+  bbox_x REAL NOT NULL,
+  bbox_y REAL NOT NULL,
+  bbox_width REAL NOT NULL,
+  bbox_height REAL NOT NULL,
+  binder_row TEXT NOT NULL DEFAULT '',
+  binder_column TEXT NOT NULL DEFAULT '',
+  selected_name TEXT NOT NULL DEFAULT '',
+  name_candidates_json TEXT NOT NULL DEFAULT '[]',
+  name_confidence TEXT NOT NULL DEFAULT 'unknown',
+  selected_product_id TEXT NOT NULL DEFAULT '',
+  print_candidates_json TEXT NOT NULL DEFAULT '[]',
+  print_confidence TEXT NOT NULL DEFAULT 'unknown',
+  recognition_signals_json TEXT NOT NULL DEFAULT '[]',
+  economic_relevant INTEGER NOT NULL DEFAULT 0,
+  detail_photo_required INTEGER NOT NULL DEFAULT 0,
+  review_status TEXT NOT NULL DEFAULT 'unreviewed',
+  physical_card_id TEXT,
+  linked_collection_item_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(analysis_id) REFERENCES collection_purchase_analyses(analysis_id) ON DELETE CASCADE,
+  FOREIGN KEY(photo_id) REFERENCES collection_purchase_photos(photo_id) ON DELETE CASCADE,
+  FOREIGN KEY(physical_card_id) REFERENCES collection_physical_cards(physical_card_id) ON DELETE SET NULL,
+  CHECK(bbox_x >= 0 AND bbox_x <= 1),
+  CHECK(bbox_y >= 0 AND bbox_y <= 1),
+  CHECK(bbox_width > 0 AND bbox_width <= 1),
+  CHECK(bbox_height > 0 AND bbox_height <= 1),
+  CHECK(bbox_x + bbox_width <= 1.000001),
+  CHECK(bbox_y + bbox_height <= 1.000001)
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_card_observations_photo
+ON collection_card_observations(photo_id, archived);
+
+CREATE INDEX IF NOT EXISTS idx_collection_card_observations_analysis
+ON collection_card_observations(analysis_id, archived);
+
+CREATE INDEX IF NOT EXISTS idx_collection_card_observations_physical
+ON collection_card_observations(physical_card_id, archived);

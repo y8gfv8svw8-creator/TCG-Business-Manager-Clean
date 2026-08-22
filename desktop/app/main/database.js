@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
 const businessAutomation = require('../shared/business-automation');
+const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const CURRENT_SCHEMA_VERSION = 11;
+const CURRENT_SCHEMA_VERSION = 12;
 
 function isoNow() {
   return new Date().toISOString();
@@ -184,11 +185,21 @@ function upgradeStateToVersion11(state = {}) {
   return result;
 }
 
+function upgradeStateToVersion12(state = {}) {
+  const result = upgradeStateToVersion11(state);
+  result.collectionPurchaseAnalyses = result.collectionPurchaseAnalyses.map(analysis => ({
+    ...analysis,
+    ...collectionPhotoModel.normalizeAnalysisPhotoEvidence(analysis)
+  }));
+  return result;
+}
+
 class TcgDatabase {
-  constructor({ databasePath, schemaPath, backupRoot }) {
+  constructor({ databasePath, schemaPath, backupRoot, photoStore = null }) {
     this.databasePath = databasePath;
     this.schemaPath = schemaPath;
     this.backupRoot = backupRoot;
+    this.photoStore = photoStore;
     this.db = null;
   }
 
@@ -277,6 +288,7 @@ class TcgDatabase {
       if (currentVersion < 9) this.migrateToVersion9();
       if (currentVersion < 10) this.migrateToVersion10();
       if (currentVersion < 11) this.migrateToVersion11();
+      if (currentVersion < 12) this.migrateToVersion12();
       this.db.prepare(`
         INSERT INTO schema_version (version, applied_at)
         VALUES (?, ?)
@@ -477,6 +489,17 @@ class TcgDatabase {
       .run(JSON.stringify(state), updatedAt);
   }
 
+  migrateToVersion12() {
+    this.ensureDataSources();
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    if (!row?.state_json) return;
+    const updatedAt = row.updated_at || isoNow();
+    const state = upgradeStateToVersion12(JSON.parse(row.state_json));
+    this.materializeState(state, updatedAt);
+    this.db.prepare('UPDATE app_state SET state_json = ?, updated_at = ? WHERE id = 1')
+      .run(JSON.stringify(state), updatedAt);
+  }
+
   close() {
     if (!this.db) return;
     this.db.close();
@@ -584,7 +607,7 @@ class TcgDatabase {
       throw new TypeError('Der Programmstand ist ungültig.');
     }
 
-    state = upgradeStateToVersion11(state);
+    state = upgradeStateToVersion12(state);
     const updatedAt = isoNow();
     const json = JSON.stringify(state);
     const previousRow = this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get();
@@ -616,6 +639,11 @@ class TcgDatabase {
 
     if (state?.settings?.autoBackup !== false) {
       this.createDailyBackup(json, updatedAt, state?.settings?.backupRetentionDays);
+      this.photoStore?.createAutomaticAttachmentBackup(
+        state,
+        dateStamp(new Date(updatedAt)),
+        state?.settings?.backupRetentionDays
+      );
     }
     return {
       ok: true,
@@ -709,6 +737,9 @@ class TcgDatabase {
       UPDATE inventory_listing_history SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE capital_ledger_entries SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE capital_accounts SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_card_observations SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_physical_cards SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
+      UPDATE collection_purchase_photos SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE collection_purchase_decision_snapshots SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE collection_purchase_items SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
       UPDATE collection_purchase_analyses SET archived = 1, updated_at = '${updatedAt.replace(/'/g, "''")}' WHERE archived = 0;
@@ -965,6 +996,58 @@ class TcgDatabase {
         actual_purchase_price=excluded.actual_purchase_price, archived=0,
         raw_json=excluded.raw_json, updated_at=excluded.updated_at
     `);
+    const upsertCollectionPhoto = this.db.prepare(`
+      INSERT INTO collection_purchase_photos (
+        photo_id, analysis_id, sequence_no, binder_page, relative_path,
+        original_file_name, mime_type, file_size, pixel_width, pixel_height,
+        sha256, created_at, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(photo_id) DO UPDATE SET
+        analysis_id=excluded.analysis_id, sequence_no=excluded.sequence_no,
+        binder_page=excluded.binder_page, relative_path=excluded.relative_path,
+        original_file_name=excluded.original_file_name, mime_type=excluded.mime_type,
+        file_size=excluded.file_size, pixel_width=excluded.pixel_width,
+        pixel_height=excluded.pixel_height, sha256=excluded.sha256,
+        archived=0, raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    const upsertPhysicalCard = this.db.prepare(`
+      INSERT INTO collection_physical_cards (
+        physical_card_id, analysis_id, label, linked_collection_item_id,
+        product_id, card_name, review_status, created_at, archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(physical_card_id) DO UPDATE SET
+        analysis_id=excluded.analysis_id, label=excluded.label,
+        linked_collection_item_id=excluded.linked_collection_item_id,
+        product_id=excluded.product_id, card_name=excluded.card_name,
+        review_status=excluded.review_status, archived=0,
+        raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
+    const upsertPhotoObservation = this.db.prepare(`
+      INSERT INTO collection_card_observations (
+        observation_id, analysis_id, photo_id, bbox_x, bbox_y, bbox_width,
+        bbox_height, binder_row, binder_column, selected_name,
+        name_candidates_json, name_confidence, selected_product_id,
+        print_candidates_json, print_confidence, recognition_signals_json,
+        economic_relevant, detail_photo_required, review_status,
+        physical_card_id, linked_collection_item_id, created_at,
+        archived, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(observation_id) DO UPDATE SET
+        analysis_id=excluded.analysis_id, photo_id=excluded.photo_id,
+        bbox_x=excluded.bbox_x, bbox_y=excluded.bbox_y,
+        bbox_width=excluded.bbox_width, bbox_height=excluded.bbox_height,
+        binder_row=excluded.binder_row, binder_column=excluded.binder_column,
+        selected_name=excluded.selected_name, name_candidates_json=excluded.name_candidates_json,
+        name_confidence=excluded.name_confidence, selected_product_id=excluded.selected_product_id,
+        print_candidates_json=excluded.print_candidates_json,
+        print_confidence=excluded.print_confidence,
+        recognition_signals_json=excluded.recognition_signals_json,
+        economic_relevant=excluded.economic_relevant,
+        detail_photo_required=excluded.detail_photo_required,
+        review_status=excluded.review_status, physical_card_id=excluded.physical_card_id,
+        linked_collection_item_id=excluded.linked_collection_item_id,
+        archived=0, raw_json=excluded.raw_json, updated_at=excluded.updated_at
+    `);
     collectionAnalyses.forEach((analysis, analysisIndex) => {
       const analysisId = recordId(analysis, analysisIndex);
       const calculated = analysis.calculation || {};
@@ -1000,6 +1083,40 @@ class TcgDatabase {
           nullableMoney(snapshot.uncertaintyValue), nullableMoney(snapshot.bulkValue), nullableMoney(snapshot.blindMaxEk),
           nullableMoney(snapshot.confirmedMaxEk), nullableMoney(snapshot.firstOffer), nullableMoney(snapshot.actualPurchasePrice),
           JSON.stringify(snapshot), updatedAt
+        );
+      });
+      (Array.isArray(analysis.photos) ? analysis.photos : []).forEach((photo, photoIndex) => {
+        upsertCollectionPhoto.run(
+          recordId(photo, photoIndex), analysisId, Math.max(1, Math.round(Number(photo.sequence || photoIndex + 1))),
+          String(photo.binderPage || ''), String(photo.relativePath || ''), String(photo.originalFileName || ''),
+          String(photo.mimeType || ''), Math.max(0, Math.round(Number(photo.fileSize || 0))),
+          Math.max(0, Math.round(Number(photo.width || 0))), Math.max(0, Math.round(Number(photo.height || 0))),
+          String(photo.sha256 || ''), String(photo.createdAt || updatedAt), JSON.stringify(photo), updatedAt
+        );
+      });
+      (Array.isArray(analysis.physicalCards) ? analysis.physicalCards : []).forEach((card, cardIndex) => {
+        upsertPhysicalCard.run(
+          recordId(card, cardIndex), analysisId, String(card.label || ''), String(card.linkedCollectionItemId || ''),
+          /^\d+$/.test(String(card.productId || '').trim()) ? String(card.productId).trim() : '',
+          String(card.name || ''), String(card.reviewStatus || 'unreviewed'), String(card.createdAt || updatedAt),
+          JSON.stringify(card), updatedAt
+        );
+      });
+      (Array.isArray(analysis.photoObservations) ? analysis.photoObservations : []).forEach((observation, observationIndex) => {
+        const boundingBox = collectionPhotoModel.normalizeBoundingBox(observation.boundingBox);
+        if (!boundingBox) throw new Error(`Ungültiger Bildausschnitt in Beobachtung ${recordId(observation, observationIndex)}.`);
+        upsertPhotoObservation.run(
+          recordId(observation, observationIndex), analysisId, String(observation.photoId || ''),
+          boundingBox.x, boundingBox.y, boundingBox.width, boundingBox.height,
+          String(observation.row || ''), String(observation.column || ''), String(observation.selectedName || ''),
+          JSON.stringify(observation.nameCandidates || []), String(observation.nameConfidence || 'unknown'),
+          /^\d+$/.test(String(observation.selectedProductId || '').trim()) ? String(observation.selectedProductId).trim() : '',
+          JSON.stringify(observation.printCandidates || []), String(observation.printConfidence || 'unknown'),
+          JSON.stringify(observation.recognitionSignals || []), observation.economicRelevant ? 1 : 0,
+          observation.detailPhotoRequired ? 1 : 0, String(observation.reviewStatus || 'unreviewed'),
+          observation.physicalCardId ? String(observation.physicalCardId) : null,
+          String(observation.linkedCollectionItemId || ''), String(observation.createdAt || updatedAt),
+          JSON.stringify(observation), updatedAt
         );
       });
     });
@@ -1206,11 +1323,9 @@ class TcgDatabase {
     ensureDirectory(automaticRoot);
 
     const targetPath = path.join(automaticRoot, `TCG_Auto_Backup_${dateStamp(new Date(updatedAt))}.json`);
-    if (!fs.existsSync(targetPath)) {
-      const tempPath = `${targetPath}.tmp`;
-      fs.writeFileSync(tempPath, json, 'utf8');
-      fs.renameSync(tempPath, targetPath);
-    }
+    const tempPath = `${targetPath}.tmp`;
+    fs.writeFileSync(tempPath, json, 'utf8');
+    fs.renameSync(tempPath, targetPath);
 
     const backups = fs.readdirSync(automaticRoot)
       .filter(name => /^TCG_Auto_Backup_\d{4}-\d{2}-\d{2}\.json$/i.test(name))
@@ -1241,6 +1356,9 @@ class TcgDatabase {
         (SELECT COUNT(*) FROM pricing_recommendations) AS recommendation_count,
         (SELECT COUNT(*) FROM settlement_imports) AS settlement_count,
         (SELECT COUNT(*) FROM settlement_entries WHERE match_status = 'unmatched') AS unmatched_settlement_count,
+        (SELECT COUNT(*) FROM collection_purchase_photos WHERE archived = 0) AS collection_photo_count,
+        (SELECT COUNT(*) FROM collection_card_observations WHERE archived = 0) AS collection_observation_count,
+        (SELECT COUNT(*) FROM collection_physical_cards WHERE archived = 0) AS collection_physical_card_count,
         (SELECT MAX(occurred_at) FROM business_events) AS latest_event_at,
         (SELECT MAX(observed_date) FROM market_observations) AS latest_market_date
     `).get();
@@ -1275,6 +1393,9 @@ class TcgDatabase {
       recommendationCount: Number(counts?.recommendation_count || 0),
       settlementCount: Number(counts?.settlement_count || 0),
       unmatchedSettlementCount: Number(counts?.unmatched_settlement_count || 0),
+      collectionPhotoCount: Number(counts?.collection_photo_count || 0),
+      collectionObservationCount: Number(counts?.collection_observation_count || 0),
+      collectionPhysicalCardCount: Number(counts?.collection_physical_card_count || 0),
       latestEventAt: String(counts?.latest_event_at || ''),
       latestMarketDate: String(counts?.latest_market_date || ''),
       backupCount,

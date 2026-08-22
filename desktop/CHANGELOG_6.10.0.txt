@@ -1,0 +1,30 @@
+TCG Business Manager 6.10.0 – Sammlungsfotos und manuelle Evidenzprüfung
+=======================================================================
+
+Neu
+---
+- Mehrere JPEG-, PNG- oder WebP-Fotos je Sammlungsanalyse dauerhaft verwalten.
+- Karten auf Fotos mit normalisierten, verschiebbaren Bounding Boxes markieren.
+- Optionale Binder-Seite sowie Reihe und Spalte je Beobachtung speichern.
+- Kartenname-Kandidaten und Print-Kandidaten vollständig getrennt prüfen.
+- Eigene Confidence für Kartenname und Print; Unsicherheit bleibt ausdrücklich erhalten.
+- Wirtschaftliche Relevanz, Detailfoto-Bedarf und Prüfstatus je Beobachtung.
+- Mehrere Foto-Beobachtungen manuell mit derselben physischen Karte verbinden.
+- Identische Prints können bewusst als verschiedene physische Exemplare bestehen bleiben.
+
+Datensicherheit
+---------------
+- SQLite-Schema 12 mit normalisierten Foto-, Beobachtungs- und physischen Kartentabellen.
+- Bilder liegen außerhalb von app_state und SQLite im verwalteten Benutzerdatenordner.
+- Dateityp, Größe, Abmessungen, Pfad und SHA-256 werden geprüft.
+- Sichere, generierte Dateinamen und Schutz gegen Pfadwechsel aus dem Bildordner.
+- Manuelle Vollsicherung und tägliche Sicherung führen Sammlungsfoto-Anlagen mit.
+- Schema-Migration erstellt vorher die bestehende SQLite-Migrationssicherung.
+
+Klare Grenzen
+-------------
+- Keine automatische Mehrkartenerkennung oder Binder-Segmentierung.
+- Keine automatische Duplikaterkennung physischer Karten.
+- Kein Print wird allein aus einem Setcode bestätigt.
+- Fotos erzeugen weder Bestand noch Einkauf noch Ankaufwert automatisch.
+- Bestehende Preis-, Einkaufs-, Bestands-, Verkaufs- und Kapitalfunktionen bleiben unverändert.

@@ -1,11 +1,14 @@
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
+const { CollectionPhotoStore } = require('./collection-photo-store');
+const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.9.1';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.10.0';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
@@ -13,6 +16,7 @@ let database = null;
 let dataRoot = '';
 let mainWindow = null;
 let scannerRecognizer = null;
+let collectionPhotoStore = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
@@ -38,10 +42,15 @@ function initializeDatabase() {
       if (message?.status === 'recognizing text') console.info(`Scanner-OCR ${Math.round(Number(message.progress || 0) * 100)} %`);
     }
   });
+  collectionPhotoStore = new CollectionPhotoStore({
+    dataRoot,
+    backupRoot: path.join(dataRoot, 'Backups')
+  });
   database = new TcgDatabase({
     databasePath: path.join(dataRoot, 'Daten', 'tcg_business_manager.sqlite'),
     schemaPath: path.join(__dirname, '..', '..', 'database', 'schema.sql'),
-    backupRoot: path.join(dataRoot, 'Backups')
+    backupRoot: path.join(dataRoot, 'Backups'),
+    photoStore: collectionPhotoStore
   }).open();
 }
 
@@ -83,6 +92,56 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-snapshot-dates', (_event, payload) => database.getSnapshotDates(payload));
   ipcMain.handle('data:clear-market-data', () => database.clearMarketData());
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
+  ipcMain.handle('collection-photo:store', (_event, payload = {}) => {
+    const loaded = database.loadState();
+    const state = loaded.state;
+    const analysis = state?.collectionPurchaseAnalyses?.find(row => String(row.id) === String(payload.analysisId));
+    if (!analysis) throw new Error('Die Sammlungsanalyse wurde nicht gefunden.');
+    const stored = collectionPhotoStore.storeImage(payload);
+    const photo = {
+      id: crypto.randomUUID(),
+      analysisId: String(analysis.id),
+      sequence: Math.max(1, Math.round(Number(payload.sequence || (analysis.photos?.length || 0) + 1))),
+      binderPage: String(payload.binderPage || ''),
+      createdAt: new Date().toISOString(),
+      ...stored
+    };
+    analysis.photos = Array.isArray(analysis.photos) ? analysis.photos : [];
+    analysis.photos.push(photo);
+    analysis.photoObservations = Array.isArray(analysis.photoObservations) ? analysis.photoObservations : [];
+    analysis.physicalCards = Array.isArray(analysis.physicalCards) ? analysis.physicalCards : [];
+    try {
+      database.saveState(state);
+      return photo;
+    } catch (error) {
+      collectionPhotoStore.deleteImage(stored.relativePath);
+      throw error;
+    }
+  });
+  ipcMain.handle('collection-photo:read', (_event, payload = {}) => collectionPhotoStore.readImage(payload.relativePath));
+  ipcMain.handle('collection-photo:delete', (_event, payload = {}) => {
+    const loaded = database.loadState();
+    const state = loaded.state;
+    const analysis = state?.collectionPurchaseAnalyses?.find(row => String(row.id) === String(payload.analysisId));
+    if (!analysis) throw new Error('Die Sammlungsanalyse wurde nicht gefunden.');
+    const photo = (analysis.photos || []).find(row => String(row.id) === String(payload.photoId));
+    if (!photo) return { ok: true };
+    const staged = collectionPhotoStore.stageDelete(photo.relativePath);
+    Object.assign(analysis, collectionPhotoModel.removePhotoEvidence(analysis, photo.id));
+    try {
+      database.saveState(state);
+      staged.commit();
+      return { ok: true };
+    } catch (error) {
+      staged.rollback();
+      throw error;
+    }
+  });
+  ipcMain.handle('backup:create-bundle', (_event, state) => {
+    database.saveState(state);
+    return collectionPhotoStore.createBackupBundle(state);
+  });
+  ipcMain.handle('backup:restore-bundle', (_event, bundle) => collectionPhotoStore.restoreBackupBundle(bundle, state => database.saveState(state)));
 }
 
 function createWindow() {

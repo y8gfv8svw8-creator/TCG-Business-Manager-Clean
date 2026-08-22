@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.9.1</title>
+  <title>TCG Business Manager 6.10.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.9.1 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.10.0 · SQLite</div>
         </div>
       </div>
 
@@ -546,6 +546,62 @@
             <label>Sonstige Einkaufskosten (€)<input id="collectionExtra" type="number" min="0" step="0.01" /></label>
           </div>
           <label>Notizen<textarea id="collectionNotes" rows="2" placeholder="Eigene Einschätzung, fehlende Informationen oder Verhandlungsnotiz"></textarea></label>
+        </article>
+
+        <article class="panel collection-purchase-panel collection-photo-panel">
+          <div class="panel-head">
+            <div><h2>Sammlungsfotos & manuelle Prüfung</h2><small>Mehrere Fotos als Belege speichern, Kartenbereiche markieren und Kartenname sowie Print getrennt prüfen. Fotos verändern Bestand und Händlerentscheidung nie automatisch.</small></div>
+            <label class="primary file-label">Fotos hinzufügen<input id="collectionPhotoInput" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden /></label>
+          </div>
+          <div id="collectionPhotoEvidenceSummary" class="collection-summary compact-summary"></div>
+          <div id="collectionPhotoList" class="collection-photo-list"><div class="empty">Noch keine Fotos gespeichert.</div></div>
+          <div id="collectionPhotoWorkspace" class="collection-photo-workspace" hidden>
+            <div class="collection-photo-main">
+              <div class="collection-photo-meta">
+                <label>Bildnummer<input id="collectionPhotoSequence" type="number" min="1" step="1" /></label>
+                <label>Binder-Seite (optional)<input id="collectionPhotoBinderPage" placeholder="z. B. Seite 4" /></label>
+                <button id="deleteCollectionPhotoBtn" class="danger" type="button">Foto löschen</button>
+              </div>
+              <p class="muted">Ziehe mit der Maus ein Rechteck um genau eine sichtbare Karte. Vorhandene Rechtecke lassen sich verschieben; Größe und Position können rechts exakt korrigiert werden.</p>
+              <div id="collectionPhotoStage" class="collection-photo-stage" aria-label="Sammlungsfoto mit Kartenmarkierungen">
+                <img id="collectionPhotoImage" alt="Ausgewähltes Sammlungsfoto" draggable="false" />
+                <div id="collectionPhotoOverlay" class="collection-photo-overlay"></div>
+              </div>
+            </div>
+            <aside class="collection-observation-editor">
+              <div class="panel-head"><div><h3>Kartenbeobachtung</h3><small id="collectionObservationHint">Rechteck zeichnen oder auswählen.</small></div><button id="deleteCollectionObservationBtn" class="icon-button danger-text" type="button" hidden>Entfernen</button></div>
+              <div id="collectionObservationEditorFields" hidden>
+                <div class="bbox-grid">
+                  <label>X<input id="collectionBBoxX" type="number" min="0" max="1" step="0.001" /></label>
+                  <label>Y<input id="collectionBBoxY" type="number" min="0" max="1" step="0.001" /></label>
+                  <label>Breite<input id="collectionBBoxWidth" type="number" min="0.001" max="1" step="0.001" /></label>
+                  <label>Höhe<input id="collectionBBoxHeight" type="number" min="0.001" max="1" step="0.001" /></label>
+                  <label>Reihe<input id="collectionObservationRow" placeholder="optional" /></label>
+                  <label>Spalte<input id="collectionObservationColumn" placeholder="optional" /></label>
+                </div>
+                <hr />
+                <label>Kartenname suchen<input id="collectionObservationNameSearch" placeholder="Deutsch oder Englisch …" autocomplete="off" /></label>
+                <div id="collectionObservationNameResults" class="collection-candidate-results"></div>
+                <div id="collectionObservationNameCandidates" class="collection-candidate-list"></div>
+                <label>Sicherheit Kartenname<select id="collectionObservationNameConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
+                <hr />
+                <label>Print suchen<input id="collectionObservationPrintSearch" placeholder="Set, Setnummer oder Produkt-ID …" autocomplete="off" /></label>
+                <div id="collectionObservationPrintResults" class="collection-candidate-results"></div>
+                <div id="collectionObservationPrintCandidates" class="collection-candidate-list"></div>
+                <label>Sicherheit Print<select id="collectionObservationPrintConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
+                <p class="muted">Ein gelesener Setcode ist nur ein Signal. Erst „Diesen Print bestätigen“ setzt einen Print ausdrücklich auf bestätigt.</p>
+                <label>Erkennungssignale<textarea id="collectionObservationSignals" rows="2" placeholder="z. B. Setcode teilweise lesbar, Artwork passt"></textarea></label>
+                <label>Prüfstatus<select id="collectionObservationReviewStatus"><option value="unreviewed">Ungeprüft</option><option value="in_review">In Prüfung</option><option value="reviewed">Geprüft</option><option value="rejected">Verworfen</option></select></label>
+                <label class="switch-label"><input id="collectionObservationEconomicRelevant" type="checkbox" /> Wirtschaftlich relevant</label>
+                <label class="switch-label"><input id="collectionObservationDetailRequired" type="checkbox" /> Detailfoto erforderlich</label>
+                <hr />
+                <label>Physische Karte<select id="collectionObservationPhysicalCard"><option value="">Noch nicht verknüpft</option></select></label>
+                <div class="row-actions"><button id="createPhysicalCardBtn" class="secondary" type="button">Neue physische Karte</button><button id="unlinkPhysicalCardBtn" class="secondary" type="button">Verknüpfung lösen</button></div>
+                <label>Kartenposition in der Analyse<select id="collectionPhysicalCardItem"><option value="">Keine wirtschaftliche Position verknüpft</option></select></label>
+                <p class="muted">Mehrere Fotos dürfen bewusst dieselbe physische Karte zeigen. Nur die manuelle Verknüpfung verhindert eine doppelte Zählung; identische Prints können weiterhin verschiedene physische Karten sein.</p>
+              </div>
+            </aside>
+          </div>
         </article>
 
         <article class="panel collection-purchase-panel">
@@ -1099,6 +1155,7 @@
         await loadScript("../shared/scanner-recognition.js");
         await loadScript("../shared/scanner-image-processing.js");
         await loadScript("../shared/business-automation.js");
+        await loadScript("../shared/collection-photo-model.js");
         await loadScript("app.js");
         await loadScript("cardmarket-data-center.js");
       })().catch(error => {

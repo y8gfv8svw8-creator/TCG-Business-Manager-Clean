@@ -409,15 +409,17 @@ function migrateState(data) {
   migrated.watchlist = Array.isArray(data.watchlist) ? data.watchlist : structuredClone(defaultState.watchlist);
   migrated.purchaseDrafts = Array.isArray(data.purchaseDrafts) ? data.purchaseDrafts : [];
   migrated.activePurchaseDraftId = String(data.activePurchaseDraftId||"");
-  migrated.collectionPurchaseAnalyses = (Array.isArray(data.collectionPurchaseAnalyses) ? data.collectionPurchaseAnalyses : []).map((analysis,index)=>({
+  migrated.collectionPurchaseAnalyses = (Array.isArray(data.collectionPurchaseAnalyses) ? data.collectionPurchaseAnalyses : []).map((analysis,index)=>{
+    const photoEvidence=window.TcgCollectionPhotoModel?.normalizeAnalysisPhotoEvidence?.(analysis)||{photos:[],photoObservations:[],physicalCards:[]};
+    return {
     id:String(analysis?.id||`collection-analysis-${index}`), title:"", sourceType:"Kleinanzeigen", sellerName:"", url:"", date:todayISO(),
-    sellerPrice:0, shipping:0, extra:0, notes:"", items:[], decisionSnapshots:[], ...analysis,
+    sellerPrice:0, shipping:0, extra:0, notes:"", items:[], decisionSnapshots:[], ...analysis,...photoEvidence,
     items:(Array.isArray(analysis?.items)?analysis.items:[]).map((item,itemIndex)=>({
       ...item,id:String(item?.id||`${analysis?.id||`collection-analysis-${index}`}:item:${itemIndex}`), quantity:Math.max(1,Math.round(Number(item?.quantity||1))),
       condition:item?.condition||"UNBEKANNT", language:item?.language||"", printConfidence:["confirmed","likely","unknown"].includes(item?.printConfidence)?item.printConfidence:"unknown"
     })),
     decisionSnapshots:Array.isArray(analysis?.decisionSnapshots)?analysis.decisionSnapshots:[]
-  }));
+  };});
   migrated.activeCollectionAnalysisId = String(data.activeCollectionAnalysisId||"");
   migrated.wantlists = (Array.isArray(data.wantlists) ? data.wantlists : []).map(list=>({
     ...list,
@@ -3112,14 +3114,145 @@ function renderBuyingPlanner(){
 let collectionSearchProducts=new Map();
 let selectedCollectionProductId="";
 let collectionSearchSequence=0;
+let activeCollectionPhotoId="";
+let activeCollectionObservationId="";
+let collectionObservationNameSearchSequence=0;
+let collectionObservationPrintSearchSequence=0;
+let collectionObservationNameSearchProducts=new Map();
+let collectionObservationPrintSearchProducts=new Map();
+const collectionPhotoDataUrls=new Map();
 
 function activeCollectionAnalysis(){
   return (state.collectionPurchaseAnalyses||[]).find(row=>row.id===state.activeCollectionAnalysisId)||null;
 }
 
 function createCollectionAnalysis(){
-  const analysis={id:uid(),title:`Sammlungsanalyse ${new Date().toLocaleString("de-DE")}`,sourceType:"Kleinanzeigen",sellerName:"",url:"",date:todayISO(),sellerPrice:0,shipping:0,extra:0,notes:"",items:[],decisionSnapshots:[],createdAt:new Date().toISOString()};
+  const analysis={id:uid(),title:`Sammlungsanalyse ${new Date().toLocaleString("de-DE")}`,sourceType:"Kleinanzeigen",sellerName:"",url:"",date:todayISO(),sellerPrice:0,shipping:0,extra:0,notes:"",items:[],decisionSnapshots:[],photos:[],photoObservations:[],physicalCards:[],createdAt:new Date().toISOString()};
   state.collectionPurchaseAnalyses.unshift(analysis);state.activeCollectionAnalysisId=analysis.id;return analysis;
+}
+
+function normalizeCollectionPhotoEvidence(analysis){
+  if(!analysis)return {photos:[],photoObservations:[],physicalCards:[]};
+  if(Array.isArray(analysis.photos)&&Array.isArray(analysis.photoObservations)&&Array.isArray(analysis.physicalCards))return {photos:analysis.photos,photoObservations:analysis.photoObservations,physicalCards:analysis.physicalCards};
+  const evidence=window.TcgCollectionPhotoModel?.normalizeAnalysisPhotoEvidence?.(analysis)||{photos:[],photoObservations:[],physicalCards:[]};
+  analysis.photos=evidence.photos;analysis.photoObservations=evidence.photoObservations;analysis.physicalCards=evidence.physicalCards;
+  return evidence;
+}
+
+function activeCollectionPhoto(analysis=activeCollectionAnalysis()){
+  if(!analysis)return null;normalizeCollectionPhotoEvidence(analysis);
+  let photo=analysis.photos.find(row=>row.id===activeCollectionPhotoId)||analysis.photos[0]||null;
+  activeCollectionPhotoId=photo?.id||"";return photo;
+}
+
+function activeCollectionObservation(analysis=activeCollectionAnalysis()){
+  if(!analysis)return null;
+  const photo=activeCollectionPhoto(analysis);if(!photo)return null;
+  let observation=analysis.photoObservations.find(row=>row.id===activeCollectionObservationId&&row.photoId===photo.id)||null;
+  activeCollectionObservationId=observation?.id||"";return observation;
+}
+
+async function loadCollectionPhotoData(photo){
+  if(!photo?.relativePath)return "";
+  if(collectionPhotoDataUrls.has(photo.relativePath))return collectionPhotoDataUrls.get(photo.relativePath);
+  if(!window.desktopApp?.readCollectionPhoto)return "";
+  try{const result=await window.desktopApp.readCollectionPhoto(photo.relativePath);collectionPhotoDataUrls.set(photo.relativePath,result.dataUrl);return result.dataUrl||"";}
+  catch(error){console.error("Sammlungsfoto konnte nicht geladen werden:",error);return "";}
+}
+
+function collectionObservationLabel(observation,index){
+  return observation.selectedName||observation.nameCandidates?.[0]?.name||`Karte ${index+1}`;
+}
+
+function renderCollectionPhotoPreviews(analysis){
+  (analysis.photos||[]).forEach(async photo=>{
+    const dataUrl=await loadCollectionPhotoData(photo);
+    if(!dataUrl)return;
+    document.querySelectorAll(`[data-collection-photo-preview="${CSS.escape(photo.id)}"]`).forEach(image=>{image.src=dataUrl;});
+    if(photo.id===activeCollectionPhotoId){const main=document.getElementById("collectionPhotoImage");if(main&&main.dataset.photoId===photo.id)main.src=dataUrl;}
+  });
+}
+
+function renderCollectionObservationEditor(analysis,observation){
+  const fields=document.getElementById("collectionObservationEditorFields"),remove=document.getElementById("deleteCollectionObservationBtn"),hint=document.getElementById("collectionObservationHint");
+  fields.hidden=!observation;remove.hidden=!observation;hint.textContent=observation?`Beobachtung ${analysis.photoObservations.filter(row=>row.photoId===observation.photoId).findIndex(row=>row.id===observation.id)+1} wird manuell geprüft.`:"Rechteck zeichnen oder auswählen.";
+  if(!observation){document.getElementById("collectionObservationNameResults").innerHTML="";document.getElementById("collectionObservationPrintResults").innerHTML="";return;}
+  const box=observation.boundingBox||{};
+  [["collectionBBoxX",box.x],["collectionBBoxY",box.y],["collectionBBoxWidth",box.width],["collectionBBoxHeight",box.height],["collectionObservationRow",observation.row],["collectionObservationColumn",observation.column]].forEach(([id,value])=>{document.getElementById(id).value=value??"";});
+  document.getElementById("collectionObservationNameConfidence").value=observation.nameConfidence||"unknown";
+  document.getElementById("collectionObservationPrintConfidence").value=observation.printConfidence||"unknown";
+  document.getElementById("collectionObservationReviewStatus").value=observation.reviewStatus||"unreviewed";
+  document.getElementById("collectionObservationSignals").value=(observation.recognitionSignals||[]).join("\n");
+  document.getElementById("collectionObservationEconomicRelevant").checked=Boolean(observation.economicRelevant);
+  document.getElementById("collectionObservationDetailRequired").checked=Boolean(observation.detailPhotoRequired);
+  document.getElementById("collectionObservationNameCandidates").innerHTML=(observation.nameCandidates||[]).length?(observation.nameCandidates||[]).map(candidate=>`<div class="collection-candidate-row"><span><strong>${escapeHtml(candidate.name)}</strong>${candidate.englishName?`<small>Englisch: ${escapeHtml(candidate.englishName)}</small>`:""}</span><span class="collection-candidate-actions"><button type="button" class="secondary" data-select-observation-name="${escapeHtml(candidate.id)}">Auswählen</button><button type="button" class="icon-button danger-text" data-remove-observation-name="${escapeHtml(candidate.id)}">×</button></span></div>`).join(""):'<div class="muted">Noch kein Namenskandidat gespeichert.</div>';
+  document.getElementById("collectionObservationPrintCandidates").innerHTML=(observation.printCandidates||[]).length?(observation.printCandidates||[]).map(candidate=>`<div class="collection-candidate-row"><span><strong>${escapeHtml(candidate.name||`CM ${candidate.productId}`)}</strong><small>${escapeHtml([candidate.setName,candidate.collectorNumber,candidate.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")} · CM ${escapeHtml(candidate.productId)}</small></span><span class="collection-candidate-actions"><button type="button" class="secondary" data-confirm-observation-print="${escapeHtml(candidate.id)}">Diesen Print bestätigen</button><button type="button" class="icon-button danger-text" data-remove-observation-print="${escapeHtml(candidate.id)}">×</button></span></div>`).join(""):'<div class="muted">Noch kein Print-Kandidat gespeichert.</div>';
+  const physicalSelect=document.getElementById("collectionObservationPhysicalCard");
+  physicalSelect.innerHTML=`<option value="">Noch nicht verknüpft</option>${(analysis.physicalCards||[]).map((card,index)=>`<option value="${escapeHtml(card.id)}" ${card.id===observation.physicalCardId?"selected":""}>${escapeHtml(card.label||`Physische Karte ${index+1}`)}${card.productId?` · CM ${escapeHtml(card.productId)}`:""}</option>`).join("")}`;
+  const physical=(analysis.physicalCards||[]).find(card=>card.id===observation.physicalCardId)||null;
+  const itemSelect=document.getElementById("collectionPhysicalCardItem");itemSelect.disabled=!physical;
+  itemSelect.innerHTML=`<option value="">Keine wirtschaftliche Position verknüpft</option>${(analysis.items||[]).map(item=>`<option value="${escapeHtml(item.id)}" ${item.id===physical?.linkedCollectionItemId?"selected":""}>${escapeHtml(item.name||`CM ${item.productId||"?"}`)} · ${escapeHtml(item.collectorNumber||item.set||"")}</option>`).join("")}`;
+}
+
+function renderCollectionPhotoEvidence(analysis){
+  const workspace=document.getElementById("collectionPhotoWorkspace"),list=document.getElementById("collectionPhotoList"),summary=document.getElementById("collectionPhotoEvidenceSummary");
+  if(!analysis){workspace.hidden=true;list.innerHTML='<div class="empty">Zuerst eine Sammlungsanalyse anlegen.</div>';summary.innerHTML="";return;}
+  normalizeCollectionPhotoEvidence(analysis);const evidence=window.TcgCollectionPhotoModel?.summarizePhotoEvidence?.(analysis)||{};
+  summary.innerHTML=`<div><small>Fotos</small><strong>${evidence.photoCount||0}</strong></div><div><small>Markierte Kartenbereiche</small><strong>${evidence.observationCount||0}</strong></div><div><small>Manuell angelegte physische Karten</small><strong>${evidence.physicalCardCount||0}</strong></div><div><small>Unverknüpfte Beobachtungen</small><strong>${evidence.unlinkedObservationCount||0}</strong></div><div><small>Detailfoto erforderlich</small><strong>${evidence.detailPhotoRequiredCount||0}</strong></div>`;
+  const photo=activeCollectionPhoto(analysis);workspace.hidden=!photo;
+  list.innerHTML=analysis.photos.length?analysis.photos.map(row=>`<button type="button" class="collection-photo-choice ${row.id===photo?.id?"active":""}" data-select-collection-photo="${escapeHtml(row.id)}"><img data-collection-photo-preview="${escapeHtml(row.id)}" alt=""><span><strong>Bild ${row.sequence}</strong><small>${escapeHtml(row.binderPage||"keine Binder-Seite")}</small><small>${escapeHtml(row.originalFileName||"")}</small></span></button>`).join(""):'<div class="empty">Noch keine Fotos gespeichert.</div>';
+  if(!photo){renderCollectionObservationEditor(analysis,null);return;}
+  document.getElementById("collectionPhotoSequence").value=photo.sequence||1;document.getElementById("collectionPhotoBinderPage").value=photo.binderPage||"";
+  const image=document.getElementById("collectionPhotoImage");image.dataset.photoId=photo.id;image.removeAttribute("src");
+  const photoObservations=analysis.photoObservations.filter(row=>row.photoId===photo.id);const overlay=document.getElementById("collectionPhotoOverlay");
+  overlay.innerHTML=photoObservations.map((observation,index)=>{const box=observation.boundingBox;return `<div class="collection-photo-box ${observation.id===activeCollectionObservationId?"active":""}" data-observation-box="${escapeHtml(observation.id)}" style="left:${box.x*100}%;top:${box.y*100}%;width:${box.width*100}%;height:${box.height*100}%"><span>${escapeHtml(collectionObservationLabel(observation,index))}</span></div>`;}).join("");
+  renderCollectionObservationEditor(analysis,activeCollectionObservation(analysis));renderCollectionPhotoPreviews(analysis);
+}
+
+async function addCollectionPhotos(files){
+  if(!files?.length)return;if(!window.desktopApp?.storeCollectionPhoto){alert("Sammlungsfotos können nur in der installierten Desktop-App gespeichert werden.");return;}
+  const analysis=activeCollectionAnalysis()||createCollectionAnalysis();syncCollectionMetadata();
+  await window.desktopApp.saveState(state);
+  for(const file of files){
+    try{
+      const bytes=new Uint8Array(await file.arrayBuffer());
+      const photo=await window.desktopApp.storeCollectionPhoto({analysisId:analysis.id,originalFileName:file.name,mimeType:file.type,bytes,sequence:(analysis.photos||[]).length+1});
+      analysis.photos=analysis.photos||[];if(!analysis.photos.some(row=>row.id===photo.id))analysis.photos.push(photo);activeCollectionPhotoId=photo.id;
+    }catch(error){console.error(error);alert(`${file.name}: ${error.message}`);}
+  }
+  activeCollectionObservationId="";saveState();renderCollectionPurchases();
+}
+
+async function deleteActiveCollectionPhoto(){
+  const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);if(!analysis||!photo)return;
+  if(!confirm(`Foto „${photo.originalFileName||`Bild ${photo.sequence}`}“ und seine Kartenmarkierungen löschen?`))return;
+  await window.desktopApp.saveState(state);
+  await window.desktopApp.deleteCollectionPhoto({analysisId:analysis.id,photoId:photo.id});
+  collectionPhotoDataUrls.delete(photo.relativePath);Object.assign(analysis,window.TcgCollectionPhotoModel.removePhotoEvidence(analysis,photo.id));activeCollectionPhotoId=analysis.photos[0]?.id||"";activeCollectionObservationId="";saveState();renderCollectionPurchases();
+}
+
+function createCollectionObservation(boundingBox){
+  const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);const normalized=window.TcgCollectionPhotoModel?.normalizeBoundingBox?.(boundingBox);if(!analysis||!photo||!normalized)return null;
+  const now=new Date().toISOString(),observation={id:uid(),analysisId:analysis.id,photoId:photo.id,boundingBox:normalized,row:"",column:"",selectedName:"",nameCandidates:[],nameConfidence:"unknown",selectedProductId:"",printCandidates:[],printConfidence:"unknown",recognitionSignals:[],economicRelevant:false,detailPhotoRequired:false,reviewStatus:"unreviewed",physicalCardId:"",linkedCollectionItemId:"",createdAt:now,updatedAt:now};
+  analysis.photoObservations.push(observation);activeCollectionObservationId=observation.id;saveState();renderCollectionPhotoEvidence(analysis);return observation;
+}
+
+function updateActiveObservationFromFields(){
+  const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;
+  const box=window.TcgCollectionPhotoModel?.normalizeBoundingBox?.({x:Number(document.getElementById("collectionBBoxX").value),y:Number(document.getElementById("collectionBBoxY").value),width:Number(document.getElementById("collectionBBoxWidth").value),height:Number(document.getElementById("collectionBBoxHeight").value)});
+  if(!box){alert("Der Kartenbereich muss vollständig innerhalb des Fotos liegen.");renderCollectionPhotoEvidence(analysis);return;}
+  observation.boundingBox=box;observation.row=document.getElementById("collectionObservationRow").value.trim();observation.column=document.getElementById("collectionObservationColumn").value.trim();observation.nameConfidence=document.getElementById("collectionObservationNameConfidence").value;const requestedPrintConfidence=document.getElementById("collectionObservationPrintConfidence").value;observation.printConfidence=requestedPrintConfidence==="confirmed"&&!cleanProductId(observation.selectedProductId)?"unknown":requestedPrintConfidence;if(requestedPrintConfidence==="confirmed"&&observation.printConfidence!=="confirmed")alert("Ein Print kann erst nach Auswahl einer konkreten Cardmarket-Produkt-ID bestätigt werden.");observation.reviewStatus=document.getElementById("collectionObservationReviewStatus").value;observation.recognitionSignals=document.getElementById("collectionObservationSignals").value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);observation.economicRelevant=document.getElementById("collectionObservationEconomicRelevant").checked;observation.detailPhotoRequired=document.getElementById("collectionObservationDetailRequired").checked;observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);
+}
+
+async function searchCollectionObservationCandidates(query,kind){
+  const results=document.getElementById(kind==="name"?"collectionObservationNameResults":"collectionObservationPrintResults"),sequence=kind==="name"?++collectionObservationNameSearchSequence:++collectionObservationPrintSearchSequence;
+  if(String(query||"").trim().length<2){results.innerHTML="";return;}
+  results.innerHTML='<div class="muted">Katalog wird durchsucht …</div>';const products=await searchInventoryCardVariants(query);if(sequence!==(kind==="name"?collectionObservationNameSearchSequence:collectionObservationPrintSearchSequence))return;
+  const productMap=new Map(products.map(product=>[String(product.productId),product]));if(kind==="name")collectionObservationNameSearchProducts=productMap;else collectionObservationPrintSearchProducts=productMap;
+  if(kind==="name"){
+    const unique=[...new Map(products.map(product=>[normalizeCardName(cardDisplayNames(product).primary),product])).values()].slice(0,30);
+    results.innerHTML=unique.length?unique.map(product=>`<button type="button" class="collection-candidate-choice" data-add-observation-name="${escapeHtml(product.productId)}"><strong>${escapeHtml(cardDisplayNames(product).primary)}</strong>${product.englishName?`<small>Englisch: ${escapeHtml(product.englishName)}</small>`:""}<small>Nur als Namenskandidat übernehmen</small></button>`).join(""):'<div class="empty">Kein passender Kartenname gefunden.</div>';
+  }else results.innerHTML=products.length?products.slice(0,50).map(product=>`<button type="button" class="collection-candidate-choice" data-add-observation-print="${escapeHtml(product.productId)}"><strong>${escapeHtml(inventoryVariantName(product))}</strong><small>${escapeHtml(inventoryVariantSubtitle(product))}</small><small>CM ${escapeHtml(product.productId)} · zunächst nur Kandidat</small></button>`).join(""):'<div class="empty">Keine passende Druckvariante gefunden.</div>';
 }
 
 function syncCollectionMetadata(){
@@ -3161,8 +3294,9 @@ function renderCollectionPurchases(){
   let current=activeCollectionAnalysis();
   select.innerHTML=`<option value="">Neue Analyse</option>${analyses.map(row=>`<option value="${escapeHtml(row.id)}" ${row.id===state.activeCollectionAnalysisId?"selected":""}>${escapeHtml(row.title||"Unbenannte Analyse")} · ${money(row.sellerPrice)}</option>`).join("")}`;
   const ids=["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"];
-  if(!current){ids.forEach(id=>{const field=document.getElementById(id);if(field)field.value=id==="collectionDate"?todayISO():"";});document.getElementById("collectionDecisionSummary").innerHTML='<div class="empty">Neue Analyse anlegen und Karten erfassen.</div>';document.getElementById("collectionItemTable").innerHTML='<tr><td colspan="14" class="empty">Noch keine Karten erfasst.</td></tr>';document.getElementById("collectionValueCarriers").innerHTML='<div class="empty">Noch keine Wertträger.</div>';document.getElementById("collectionRiskDistribution").innerHTML="";document.getElementById("collectionDecisionReasons").innerHTML="Noch keine Händlerentscheidung berechnet.";return;}
+  if(!current){ids.forEach(id=>{const field=document.getElementById(id);if(field)field.value=id==="collectionDate"?todayISO():"";});document.getElementById("collectionDecisionSummary").innerHTML='<div class="empty">Neue Analyse anlegen und Karten erfassen.</div>';document.getElementById("collectionItemTable").innerHTML='<tr><td colspan="14" class="empty">Noch keine Karten erfasst.</td></tr>';document.getElementById("collectionValueCarriers").innerHTML='<div class="empty">Noch keine Wertträger.</div>';document.getElementById("collectionRiskDistribution").innerHTML="";document.getElementById("collectionDecisionReasons").innerHTML="Noch keine Händlerentscheidung berechnet.";renderCollectionPhotoEvidence(null);return;}
   document.getElementById("collectionTitle").value=current.title||"";document.getElementById("collectionSourceType").value=current.sourceType||"Kleinanzeigen";document.getElementById("collectionSellerName").value=current.sellerName||"";document.getElementById("collectionUrl").value=current.url||"";document.getElementById("collectionDate").value=current.date||todayISO();document.getElementById("collectionSellerPrice").value=Number(current.sellerPrice||0);document.getElementById("collectionShipping").value=Number(current.shipping||0);document.getElementById("collectionExtra").value=Number(current.extra||0);document.getElementById("collectionNotes").value=current.notes||"";
+  renderCollectionPhotoEvidence(current);
   const calculation=calculateCollectionAnalysis(current);
   if(!calculation)return;
   const summary=document.getElementById("collectionDecisionSummary");
@@ -6016,11 +6150,23 @@ async function initAutomation(){
   // geplant. So koennen manueller Button und Automatik nie parallel importieren.
 }
 
-function exportBackup(){
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+async function exportBackup(){
+  const payload=window.desktopApp?.createBackupBundle?await window.desktopApp.createBackupBundle(state):state;
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`TCG_Warenwirtschaft_Backup_${todayISO()}.json`;a.click();URL.revokeObjectURL(a.href);
 }
-function importBackupPayload(data,fileName="Backup.json"){state=migrateState(data);saveState();renderAll();return {file:fileName};}
+async function importBackupPayload(data,fileName="Backup.json"){
+  if(data?.format==="tcg-business-manager-backup-v2"){
+    if(!window.desktopApp?.restoreBackupBundle)throw new Error("Diese Sicherung mit Sammlungsfotos kann nur in der Desktop-App wiederhergestellt werden.");
+    const restored=await window.desktopApp.restoreBackupBundle(data);
+    state=migrateState(restored.state);
+    localStorage.setItem(DB_KEY,JSON.stringify(state));
+    localStorage.setItem(DESKTOP_UPDATED_KEY,restored.result?.updatedAt||new Date().toISOString());
+  }else{
+    state=migrateState(data);saveState();
+  }
+  renderAll();return {file:fileName};
+}
 async function importBackup(file){return importBackupPayload(JSON.parse(await file.text()),file.name);}
 
 document.querySelectorAll(".nav-item").forEach(b=>b.addEventListener("click",()=>showView(b.dataset.view)));
@@ -6441,8 +6587,8 @@ document.getElementById("reportDateTo").onchange=renderReports;
 document.getElementById("reportPeriodReset").onclick=()=>{document.getElementById("reportDateFrom").value="";document.getElementById("reportDateTo").value="";renderReports();};
 document.getElementById("exportReportCsv").onclick=exportFinancialReportCsv;
 const collectionSelect=document.getElementById("collectionAnalysisSelect");
-collectionSelect.onchange=event=>{state.activeCollectionAnalysisId=event.target.value;selectedCollectionProductId="";renderCollectionPurchases();};
-document.getElementById("newCollectionAnalysisBtn").onclick=()=>{createCollectionAnalysis();saveState();renderAll();document.getElementById("collectionTitle").focus();};
+collectionSelect.onchange=event=>{state.activeCollectionAnalysisId=event.target.value;selectedCollectionProductId="";activeCollectionPhotoId="";activeCollectionObservationId="";renderCollectionPurchases();};
+document.getElementById("newCollectionAnalysisBtn").onclick=()=>{createCollectionAnalysis();activeCollectionPhotoId="";activeCollectionObservationId="";saveState();renderAll();document.getElementById("collectionTitle").focus();};
 ["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"].forEach(id=>{
   document.getElementById(id).addEventListener("change",()=>{if(!activeCollectionAnalysis())createCollectionAnalysis();syncCollectionMetadata();calculateCollectionAnalysis();saveState();renderCollectionPurchases();});
 });
@@ -6452,8 +6598,50 @@ document.getElementById("collectionCardSearch").addEventListener("keydown",event
 document.getElementById("collectionCardSearchResults").addEventListener("click",event=>{const button=event.target.closest("[data-select-collection-product]");if(!button)return;selectedCollectionProductId=button.dataset.selectCollectionProduct;document.querySelectorAll("#collectionCardSearchResults [data-select-collection-product]").forEach(row=>row.classList.toggle("selected",row===button));document.getElementById("addCollectionCardBtn").disabled=false;});
 document.getElementById("addCollectionCardBtn").onclick=addSelectedCollectionCard;
 document.getElementById("collectionCsvInput").addEventListener("change",async event=>{const file=event.target.files?.[0];if(file)try{await importCollectionCsv(file);}catch(error){alert(`Sammlungs-CSV konnte nicht gelesen werden: ${error.message}`);}event.target.value="";});
+document.getElementById("collectionPhotoInput").addEventListener("change",async event=>{const files=[...(event.target.files||[])];event.target.value="";try{await addCollectionPhotos(files);}catch(error){console.error(error);alert(`Sammlungsfoto konnte nicht gespeichert werden: ${error.message}`);}});
+document.getElementById("collectionPhotoList").addEventListener("click",event=>{const button=event.target.closest("[data-select-collection-photo]");if(!button)return;activeCollectionPhotoId=button.dataset.selectCollectionPhoto;activeCollectionObservationId="";renderCollectionPhotoEvidence(activeCollectionAnalysis());});
+document.getElementById("deleteCollectionPhotoBtn").onclick=()=>deleteActiveCollectionPhoto().catch(error=>{console.error(error);alert(`Foto konnte nicht gelöscht werden: ${error.message}`);});
+["collectionPhotoSequence","collectionPhotoBinderPage"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);if(!photo)return;photo.sequence=Math.max(1,Math.round(Number(document.getElementById("collectionPhotoSequence").value||1)));photo.binderPage=document.getElementById("collectionPhotoBinderPage").value.trim();saveState();renderCollectionPhotoEvidence(analysis);}));
+
+let collectionPhotoPointerAction=null;
+const collectionPhotoStage=document.getElementById("collectionPhotoStage"),collectionPhotoOverlay=document.getElementById("collectionPhotoOverlay");
+const collectionPhotoPoint=event=>{const rect=collectionPhotoStage.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))};};
+collectionPhotoStage.addEventListener("pointerdown",event=>{
+  if(!activeCollectionPhoto())return;const point=collectionPhotoPoint(event),boxElement=event.target.closest("[data-observation-box]");
+  if(boxElement){const analysis=activeCollectionAnalysis(),observation=analysis.photoObservations.find(row=>row.id===boxElement.dataset.observationBox);if(!observation)return;activeCollectionObservationId=observation.id;collectionPhotoPointerAction={type:"move",start:point,original:{...observation.boundingBox},observation};renderCollectionPhotoEvidence(analysis);event.preventDefault();return;}
+  collectionPhotoPointerAction={type:"draw",start:point,current:point};const draft=document.createElement("div");draft.className="collection-photo-draft";draft.id="collectionPhotoDraft";collectionPhotoOverlay.appendChild(draft);event.preventDefault();
+});
+window.addEventListener("pointermove",event=>{
+  const action=collectionPhotoPointerAction;if(!action)return;const point=collectionPhotoPoint(event);
+  if(action.type==="draw"){action.current=point;const x=Math.min(action.start.x,point.x),y=Math.min(action.start.y,point.y),width=Math.abs(point.x-action.start.x),height=Math.abs(point.y-action.start.y),draft=document.getElementById("collectionPhotoDraft");if(draft)draft.style.cssText=`left:${x*100}%;top:${y*100}%;width:${width*100}%;height:${height*100}%`;}
+  else{const dx=point.x-action.start.x,dy=point.y-action.start.y;action.observation.boundingBox={...action.original,x:Math.max(0,Math.min(1-action.original.width,action.original.x+dx)),y:Math.max(0,Math.min(1-action.original.height,action.original.y+dy))};const element=document.querySelector(`[data-observation-box="${CSS.escape(action.observation.id)}"]`);if(element){element.style.left=`${action.observation.boundingBox.x*100}%`;element.style.top=`${action.observation.boundingBox.y*100}%`;}}
+});
+window.addEventListener("pointerup",()=>{
+  const action=collectionPhotoPointerAction;if(!action)return;collectionPhotoPointerAction=null;document.getElementById("collectionPhotoDraft")?.remove();
+  if(action.type==="draw"){const x=Math.min(action.start.x,action.current.x),y=Math.min(action.start.y,action.current.y),width=Math.abs(action.current.x-action.start.x),height=Math.abs(action.current.y-action.start.y);if(width>=.01&&height>=.01)createCollectionObservation({x,y,width,height});}
+  else{action.observation.boundingBox=window.TcgCollectionPhotoModel.normalizeBoundingBox(action.observation.boundingBox);action.observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(activeCollectionAnalysis());}
+});
+
+["collectionBBoxX","collectionBBoxY","collectionBBoxWidth","collectionBBoxHeight","collectionObservationRow","collectionObservationColumn","collectionObservationNameConfidence","collectionObservationPrintConfidence","collectionObservationReviewStatus","collectionObservationSignals","collectionObservationEconomicRelevant","collectionObservationDetailRequired"].forEach(id=>document.getElementById(id).addEventListener("change",updateActiveObservationFromFields));
+document.getElementById("deleteCollectionObservationBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;analysis.photoObservations=analysis.photoObservations.filter(row=>row.id!==observation.id);activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
+let collectionObservationNameTimer,collectionObservationPrintTimer;
+document.getElementById("collectionObservationNameSearch").addEventListener("input",event=>{clearTimeout(collectionObservationNameTimer);collectionObservationNameTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"name"),180);});
+document.getElementById("collectionObservationPrintSearch").addEventListener("input",event=>{clearTimeout(collectionObservationPrintTimer);collectionObservationPrintTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"print"),180);});
+document.getElementById("collectionPhotoWorkspace").addEventListener("click",event=>{
+  const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;
+  const addName=event.target.closest("[data-add-observation-name]");if(addName){const product=collectionObservationNameSearchProducts.get(addName.dataset.addObservationName);if(!product)return;const names=cardDisplayNames(product),candidate={id:uid(),name:names.primary,germanName:product.germanName||names.primary,englishName:product.englishName||"",metacardId:product.metacardId||"",source:"catalog_search",confidence:"unknown"};if(!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push(candidate);observation.selectedName=candidate.name;document.getElementById("collectionObservationNameSearch").value="";document.getElementById("collectionObservationNameResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const selectName=event.target.closest("[data-select-observation-name]");if(selectName){const candidate=observation.nameCandidates.find(row=>row.id===selectName.dataset.selectObservationName);if(candidate)observation.selectedName=candidate.name;saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const removeName=event.target.closest("[data-remove-observation-name]");if(removeName){const candidate=observation.nameCandidates.find(row=>row.id===removeName.dataset.removeObservationName);observation.nameCandidates=observation.nameCandidates.filter(row=>row.id!==removeName.dataset.removeObservationName);if(candidate&&observation.selectedName===candidate.name){observation.selectedName="";observation.nameConfidence="unknown";}saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const addPrint=event.target.closest("[data-add-observation-print]");if(addPrint){const product=collectionObservationPrintSearchProducts.get(addPrint.dataset.addObservationPrint);if(!product)return;const candidate={id:uid(),productId:cleanProductId(product.productId),name:cardDisplayNames(product).primary,germanName:product.germanName||"",englishName:product.englishName||"",setName:product.setName||product.set||"",collectorNumber:product.collectorNumber||product.setCode||"",rarity:product.rarity||product.variant||"",source:"manual_search",signals:[]};if(!observation.printCandidates.some(row=>row.productId===candidate.productId))observation.printCandidates.push(candidate);document.getElementById("collectionObservationPrintSearch").value="";document.getElementById("collectionObservationPrintResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const confirmPrint=event.target.closest("[data-confirm-observation-print]");if(confirmPrint){const candidate=observation.printCandidates.find(row=>row.id===confirmPrint.dataset.confirmObservationPrint);if(!candidate)return;observation.selectedProductId=candidate.productId;observation.printConfidence="confirmed";if(!observation.selectedName){observation.selectedName=candidate.name;if(candidate.name&&!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push({id:uid(),name:candidate.name,germanName:candidate.germanName||"",englishName:candidate.englishName||"",source:"confirmed_print",confidence:"unknown"});}const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=candidate.productId;physical.name=observation.selectedName||candidate.name;physical.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const removePrint=event.target.closest("[data-remove-observation-print]");if(removePrint){const candidate=observation.printCandidates.find(row=>row.id===removePrint.dataset.removeObservationPrint);observation.printCandidates=observation.printCandidates.filter(row=>row.id!==removePrint.dataset.removeObservationPrint);if(candidate&&observation.selectedProductId===candidate.productId){observation.selectedProductId="";observation.printConfidence="unknown";}saveState();renderCollectionPhotoEvidence(analysis);}
+});
+document.getElementById("createPhysicalCardBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;const card={id:uid(),analysisId:analysis.id,label:observation.selectedName||`Physische Karte ${analysis.physicalCards.length+1}`,linkedCollectionItemId:"",productId:observation.selectedProductId||"",name:observation.selectedName||"",reviewStatus:"unreviewed",createdAt:new Date().toISOString()};analysis.physicalCards.push(card);observation.physicalCardId=card.id;saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("unlinkPhysicalCardBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;observation.physicalCardId="";observation.linkedCollectionItemId="";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("collectionObservationPhysicalCard").onchange=event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;observation.physicalCardId=event.target.value;const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);observation.linkedCollectionItemId=physical?.linkedCollectionItemId||"";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("collectionPhysicalCardItem").onchange=event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis),physical=analysis?.physicalCards?.find(row=>row.id===observation?.physicalCardId);if(!physical)return;physical.linkedCollectionItemId=event.target.value;const item=analysis.items.find(row=>row.id===event.target.value);if(item){physical.productId=cleanProductId(item.productId);physical.name=item.name||physical.name;const calculated=calculateCollectionAnalysis(analysis)?.items?.find(row=>row.id===item.id);if(calculated)observation.economicRelevant=Boolean(calculated.economicRelevant);}observation.linkedCollectionItemId=event.target.value;saveState();renderCollectionPhotoEvidence(analysis);};
 document.getElementById("collectionItemTable").addEventListener("change",event=>{const id=event.target.dataset.collectionQuantity||event.target.dataset.collectionCondition||event.target.dataset.collectionLanguage||event.target.dataset.collectionConfidence;if(!id)return;const analysis=activeCollectionAnalysis(),item=analysis?.items?.find(row=>row.id===id);if(!item)return;if(event.target.dataset.collectionQuantity)item.quantity=Math.max(1,Math.round(Number(event.target.value||1)));if(event.target.dataset.collectionCondition)item.condition=event.target.value;if(event.target.dataset.collectionLanguage)item.language=event.target.value;if(event.target.dataset.collectionConfidence)item.printConfidence=event.target.value;calculateCollectionAnalysis(analysis);saveState();renderCollectionPurchases();});
-document.getElementById("collectionItemTable").addEventListener("click",event=>{const id=event.target.closest("[data-remove-collection-item]")?.dataset.removeCollectionItem;if(!id)return;const analysis=activeCollectionAnalysis();if(!analysis)return;analysis.items=analysis.items.filter(row=>row.id!==id);calculateCollectionAnalysis(analysis);saveState();renderAll();});
+document.getElementById("collectionItemTable").addEventListener("click",event=>{const id=event.target.closest("[data-remove-collection-item]")?.dataset.removeCollectionItem;if(!id)return;const analysis=activeCollectionAnalysis();if(!analysis)return;analysis.items=analysis.items.filter(row=>row.id!==id);(analysis.physicalCards||[]).forEach(card=>{if(card.linkedCollectionItemId===id)card.linkedCollectionItemId="";});(analysis.photoObservations||[]).forEach(row=>{if(row.linkedCollectionItemId===id)row.linkedCollectionItemId="";});calculateCollectionAnalysis(analysis);saveState();renderAll();});
 ["collectionItemFilter","collectionClassFilter","collectionConfidenceFilter","collectionSort"].forEach(id=>document.getElementById(id).addEventListener(id==="collectionItemFilter"?"input":"change",renderCollectionPurchases));
 document.getElementById("saveCollectionSnapshotBtn").onclick=()=>{if(!activeCollectionAnalysis()){alert("Bitte zuerst eine Analyse anlegen.");return;}saveCollectionDecisionSnapshot();saveState();renderAll();alert("Entscheidungssnapshot gespeichert. Spätere Marktpreise verändern diese historische Begründung nicht.");};
 document.getElementById("confirmCollectionPurchaseBtn").onclick=confirmCollectionPurchase;

@@ -86,20 +86,20 @@ test('Schema 11 normalisiert Sammlungsanalysen ohne einen trade_order zu erfinde
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'tcg-phase5-schema-')),databasePath=path.join(root,'test.sqlite');
   const database=new TcgDatabase({databasePath,schemaPath:path.resolve(__dirname,'../database/schema.sql'),backupRoot:path.join(root,'backups')});
   database.open();database.saveState({settings:{},inventory:[],privateCollection:[],purchases:[],sales:[],collectionPurchaseAnalyses:[{id:'c1',title:'Test',sellerPrice:10,items:[{id:'i1',productId:'123',name:'Karte',quantity:2,printConfidence:'confirmed'}],decisionSnapshots:[]}]});database.close();
-  const db=new DatabaseSync(databasePath);assert.equal(CURRENT_SCHEMA_VERSION,11);assert.equal(db.prepare('SELECT COUNT(*) count FROM collection_purchase_analyses WHERE archived=0').get().count,1);assert.equal(db.prepare('SELECT COUNT(*) count FROM collection_purchase_items WHERE archived=0').get().count,1);assert.equal(db.prepare('SELECT COUNT(*) count FROM trade_orders WHERE archived=0').get().count,0);db.close();fs.rmSync(root,{recursive:true,force:true});
+  const db=new DatabaseSync(databasePath);assert.equal(CURRENT_SCHEMA_VERSION,12);assert.equal(db.prepare('SELECT COUNT(*) count FROM collection_purchase_analyses WHERE archived=0').get().count,1);assert.equal(db.prepare('SELECT COUNT(*) count FROM collection_purchase_items WHERE archived=0').get().count,1);assert.equal(db.prepare('SELECT COUNT(*) count FROM trade_orders WHERE archived=0').get().count,0);db.close();fs.rmSync(root,{recursive:true,force:true});
 });
 
 test('Schema-11-Migration erstellt Backup und erfindet keine Sammlungsdaten', () => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'tcg-phase5-migration-')),databasePath=path.join(root,'test.sqlite'),schemaPath=path.resolve(__dirname,'../database/schema.sql'),backupRoot=path.join(root,'backups');
   const first=new TcgDatabase({databasePath,schemaPath,backupRoot});first.open();first.saveState({settings:{},inventory:[{id:'asset-1',name:'Altkarte'}],privateCollection:[],purchases:[],sales:[]});first.close();
-  const raw=new DatabaseSync(databasePath);raw.exec('DELETE FROM schema_version WHERE version=11; INSERT OR IGNORE INTO schema_version(version,applied_at) VALUES(10,\'2026-08-15\');');raw.close();
-  const migrated=new TcgDatabase({databasePath,schemaPath,backupRoot});migrated.open();const loaded=migrated.loadState().state;migrated.close();assert.deepEqual(loaded.collectionPurchaseAnalyses,[]);assert.equal(loaded.inventory.length,1);assert.ok(fs.readdirSync(path.join(backupRoot,'Migrationen')).some(name=>/v10_vor_v11/.test(name)));fs.rmSync(root,{recursive:true,force:true});
+  const raw=new DatabaseSync(databasePath);raw.exec('DELETE FROM schema_version WHERE version>=11; INSERT OR IGNORE INTO schema_version(version,applied_at) VALUES(10,\'2026-08-15\');');raw.close();
+  const migrated=new TcgDatabase({databasePath,schemaPath,backupRoot});migrated.open();const loaded=migrated.loadState().state;migrated.close();assert.deepEqual(loaded.collectionPurchaseAnalyses,[]);assert.equal(loaded.inventory.length,1);assert.ok(fs.readdirSync(path.join(backupRoot,'Migrationen')).some(name=>/v10_vor_v12/.test(name)));fs.rmSync(root,{recursive:true,force:true});
 });
 
 test('eine fehlgeschlagene Schema-11-Migration rollt Versionsstand und App-Daten zurück', () => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'tcg-phase5-rollback-')),databasePath=path.join(root,'test.sqlite'),schemaPath=path.resolve(__dirname,'../database/schema.sql'),backupRoot=path.join(root,'backups');
   const initial=new TcgDatabase({databasePath,schemaPath,backupRoot});initial.open();initial.saveState({settings:{},inventory:[{id:'asset-rollback',name:'Unverändert'}],privateCollection:[],purchases:[],sales:[]});initial.close();
-  const raw=new DatabaseSync(databasePath);raw.exec('DELETE FROM schema_version WHERE version=11; INSERT OR IGNORE INTO schema_version(version,applied_at) VALUES(10,\'2026-08-15\');');raw.close();
+  const raw=new DatabaseSync(databasePath);raw.exec('DELETE FROM schema_version WHERE version>=11; INSERT OR IGNORE INTO schema_version(version,applied_at) VALUES(10,\'2026-08-15\');');raw.close();
   class FailingMigrationDatabase extends TcgDatabase { migrateToVersion11(){ super.migrateToVersion11(); throw new Error('absichtlicher Rollback-Test'); } }
   const failing=new FailingMigrationDatabase({databasePath,schemaPath,backupRoot});assert.throws(()=>failing.open(),/Rollback-Test/);failing.close();
   const checked=new DatabaseSync(databasePath);assert.equal(checked.prepare('SELECT MAX(version) version FROM schema_version').get().version,10);const saved=JSON.parse(checked.prepare('SELECT state_json FROM app_state WHERE id=1').get().state_json);assert.equal(saved.inventory.length,1);assert.equal(saved.inventory[0].id,'asset-rollback');checked.close();fs.rmSync(root,{recursive:true,force:true});

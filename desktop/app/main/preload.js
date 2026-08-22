@@ -34,5 +34,10 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getMarketOverview: payload => ipcRenderer.invoke('data:get-market-overview', payload),
   getSnapshotDates: payload => ipcRenderer.invoke('data:get-snapshot-dates', payload),
   clearMarketData: () => ipcRenderer.invoke('data:clear-market-data'),
-  recordImportRun: run => ipcRenderer.invoke('data:record-import-run', run)
+  recordImportRun: run => ipcRenderer.invoke('data:record-import-run', run),
+  storeCollectionPhoto: payload => ipcRenderer.invoke('collection-photo:store', payload),
+  readCollectionPhoto: relativePath => ipcRenderer.invoke('collection-photo:read', { relativePath }),
+  deleteCollectionPhoto: payload => ipcRenderer.invoke('collection-photo:delete', payload),
+  createBackupBundle: state => ipcRenderer.invoke('backup:create-bundle', state),
+  restoreBackupBundle: bundle => ipcRenderer.invoke('backup:restore-bundle', bundle)
 }));

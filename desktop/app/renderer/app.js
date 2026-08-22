@@ -788,7 +788,7 @@ function scheduleMarketDecisionHistoryRefresh() {
   scheduleMarketDecisionHistoryRefresh.timer = setTimeout(() => refreshMarketDecisionHistory(false), 120);
 }
 
-function saveState() {
+function saveState({ allowDestructiveReset = false } = {}) {
   const savedAt = new Date().toISOString();
   const serialized = JSON.stringify(state);
   localStorage.setItem(DB_KEY, serialized);
@@ -808,7 +808,10 @@ function saveState() {
   }
 
   if (el) el.textContent = "Speichere in SQLite …";
-  window.desktopApp.saveState(state).then(result => {
+  const desktopSave = allowDestructiveReset && window.desktopApp?.resetState
+    ? window.desktopApp.resetState(state)
+    : window.desktopApp.saveState(state);
+  desktopSave.then(result => {
     tradeInsightsCache = null;
     ownSalesExperienceCache = { calculatedAt:'', summary:{}, records:[] };
     ownSalesExperienceByProduct = new Map();
@@ -6497,7 +6500,7 @@ document.getElementById("resetDemoBtn").onclick=()=>{
   const preservedSettings=state.settings;
   state=structuredClone(defaultState);state.settings=preservedSettings;state.productCatalog=preservedCatalog;state.watchlist=[];
   document.getElementById("resetConfirmation").value="";document.getElementById("resetDemoBtn").disabled=true;
-  saveState();renderAll();alert("Geschäftsdaten wurden zurückgesetzt. Das zuvor exportierte Backup kann bei Bedarf wieder geladen werden.");
+  saveState({allowDestructiveReset:true});renderAll();alert("Geschäftsdaten wurden zurückgesetzt. Das zuvor exportierte Backup kann bei Bedarf wieder geladen werden.");
 };
 document.getElementById("themeToggleBtn").onclick=toggleTheme;
 document.getElementById("openDataFolderBtn").onclick=async()=>{const result=await window.desktopApp?.openDataFolder?.();if(result&&!result.ok)alert(`Datenordner konnte nicht geöffnet werden: ${result.error}`);};

@@ -115,6 +115,28 @@ test('Kapitaljournal berechnet Konten und Umbuchungen ohne Käufe oder Verkäufe
   assert.equal(database.db.prepare('SELECT COUNT(*) count FROM capital_ledger_entries WHERE archived=0').get().count, 10, 'Kauf und Verkauf erzeugen neben den bewussten Buchungen keine zweite Kapitalbewegung');
 });
 
+test('ein leerer Startzustand darf einen gefüllten SQLite-Stand nicht überschreiben', t => {
+  const { root, databasePath, backupRoot } = sandbox(t, 'tcg-startup-safety-');
+  const database = new TcgDatabase({ databasePath, schemaPath, backupRoot }).open();
+  t.after(() => { database.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  database.saveState({
+    settings: {},
+    inventory: [{ id: 'asset-safe', name: 'Bleibt erhalten', productId: '100' }],
+    privateCollection: [], purchases: [], sales: []
+  });
+
+  assert.throws(() => database.saveState({
+    settings: {}, inventory: [], privateCollection: [], purchases: [], sales: []
+  }), /Sicherheitsabbruch/);
+  assert.equal(database.loadState().state.inventory[0].id, 'asset-safe');
+
+  database.saveState({
+    settings: {}, inventory: [], privateCollection: [], purchases: [], sales: []
+  }, { allowDestructiveReset: true });
+  assert.equal(database.loadState().state.inventory.length, 0, 'bewusst bestätigtes Zurücksetzen bleibt möglich');
+});
+
 test('Inseratsverlauf, ursprüngliches VK-Ziel und Halteprofil überstehen Speichern und erneutes Materialisieren', t => {
   const { root, databasePath, backupRoot } = sandbox(t, 'tcg-phase1-listing-');
   const database = new TcgDatabase({ databasePath, schemaPath, backupRoot }).open();

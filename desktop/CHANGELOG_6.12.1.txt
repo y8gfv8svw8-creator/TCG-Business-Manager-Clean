@@ -1,0 +1,10 @@
+TCG Business Manager 6.12.1 – Schutz vor leerem Startzustand
+
+- Behebt einen kritischen Startfehler, durch den ein fehlgeschlagener SQLite-Startabgleich
+  mit einem leeren lokalen Standardzustand fortgesetzt werden konnte.
+- Der Programmstart wird jetzt sicher abgebrochen, wenn SQLite nicht zuverlässig geladen
+  werden kann. Vorhandene Geschäftsdaten werden dabei nicht überschrieben.
+- Eine zweite Schutzsperre in der Datenbankschicht verhindert, dass ein gefüllter
+  Programmstand unbeabsichtigt vollständig geleert wird.
+- Das ausdrücklich bestätigte Zurücksetzen unter Einstellungen bleibt weiterhin möglich.
+- Keine Änderung an Preis-, Bestands-, Einkaufs- oder Verkaufsberechnungen.

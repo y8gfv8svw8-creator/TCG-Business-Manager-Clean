@@ -8,7 +8,7 @@ const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.12.0';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.12.1';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
@@ -73,6 +73,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('data:load-state', () => database.loadState());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));
+  ipcMain.handle('data:reset-state', (_event, state) => database.saveState(state, { allowDestructiveReset: true }));
   ipcMain.handle('data:get-status', () => database.getStatus());
   ipcMain.handle('data:get-trade-database-status', () => database.getTradeDatabaseStatus());
   ipcMain.handle('data:get-business-events', (_event, payload) => database.getBusinessEvents(payload));

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   },
   loadState: () => ipcRenderer.invoke('data:load-state'),
   saveState: state => ipcRenderer.invoke('data:save-state', state),
+  resetState: state => ipcRenderer.invoke('data:reset-state', state),
   getDatabaseStatus: () => ipcRenderer.invoke('data:get-status'),
   getTradeDatabaseStatus: () => ipcRenderer.invoke('data:get-trade-database-status'),
   getBusinessEvents: payload => ipcRenderer.invoke('data:get-business-events', payload),

@@ -194,6 +194,15 @@ function upgradeStateToVersion12(state = {}) {
   return result;
 }
 
+function coreBusinessRecordCount(state = {}) {
+  return [
+    'inventory', 'privateCollection', 'purchases', 'sales',
+    'collectionPurchaseAnalyses', 'purchaseDrafts',
+    'expenses', 'materials', 'movements', 'reconciliations',
+    'capitalAccounts', 'capitalEntries', 'sellers', 'customers'
+  ].reduce((total, key) => total + (Array.isArray(state?.[key]) ? state[key].length : 0), 0);
+}
+
 class TcgDatabase {
   constructor({ databasePath, schemaPath, backupRoot, photoStore = null }) {
     this.databasePath = databasePath;
@@ -601,7 +610,7 @@ class TcgDatabase {
     }
   }
 
-  saveState(state) {
+  saveState(state, { allowDestructiveReset = false } = {}) {
     this.open();
     if (!state || typeof state !== 'object' || Array.isArray(state)) {
       throw new TypeError('Der Programmstand ist ungültig.');
@@ -618,6 +627,14 @@ class TcgDatabase {
       } catch {
         previousState = null;
       }
+    }
+
+    const previousBusinessRecords = coreBusinessRecordCount(previousState);
+    const nextBusinessRecords = coreBusinessRecordCount(state);
+    if (!allowDestructiveReset && previousBusinessRecords > 0 && nextBusinessRecords === 0) {
+      throw new Error(
+        'Sicherheitsabbruch: Ein gefüllter Programmstand darf nicht durch einen vollständig leeren Startzustand ersetzt werden.'
+      );
     }
 
     this.db.exec('BEGIN IMMEDIATE;');

@@ -44,6 +44,24 @@
     return { x, y, width, height };
   }
 
+  function normalizedQuadrilateral(value) {
+    if (!Array.isArray(value) || value.length !== 4) return null;
+    const points = value.map(point => ({ x: Number(point?.x), y: Number(point?.y) }));
+    if (points.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y)
+      || point.x < 0 || point.y < 0 || point.x > 1.000001 || point.y > 1.000001)) return null;
+    return polygonArea(points) > 0.000001 ? points : null;
+  }
+
+  function quadrilateralBoundingBox(value) {
+    const points = normalizedQuadrilateral(value);
+    if (!points) return null;
+    const minX = Math.min(...points.map(point => point.x));
+    const minY = Math.min(...points.map(point => point.y));
+    const maxX = Math.max(...points.map(point => point.x));
+    const maxY = Math.max(...points.map(point => point.y));
+    return normalizedBoundingBox({ x: minX, y: minY, width: maxX - minX, height: maxY - minY });
+  }
+
   function boundingBoxIoU(left, right) {
     const a = normalizedBoundingBox(left?.boundingBox || left);
     const b = normalizedBoundingBox(right?.boundingBox || right);
@@ -72,6 +90,140 @@
       detectedCoverage: detectedArea > 0 ? intersection / detectedArea : 0,
       areaRatio: expectedArea > 0 ? detectedArea / expectedArea : 0
     };
+  }
+
+  function normalizeRotationDegrees(value) {
+    let angle = Number(value || 0);
+    while (angle <= -90) angle += 180;
+    while (angle > 90) angle -= 180;
+    return angle;
+  }
+
+  function orientedRectCorners(rect) {
+    if (!rect || ![rect.centerX, rect.centerY, rect.width, rect.height, rect.rotationDegrees].every(value => Number.isFinite(Number(value)))) return [];
+    const angle = Number(rect.rotationDegrees) * Math.PI / 180;
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    return [
+      [-rect.width / 2, -rect.height / 2],
+      [rect.width / 2, -rect.height / 2],
+      [rect.width / 2, rect.height / 2],
+      [-rect.width / 2, rect.height / 2]
+    ].map(([x, y]) => ({
+      x: rect.centerX + x * cosine - y * sine,
+      y: rect.centerY + x * sine + y * cosine
+    }));
+  }
+
+  function polygonSignedArea(points) {
+    if (!Array.isArray(points) || points.length < 3) return 0;
+    let total = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      total += current.x * next.y - next.x * current.y;
+    }
+    return total / 2;
+  }
+
+  function polygonArea(points) {
+    return Math.abs(polygonSignedArea(points));
+  }
+
+  function lineIntersection(start, end, clipStart, clipEnd) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const clipDx = clipEnd.x - clipStart.x;
+    const clipDy = clipEnd.y - clipStart.y;
+    const denominator = dx * clipDy - dy * clipDx;
+    if (Math.abs(denominator) < 1e-9) return { ...end };
+    const ratio = ((clipStart.x - start.x) * clipDy - (clipStart.y - start.y) * clipDx) / denominator;
+    return { x: start.x + ratio * dx, y: start.y + ratio * dy };
+  }
+
+  function intersectConvexPolygons(subject, clip) {
+    if (!Array.isArray(subject) || subject.length < 3 || !Array.isArray(clip) || clip.length < 3) return [];
+    let output = subject.map(point => ({ x: Number(point.x), y: Number(point.y) }));
+    const orientation = polygonSignedArea(clip) >= 0 ? 1 : -1;
+    const inside = (point, start, end) => orientation * ((end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x)) >= -1e-7;
+    for (let clipIndex = 0; clipIndex < clip.length && output.length; clipIndex += 1) {
+      const clipStart = clip[clipIndex];
+      const clipEnd = clip[(clipIndex + 1) % clip.length];
+      const input = output;
+      output = [];
+      let start = input[input.length - 1];
+      for (const end of input) {
+        const endInside = inside(end, clipStart, clipEnd);
+        const startInside = inside(start, clipStart, clipEnd);
+        if (endInside) {
+          if (!startInside) output.push(lineIntersection(start, end, clipStart, clipEnd));
+          output.push(end);
+        } else if (startInside) output.push(lineIntersection(start, end, clipStart, clipEnd));
+        start = end;
+      }
+    }
+    return output;
+  }
+
+  function polygonIoU(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return 0;
+    const leftArea = polygonArea(left);
+    const rightArea = polygonArea(right);
+    const intersection = polygonArea(intersectConvexPolygons(left, right));
+    const union = leftArea + rightArea - intersection;
+    return union > 0 ? clamp(intersection / union, 0, 1) : 0;
+  }
+
+  function axisAlignedCorners(rect) {
+    return [
+      { x: rect.left, y: rect.top },
+      { x: rect.left + rect.width, y: rect.top },
+      { x: rect.left + rect.width, y: rect.top + rect.height },
+      { x: rect.left, y: rect.top + rect.height }
+    ];
+  }
+
+  function candidateCorners(candidate) {
+    return Array.isArray(candidate?.quadrilateral) && candidate.quadrilateral.length === 4
+      ? candidate.quadrilateral : axisAlignedCorners(candidate);
+  }
+
+  function candidatePolygonIoU(left, right) {
+    return polygonIoU(candidateCorners(left), candidateCorners(right));
+  }
+
+  function orientedRectFromPoints(points, meanX, meanY, covarianceX, covarianceY, covarianceXY) {
+    if (!Array.isArray(points) || points.length < 16) return null;
+    const axisAngle = 0.5 * Math.atan2(2 * covarianceXY, covarianceX - covarianceY);
+    let majorX = Math.cos(axisAngle);
+    let majorY = Math.sin(axisAngle);
+    let minorX = -majorY;
+    let minorY = majorX;
+    let minMajor = Infinity;let maxMajor = -Infinity;let minMinor = Infinity;let maxMinor = -Infinity;
+    for (let index = 0; index < points.length; index += 2) {
+      const dx = points[index] - meanX;
+      const dy = points[index + 1] - meanY;
+      const major = dx * majorX + dy * majorY;
+      const minor = dx * minorX + dy * minorY;
+      minMajor = Math.min(minMajor, major);maxMajor = Math.max(maxMajor, major);
+      minMinor = Math.min(minMinor, minor);maxMinor = Math.max(maxMinor, minor);
+    }
+    let majorExtent = maxMajor - minMajor + 1;
+    let minorExtent = maxMinor - minMinor + 1;
+    if (majorExtent < minorExtent) {
+      [majorExtent, minorExtent] = [minorExtent, majorExtent];
+      [majorX, minorX] = [minorX, majorX];
+      [majorY, minorY] = [minorY, majorY];
+      [minMajor, minMinor] = [minMinor, minMajor];
+      [maxMajor, maxMinor] = [maxMinor, maxMajor];
+    }
+    if (minorExtent < 8 || majorExtent < 12) return null;
+    const centerMajor = (minMajor + maxMajor) / 2;
+    const centerMinor = (minMinor + maxMinor) / 2;
+    const centerX = meanX + centerMajor * majorX + centerMinor * minorX;
+    const centerY = meanY + centerMajor * majorY + centerMinor * minorY;
+    const rotationDegrees = normalizeRotationDegrees(Math.atan2(majorY, majorX) * 180 / Math.PI - 90);
+    return { centerX, centerY, width: minorExtent, height: majorExtent, rotationDegrees };
   }
 
   function downsampleRgba(data, width, height, maxDimension = 480) {
@@ -172,6 +324,33 @@
     return { integral, stride };
   }
 
+  function gradientOrientationSignals(gradients) {
+    const bins = new Array(6).fill(0);
+    let strongEdges = 0;
+    for (let index = 0; index < gradients.magnitude.length; index += 1) {
+      if (gradients.magnitude[index] < gradients.threshold) continue;
+      const gx = gradients.gradientX[index];
+      const gy = gradients.gradientY[index];
+      if (gx + gy <= 0) continue;
+      const angle = Math.atan2(gy, gx) * 180 / Math.PI;
+      bins[Math.min(bins.length - 1, Math.floor(angle / 15))] += 1;
+      strongEdges += 1;
+    }
+    if (!strongEdges) return { strongEdges: 0, axialRatio: 0, diagonalRatio: 0, orientationEntropy: 0, bins };
+    let entropy = 0;
+    for (const count of bins) {
+      const probability = count / strongEdges;
+      if (probability > 0) entropy -= probability * Math.log(probability);
+    }
+    return {
+      strongEdges,
+      axialRatio: (bins[0] + bins[5]) / strongEdges,
+      diagonalRatio: (bins[2] + bins[3]) / strongEdges,
+      orientationEntropy: entropy / Math.log(bins.length),
+      bins
+    };
+  }
+
   function regionMean(source, left, top, width, height) {
     const x0 = Math.max(0, Math.round(left));
     const y0 = Math.max(0, Math.round(top));
@@ -201,9 +380,10 @@
     };
   }
 
-  function binaryEdgeComponents(gradients, width, height) {
+  function binaryEdgeComponents(gradients, width, height, thresholdScale = 1) {
     const strong = new Uint8Array(width * height);
-    for (let index = 0; index < strong.length; index += 1) strong[index] = gradients.magnitude[index] >= gradients.threshold ? 1 : 0;
+    const componentThreshold = gradients.threshold * clamp(Number(thresholdScale || 1), 0.72, 1.45);
+    for (let index = 0; index < strong.length; index += 1) strong[index] = gradients.magnitude[index] >= componentThreshold ? 1 : 0;
     const expanded = new Uint8Array(strong.length);
     for (let y = 1; y < height - 1; y += 1) {
       for (let x = 1; x < width - 1; x += 1) {
@@ -232,12 +412,13 @@
       let sumXX = 0;
       let sumYY = 0;
       let sumXY = 0;
+      const edgePoints = [];
       while (stack.length) {
         const index = stack.pop();
         const x = index % width;
         const y = Math.floor(index / width);
         minX = Math.min(minX, x);maxX = Math.max(maxX, x);minY = Math.min(minY, y);maxY = Math.max(maxY, y);pixels += 1;
-        if (strong[index]) { edgePixels += 1;sumX += x;sumY += y;sumXX += x * x;sumYY += y * y;sumXY += x * y; }
+        if (strong[index]) { edgePixels += 1;sumX += x;sumY += y;sumXX += x * x;sumYY += y * y;sumXY += x * y;edgePoints.push(x, y); }
         for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
           if (!dx && !dy) continue;
           const nextX = x + dx;
@@ -257,7 +438,8 @@
       const covarianceXY = sumXY / Math.max(1, edgePixels) - meanX * meanY;
       const axisAngle = 0.5 * Math.atan2(2 * covarianceXY, covarianceX - covarianceY) * 180 / Math.PI;
       const rotation = Math.min(Math.abs(axisAngle - 90), Math.abs(axisAngle + 90), Math.abs(axisAngle));
-      components.push({ left: minX, top: minY, width: componentWidth, height: componentHeight, pixels, edgePixels, rotation });
+      const orientedRect = orientedRectFromPoints(edgePoints, meanX, meanY, covarianceX, covarianceY, covarianceXY);
+      components.push({ left: minX, top: minY, width: componentWidth, height: componentHeight, pixels, edgePixels, rotation, orientedRect, thresholdScale });
     }
     return components;
   }
@@ -287,11 +469,11 @@
     for (let start = 0; start < expanded.length; start += 1) {
       if (!expanded[start] || visited[start]) continue;
       visited[start] = 1;stack.push(start);
-      let minX = width;let minY = height;let maxX = 0;let maxY = 0;let pixels = 0;let foregroundPixels = 0;let sumX = 0;let sumY = 0;let sumXX = 0;let sumYY = 0;let sumXY = 0;
+      let minX = width;let minY = height;let maxX = 0;let maxY = 0;let pixels = 0;let foregroundPixels = 0;let sumX = 0;let sumY = 0;let sumXX = 0;let sumYY = 0;let sumXY = 0;const foregroundPoints = [];
       while (stack.length) {
         const index = stack.pop();const x = index % width;const y = Math.floor(index / width);
         minX = Math.min(minX, x);maxX = Math.max(maxX, x);minY = Math.min(minY, y);maxY = Math.max(maxY, y);pixels += 1;
-        if (mask[index]) { foregroundPixels += 1;sumX += x;sumY += y;sumXX += x * x;sumYY += y * y;sumXY += x * y; }
+        if (mask[index]) { foregroundPixels += 1;sumX += x;sumY += y;sumXX += x * x;sumYY += y * y;sumXY += x * y;foregroundPoints.push(x, y); }
         for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
           if (!dx && !dy) continue;const nextX = x + dx;const nextY = y + dy;
           if (nextX < 1 || nextY < 1 || nextX >= width - 1 || nextY >= height - 1) continue;
@@ -304,7 +486,8 @@
       const covarianceX = sumXX / Math.max(1, foregroundPixels) - meanX * meanX;const covarianceY = sumYY / Math.max(1, foregroundPixels) - meanY * meanY;const covarianceXY = sumXY / Math.max(1, foregroundPixels) - meanX * meanY;
       const axisAngle = 0.5 * Math.atan2(2 * covarianceXY, covarianceX - covarianceY) * 180 / Math.PI;
       const rotation = Math.min(Math.abs(axisAngle - 90), Math.abs(axisAngle + 90), Math.abs(axisAngle));
-      components.push({ left: minX, top: minY, width: componentWidth, height: componentHeight, fillRatio: foregroundPixels / Math.max(1, area), rotation });
+      const orientedRect = orientedRectFromPoints(foregroundPoints, meanX, meanY, covarianceX, covarianceY, covarianceXY);
+      components.push({ left: minX, top: minY, width: componentWidth, height: componentHeight, fillRatio: foregroundPixels / Math.max(1, area), rotation, orientedRect });
     }
     return components;
   }
@@ -331,6 +514,129 @@
     }
     const ratios = sides.map(value => value / samples);
     return { value: ratios.reduce((sum, value) => sum + value, 0) / 4, sides: ratios };
+  }
+
+  function pixelValue(values, width, height, x, y) {
+    const safeX = clamp(Math.round(x), 0, width - 1);
+    const safeY = clamp(Math.round(y), 0, height - 1);
+    return values[safeY * width + safeX];
+  }
+
+  function orientedEdgeEvidence(rect, context) {
+    const { width, height, gradients } = context;
+    const angle = rect.rotationDegrees * Math.PI / 180;
+    const ux = Math.cos(angle);const uy = Math.sin(angle);
+    const vx = -Math.sin(angle);const vy = Math.cos(angle);
+    const band = Math.max(1, Math.round(Math.min(rect.width, rect.height) * 0.025));
+    const samples = 28;
+    const sides = [];
+    const intensities = [];
+    const sampleSide = (baseU, baseV, directionX, directionY, alongX, alongY, length) => {
+      let supported = 0;let intensity = 0;
+      for (let step = 0; step < samples; step += 1) {
+        const along = ((step + 0.5) / samples - 0.5) * length;
+        const baseX = rect.centerX + baseU * ux + baseV * vx + along * alongX;
+        const baseY = rect.centerY + baseU * uy + baseV * vy + along * alongY;
+        let strongest = 0;
+        for (let offset = -band; offset <= band; offset += 1) {
+          const x = baseX + directionX * offset;
+          const y = baseY + directionY * offset;
+          if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1) continue;
+          strongest = Math.max(strongest, pixelValue(gradients.magnitude, width, height, x, y));
+        }
+        intensity += strongest;
+        if (strongest >= gradients.threshold * 0.46) supported += 1;
+      }
+      sides.push(supported / samples);intensities.push(intensity / samples);
+    };
+    sampleSide(-rect.width / 2, 0, ux, uy, vx, vy, rect.height * 0.91);
+    sampleSide(rect.width / 2, 0, ux, uy, vx, vy, rect.height * 0.91);
+    sampleSide(0, -rect.height / 2, vx, vy, ux, uy, rect.width * 0.90);
+    sampleSide(0, rect.height / 2, vx, vy, ux, uy, rect.width * 0.90);
+    return {
+      value: sides.reduce((sum, value) => sum + value, 0) / sides.length,
+      sides,
+      intensity: intensities.reduce((sum, value) => sum + value, 0) / intensities.length
+    };
+  }
+
+  function orientedBoundaryContrast(rect, context) {
+    const { width, height, sampleGray } = context;
+    const angle = rect.rotationDegrees * Math.PI / 180;
+    const ux = Math.cos(angle);const uy = Math.sin(angle);
+    const vx = -Math.sin(angle);const vy = Math.cos(angle);
+    const distance = Math.max(2, Math.min(rect.width, rect.height) * 0.035);
+    const samples = 18;
+    let total = 0;let count = 0;
+    const compareSide = (baseU, baseV, normalX, normalY, alongX, alongY, length) => {
+      for (let step = 0; step < samples; step += 1) {
+        const along = ((step + 0.5) / samples - 0.5) * length;
+        const baseX = rect.centerX + baseU * ux + baseV * vx + along * alongX;
+        const baseY = rect.centerY + baseU * uy + baseV * vy + along * alongY;
+        const insideX = baseX - normalX * distance;
+        const insideY = baseY - normalY * distance;
+        const outsideX = baseX + normalX * distance;
+        const outsideY = baseY + normalY * distance;
+        if ([insideX, outsideX].some(value => value < 1 || value >= width - 1)
+          || [insideY, outsideY].some(value => value < 1 || value >= height - 1)) continue;
+        total += Math.abs(pixelValue(sampleGray, width, height, insideX, insideY) - pixelValue(sampleGray, width, height, outsideX, outsideY));
+        count += 1;
+      }
+    };
+    compareSide(-rect.width / 2, 0, -ux, -uy, vx, vy, rect.height * 0.82);
+    compareSide(rect.width / 2, 0, ux, uy, vx, vy, rect.height * 0.82);
+    compareSide(0, -rect.height / 2, -vx, -vy, ux, uy, rect.width * 0.82);
+    compareSide(0, rect.height / 2, vx, vy, ux, uy, rect.width * 0.82);
+    return clamp((total / Math.max(1, count)) / Math.max(12, context.sampleContrast * 0.58), 0, 1);
+  }
+
+  function scoreOrientedCardRectangle(orientedRect, context, componentStrength = 0) {
+    if (!orientedRect) return null;
+    const rect = { ...orientedRect, rotationDegrees: normalizeRotationDegrees(orientedRect.rotationDegrees) };
+    const corners = orientedRectCorners(rect);
+    if (corners.length !== 4 || corners.some(point => point.x < -2 || point.y < -2 || point.x > context.width + 2 || point.y > context.height + 2)) return null;
+    const aspect = rect.width / Math.max(1, rect.height);
+    const areaRatio = rect.width * rect.height / Math.max(1, context.width * context.height);
+    if (aspect < 0.48 || aspect > 0.87 || areaRatio < 0.006 || areaRatio > 0.42) return null;
+    const evidence = orientedEdgeEvidence(rect, context);
+    const contrast = orientedBoundaryContrast(rect, context);
+    const strongSideCount = evidence.sides.filter(value => value >= 0.34).length;
+    if (strongSideCount < 3 || evidence.value < 0.34 || (contrast < 0.12 && evidence.value < 0.52)) return null;
+    const orderedSides = [...evidence.sides].sort((left, right) => left - right);
+    const edgeBalance = orderedSides[0] / Math.max(0.001, orderedSides[3]);
+    const edgeStrength = clamp((evidence.intensity - context.gradients.mean * 0.75) / Math.max(8, context.gradients.threshold * 0.58), 0, 1);
+    const aspectScore = clamp(1 - Math.abs(aspect - CARD_ASPECT) / 0.22, 0, 1);
+    const areaScore = clamp(areaRatio / 0.025, 0.30, 1);
+    const score = clamp(edgeStrength * 0.20 + evidence.value * 0.30 + edgeBalance * 0.08
+      + aspectScore * 0.20 + contrast * 0.14 + areaScore * 0.03 + componentStrength * 0.05, 0, 1);
+    if (score < 0.43) return null;
+    const minX = Math.min(...corners.map(point => point.x));
+    const minY = Math.min(...corners.map(point => point.y));
+    const maxX = Math.max(...corners.map(point => point.x));
+    const maxY = Math.max(...corners.map(point => point.y));
+    return {
+      left: clamp(minX, 0, context.width),
+      top: clamp(minY, 0, context.height),
+      width: clamp(maxX, 0, context.width) - clamp(minX, 0, context.width),
+      height: clamp(maxY, 0, context.height) - clamp(minY, 0, context.height),
+      score,
+      candidateSource: "oriented_component",
+      quadrilateral: corners,
+      orientedRect: rect,
+      signals: {
+        edgeStrength: Math.round(edgeStrength * 1000) / 1000,
+        edgeContinuity: Math.round(evidence.value * 1000) / 1000,
+        edgeBalance: Math.round(edgeBalance * 1000) / 1000,
+        aspectRatio: Math.round(aspect * 1000) / 1000,
+        aspectScore: Math.round(aspectScore * 1000) / 1000,
+        boundaryContrast: Math.round(contrast * 1000) / 1000,
+        outerBoundaryScore: Math.round(clamp(evidence.value * 0.52 + edgeBalance * 0.18 + contrast * 0.30, 0, 1) * 1000) / 1000,
+        areaRatio: Math.round(areaRatio * 10000) / 10000,
+        rotationDegrees: Math.round(rect.rotationDegrees * 10) / 10,
+        sideContinuity: evidence.sides.map(value => Math.round(value * 1000) / 1000),
+        orientedGeometry: true
+      }
+    };
   }
 
   function boundaryContrast(rect, context) {
@@ -499,8 +805,13 @@
         const existing = kept[index];
         const candidateArea = candidate.width * candidate.height;
         const existingArea = existing.width * existing.height;
-        const overlap = rectIntersectionRatio(candidate, existing);
-        if (overlap >= iouThreshold) { rejected = true;break; }
+        const overlap = candidatePolygonIoU(candidate, existing);
+        const candidateRotation = Number(candidate.signals?.rotationDegrees || 0);
+        const existingRotation = Number(existing.signals?.rotationDegrees || 0);
+        const rotationDifference = Math.abs(normalizeRotationDegrees(candidateRotation - existingRotation));
+        const plausiblyDistinctOverlap = candidate.signals?.orientedGeometry && existing.signals?.orientedGeometry
+          && rotationDifference >= 12 && overlap < 0.78;
+        if (overlap >= iouThreshold && !plausiblyDistinctOverlap) { rejected = true;break; }
         if (isAnchoredOuterCandidate(existing)
           && candidateArea <= existingArea * 1.25
           && rectContainment(candidate, existing) >= 0.28) { rejected = true;break; }
@@ -521,6 +832,94 @@
       kept.push(candidate);
     }
     return kept;
+  }
+
+  function suppressGroupRectangles(candidates) {
+    if (!Array.isArray(candidates) || candidates.length < 3) return candidates;
+    const areas = candidates.map(candidate => candidate.orientedRect
+      ? candidate.orientedRect.width * candidate.orientedRect.height : candidate.width * candidate.height)
+      .sort((left, right) => left - right);
+    const medianArea = areas[Math.floor(areas.length / 2)] || 1;
+    return candidates.filter(candidate => {
+      const area = candidate.orientedRect ? candidate.orientedRect.width * candidate.orientedRect.height : candidate.width * candidate.height;
+      if (area < medianArea * 1.65) return true;
+      const containedCards = candidates.filter(other => {
+        if (other === candidate) return false;
+        const otherArea = other.orientedRect ? other.orientedRect.width * other.orientedRect.height : other.width * other.height;
+        if (otherArea > area * 0.72) return false;
+        const centerX = other.left + other.width / 2;
+        const centerY = other.top + other.height / 2;
+        return centerX >= candidate.left && centerX <= candidate.left + candidate.width
+          && centerY >= candidate.top && centerY <= candidate.top + candidate.height;
+      }).length;
+      return containedCards < 2;
+    });
+  }
+
+  function clusterLooseAxisFallbacks(candidates) {
+    if (!Array.isArray(candidates) || candidates.length < 2) return candidates;
+    const pending = [...candidates].sort((left, right) => right.score - left.score);
+    const clusters = [];
+    while (pending.length) {
+      const seed = pending.shift();
+      const cluster = [seed];
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let index = pending.length - 1; index >= 0; index -= 1) {
+          const candidate = pending[index];
+          const connected = cluster.some(existing => {
+            const averageWidth = (candidate.width + existing.width) / 2;
+            const averageHeight = (candidate.height + existing.height) / 2;
+            const dx = Math.abs(candidate.left + candidate.width / 2 - existing.left - existing.width / 2);
+            const dy = Math.abs(candidate.top + candidate.height / 2 - existing.top - existing.height / 2);
+            return rectIntersectionRatio(candidate, existing) >= 0.055
+              || (dx <= averageWidth * 0.72 && dy <= averageHeight * 0.72);
+          });
+          if (connected) { cluster.push(candidate);pending.splice(index, 1);changed = true; }
+        }
+      }
+      clusters.push(cluster);
+    }
+    return clusters.map(cluster => cluster.sort((left, right) => {
+      const leftPriority = left.score + left.signals.outerBoundaryScore * 0.18 + left.signals.edgeBalance * 0.08;
+      const rightPriority = right.score + right.signals.outerBoundaryScore * 0.18 + right.signals.edgeBalance * 0.08;
+      return rightPriority - leftPriority;
+    })[0]);
+  }
+
+  function boostLooseCardField(candidates, context) {
+    if (!Array.isArray(candidates) || candidates.length < 4) return candidates;
+    const localSeeds = deduplicateRectangles(candidates.filter(candidate => candidate.candidateSource === "window_scan"
+      && candidate.signals.areaRatio >= 0.025
+      && candidate.signals.areaRatio <= 0.10
+      && candidate.signals.outerBoundaryScore >= 0.78
+      && candidate.signals.edgeContinuity >= 0.74
+      && candidate.signals.aspectScore >= 0.44), 0.42);
+    if (localSeeds.length < 4) return candidates;
+    if (localSeeds.length >= 9 && localSeeds.length <= 10) return candidates;
+    const heights = localSeeds.map(candidate => candidate.height).sort((left, right) => left - right);
+    const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
+    const replacements = new Map(localSeeds.map(candidate => {
+      let supported = candidate;
+      if (candidate.height >= medianHeight * 0.70 && candidate.height < medianHeight * 0.90) {
+        const width = Math.round(medianHeight * CARD_ASPECT);
+        const expanded = boundedRect({
+          left: Math.round(candidate.left + candidate.width / 2 - width / 2),
+          top: Math.round(candidate.top + candidate.height / 2 - medianHeight / 2),
+          width,
+          height: medianHeight
+        }, context.width, context.height);
+        const rescored = scoreCardRectangle(expanded, context);
+        if (rescored) supported = { ...rescored, candidateSource: candidate.candidateSource };
+      }
+      return [candidate, {
+        ...supported,
+        score: Math.max(supported.score, 0.64),
+        signals: { ...supported.signals, localCardFieldSupport: true }
+      }];
+    }));
+    return candidates.map(candidate => replacements.get(candidate) || candidate);
   }
 
   function recalibrateCandidateScales(candidates) {
@@ -761,29 +1160,122 @@
     });
   }
 
+  function analyzeCollectionScene(detections = [], photoQuality = {}, analysisSignals = {}) {
+    const rows = Array.isArray(detections) ? detections : [];
+    const count = rows.length;
+    const orientationSignals = analysisSignals?.orientationSignals || {};
+    const imageAxialRatio = clamp(Number(orientationSignals.axialRatio || 0), 0, 1);
+    const imageDiagonalRatio = clamp(Number(orientationSignals.diagonalRatio || 0), 0, 1);
+    const orientationEntropy = clamp(Number(orientationSignals.orientationEntropy || 0), 0, 1);
+    const angles = rows.map(row => Math.abs(normalizeRotationDegrees(Number(row.detectionSignals?.rotationDegrees || 0))));
+    const rotatedCount = angles.filter(angle => angle >= 10).length;
+    const stronglyRotatedCount = angles.filter(angle => angle >= 28).length;
+    const gridCount = rows.filter(row => row.row && row.column).length;
+    const areas = rows.map(row => Number(row.boundingBox?.width || 0) * Number(row.boundingBox?.height || 0)).filter(value => value > 0).sort((left, right) => left - right);
+    const medianArea = areas.length ? areas[Math.floor(areas.length / 2)] : 0;
+    const sizeVariation = medianArea ? areas.reduce((sum, area) => sum + Math.abs(area - medianArea) / medianArea, 0) / areas.length : 0;
+    let overlapPairs = 0;
+    for (let left = 0; left < rows.length; left += 1) for (let right = left + 1; right < rows.length; right += 1) {
+      if (boundingBoxIoU(rows[left], rows[right]) >= 0.035) overlapPairs += 1;
+    }
+    const possiblePairs = count > 1 ? count * (count - 1) / 2 : 0;
+    const overlapRatio = possiblePairs ? overlapPairs / possiblePairs : 0;
+    const lowConfidenceCount = rows.filter(row => row.detectionConfidence === "low").length;
+    const gridRatio = count ? gridCount / count : 0;
+    const rotationRatio = count ? rotatedCount / count : 0;
+    let binderScore = count >= 4 ? clamp(gridRatio * 0.58 + (1 - clamp(sizeVariation, 0, 1)) * 0.24 + (1 - rotationRatio) * 0.18, 0, 1) : 0;
+    if (imageDiagonalRatio >= 0.30 && imageAxialRatio < 0.50) binderScore *= 0.55;
+    const looseScore = count ? clamp((count <= 3 ? 0.30 : 0) + rotationRatio * 0.38
+      + clamp(sizeVariation, 0, 1) * 0.18 + clamp(overlapRatio * 3, 0, 1) * 0.24
+      + clamp(imageDiagonalRatio * 0.50 + Math.max(0, 0.48 - imageAxialRatio) * 0.35, 0, 0.28), 0, 1) : 0;
+    let sceneType = "mixed_or_uncertain";
+    if (binderScore >= 0.68 && looseScore < 0.46) sceneType = "binder_grid";
+    else if (binderScore >= 0.42 && looseScore >= 0.42 && Math.abs(binderScore - looseScore) < 0.18) sceneType = "mixed_or_uncertain";
+    else if (looseScore >= 0.42 || (count > 0 && count <= 3 && gridCount === 0)) sceneType = "loose_cards";
+    const confidenceScore = sceneType === "mixed_or_uncertain"
+      ? clamp(0.30 + Math.abs(binderScore - looseScore) * 0.25, 0, 0.58)
+      : clamp(0.50 + Math.abs(binderScore - looseScore) * 0.55, 0, 0.96);
+    const imageRotationComplexity = imageDiagonalRatio >= 0.36 ? 0.42 : imageDiagonalRatio >= 0.28 ? 0.16 : 0;
+    const imageDisorderComplexity = orientationEntropy >= 0.96 && imageAxialRatio < 0.48 ? 0.18 : 0;
+    const complexityScore = clamp(rotationRatio * 0.28 + (count ? stronglyRotatedCount / count : 0) * 0.18
+      + clamp(sizeVariation, 0, 1) * 0.20 + clamp(overlapRatio * 4, 0, 1) * 0.22
+      + (count ? lowConfidenceCount / count : 0) * 0.08 + (count >= 12 ? 0.08 : 0)
+      + imageRotationComplexity + imageDisorderComplexity, 0, 1);
+    const complexitySignals = [];
+    if (rotatedCount) complexitySignals.push("rotated_cards");
+    if (stronglyRotatedCount) complexitySignals.push("strong_rotation");
+    if (sizeVariation >= 0.24) complexitySignals.push("varied_card_sizes");
+    if (overlapPairs) complexitySignals.push("overlapping_regions");
+    if (lowConfidenceCount) complexitySignals.push("uncertain_boundaries");
+    if (count >= 12) complexitySignals.push("many_visible_cards");
+    if (imageRotationComplexity) complexitySignals.push("rotation_rich_image");
+    if (imageDisorderComplexity) complexitySignals.push("orientation_disorder");
+    return {
+      sceneType,
+      sceneConfidence: confidenceScore >= 0.78 ? "high" : confidenceScore >= 0.55 ? "medium" : "low",
+      sceneConfidenceScore: Math.round(confidenceScore * 1000) / 1000,
+      sceneSignals: {
+        detectionCount: count,
+        gridRatio: Math.round(gridRatio * 1000) / 1000,
+        rotationRatio: Math.round(rotationRatio * 1000) / 1000,
+        stronglyRotatedCount,
+        sizeVariation: Math.round(sizeVariation * 1000) / 1000,
+        overlapPairs,
+        overlapRatio: Math.round(overlapRatio * 1000) / 1000,
+        imageAxialRatio: Math.round(imageAxialRatio * 1000) / 1000,
+        imageDiagonalRatio: Math.round(imageDiagonalRatio * 1000) / 1000,
+        orientationEntropy: Math.round(orientationEntropy * 1000) / 1000,
+        binderScore: Math.round(binderScore * 1000) / 1000,
+        looseScore: Math.round(looseScore * 1000) / 1000,
+        imageWarnings: Array.isArray(photoQuality?.warnings) ? photoQuality.warnings.length : 0
+      },
+      sceneComplexity: {
+        level: complexityScore >= 0.58 ? "high" : complexityScore >= 0.28 ? "medium" : "low",
+        score: Math.round(complexityScore * 1000) / 1000,
+        signals: complexitySignals
+      }
+    };
+  }
+
   function detectCollectionCardsFromRgba(data, width, height, options = {}) {
-    if (!data || width < 40 || height < 40) return { detections: [], photoQuality: { warnings: ["image_too_small"] }, parameters: { iouThreshold: 0.45 } };
+    if (!data || width < 40 || height < 40) {
+      const photoQuality = { warnings: ["image_too_small"] };
+      return { detections: [], photoQuality, sceneAnalysis: analyzeCollectionScene([], photoQuality), parameters: { iouThreshold: 0.45, detectorMode: "rotation_aware_loose_cards" } };
+    }
     const sample = downsampleRgba(data, width, height, options.maxDimension || 480);
     const gradients = gradientAnalysis(sample.gray, sample.width, sample.height, sample);
+    const orientationSignals = gradientOrientationSignals(gradients);
     const photoQuality = imageQualityFromAnalysis(sample, gradients);
-    if (photoQuality.warnings.includes("low_contrast") && gradients.mean < 4) return { detections: [], photoQuality, parameters: { iouThreshold: 0.45, minimumScore: 0.60 } };
+    if (photoQuality.warnings.includes("low_contrast") && gradients.mean < 0.75 && sample.contrast < 8) return {
+      detections: [], photoQuality, sceneAnalysis: analyzeCollectionScene([], photoQuality),
+      parameters: { iouThreshold: 0.45, minimumScore: 0.60, detectorMode: "rotation_aware_loose_cards" }
+    };
     const integralX = integralImage(gradients.gradientX, sample.width, sample.height);
     const integralY = integralImage(gradients.gradientY, sample.width, sample.height);
     const integralGray = integralImage(sample.gray, sample.width, sample.height);
     const integralRed = integralImage(sample.red, sample.width, sample.height);
     const integralGreen = integralImage(sample.green, sample.width, sample.height);
     const integralBlue = integralImage(sample.blue, sample.width, sample.height);
-    const context = { width: sample.width, height: sample.height, gradients, integralX, integralY, integralGray, integralRed, integralGreen, integralBlue, sampleContrast: sample.contrast };
+    const context = { width: sample.width, height: sample.height, gradients, integralX, integralY, integralGray, integralRed, integralGreen, integralBlue, sampleGray: sample.gray, sampleContrast: sample.contrast };
     const candidates = [];
+    const orientedCandidates = [];
     for (const component of foregroundComponents(sample)) {
       const scored = scoreCardRectangle(component, context, clamp(component.fillRatio * 1.8, 0, 1), component.rotation);
       if (scored && scored.score >= 0.44) { scored.candidateSource = "contrast_component";candidates.push(scored); }
+      const oriented = scoreOrientedCardRectangle(component.orientedRect, context, clamp(component.fillRatio * 1.5, 0, 1));
+      if (oriented && Math.abs(oriented.signals.rotationDegrees) >= 7) { oriented.candidateSource = "oriented_contrast_component";orientedCandidates.push(oriented); }
     }
-    for (const component of binaryEdgeComponents(gradients, sample.width, sample.height)) {
+    for (const thresholdScale of [0.82, 1, 1.22]) for (const component of binaryEdgeComponents(gradients, sample.width, sample.height, thresholdScale)) {
       const perimeter = Math.max(1, 2 * (component.width + component.height));
       const strength = clamp(component.edgePixels / perimeter, 0, 1);
-      const scored = scoreCardRectangle(component, context, strength, component.rotation);
+      const scored = thresholdScale === 1 ? scoreCardRectangle(component, context, strength, component.rotation) : null;
       if (scored && scored.score >= 0.42) candidates.push(scored);
+      const oriented = scoreOrientedCardRectangle(component.orientedRect, context, strength);
+      if (oriented && Math.abs(oriented.signals.rotationDegrees) >= 7) {
+        oriented.candidateSource = "oriented_edge_component";
+        oriented.signals.edgeThresholdScale = thresholdScale;
+        orientedCandidates.push(oriented);
+      }
     }
     const heightRatios = options.heightRatios || [0.16, 0.20, 0.24, 0.29, 0.34, 0.39, 0.44, 0.50, 0.57, 0.65, 0.74, 0.84];
     for (const heightRatio of heightRatios) {
@@ -827,12 +1319,30 @@
     }
     candidates.push(...expandedOuterCandidates(candidates, context));
     const minimumScore = clamp(Number(options.minimumScore ?? 0.60), 0.45, 0.95);
-    const calibratedCandidates = boostRegularTwoByTwoGrid(
+    const calibratedCandidates = boostLooseCardField(boostRegularTwoByTwoGrid(
       recalibrateCandidateScales(boostOuterContainment(candidates)),
       sample.height / Math.max(1, sample.width) >= 1.12
-    );
+    ), context);
     const regularGridCandidates = calibratedCandidates.filter(row => row.signals.regularGridSupport);
-    const consideredCandidates = regularGridCandidates.length === 4 ? regularGridCandidates : calibratedCandidates;
+    const localFieldCandidates = calibratedCandidates.filter(row => row.signals.localCardFieldSupport);
+    const localFieldAreas = localFieldCandidates.map(row => row.width * row.height).sort((left, right) => left - right);
+    const localFieldMedianArea = localFieldAreas.length ? localFieldAreas[Math.floor(localFieldAreas.length / 2)] : 0;
+    const baseConsideredCandidates = regularGridCandidates.length === 4 ? regularGridCandidates : calibratedCandidates;
+    const protectedRegularGrid = regularGridCandidates.length === 4
+      && orientationSignals.axialRatio >= 0.48
+      && orientationSignals.diagonalRatio <= 0.29;
+    const consideredCandidates = !protectedRegularGrid && localFieldCandidates.length >= 4 ? baseConsideredCandidates.filter(row => {
+      if (row.signals.localCardFieldSupport) return true;
+      const rowArea = row.width * row.height;
+      const containedLocalCards = localFieldCandidates.filter(local => {
+        if (local.width * local.height >= rowArea * 0.82) return false;
+        const centerX = local.left + local.width / 2;
+        const centerY = local.top + local.height / 2;
+        return centerX >= row.left && centerX <= row.left + row.width
+          && centerY >= row.top && centerY <= row.top + row.height;
+      }).length;
+      return containedLocalCards < 2;
+    }) : baseConsideredCandidates;
     const anchoredOuterCandidates = [];
     consideredCandidates.filter(isAnchoredOuterCandidate)
       .sort((left, right) => right.score - left.score)
@@ -848,13 +1358,80 @@
         if (!samePhysicalRegion) anchoredOuterCandidates.push(candidate);
       });
     const requireStrongOuterEvidence = anchoredOuterCandidates.length >= 2 && anchoredOuterCandidates.length <= 5;
-    const deduplicated = assignGridPositions(deduplicateRectangles(consideredCandidates, Number(options.iouThreshold || 0.45)))
-      .filter(row => row.score >= (requireStrongOuterEvidence ? Math.max(minimumScore, 0.80) : minimumScore)
+    const axisDeduplicated = assignGridPositions(deduplicateRectangles(consideredCandidates, Number(options.iouThreshold || 0.45)))
+      .filter(row => row.score >= (row.signals.localCardFieldSupport ? Math.max(0.58, minimumScore - 0.04)
+        : requireStrongOuterEvidence ? Math.max(minimumScore, 0.80) : minimumScore)
         && (!requireStrongOuterEvidence || isAnchoredOuterCandidate(row)
           || (row.signals.outerBoundaryScore >= 0.55 && row.signals.edgeContinuity >= 0.45)))
       .slice(0, Math.max(1, Number(options.maximumDetections || 80)));
+    const axisEnvelope = axisDeduplicated.length ? {
+      left: Math.min(...axisDeduplicated.map(row => row.left)),
+      top: Math.min(...axisDeduplicated.map(row => row.top)),
+      right: Math.max(...axisDeduplicated.map(row => row.left + row.width)),
+      bottom: Math.max(...axisDeduplicated.map(row => row.top + row.height))
+    } : null;
+    let axisOverlapPairs = 0;
+    for (let left = 0; left < axisDeduplicated.length; left += 1) for (let right = left + 1; right < axisDeduplicated.length; right += 1) {
+      if (rectIntersectionRatio(axisDeduplicated[left], axisDeduplicated[right]) >= 0.10) axisOverlapPairs += 1;
+    }
+    const binderGridEvidence = axisDeduplicated.length >= 4
+      && axisDeduplicated.filter(row => row.row && row.column).length >= axisDeduplicated.length * 0.60
+      && axisEnvelope && (axisEnvelope.right - axisEnvelope.left) * (axisEnvelope.bottom - axisEnvelope.top) / (sample.width * sample.height) >= 0.34
+      && axisOverlapPairs <= Math.max(1, axisDeduplicated.length * 0.18)
+      && orientationSignals.axialRatio >= 0.48
+      && orientationSignals.diagonalRatio <= 0.29;
+    const preparedOriented = suppressGroupRectangles(orientedCandidates)
+      .filter(row => row.score >= Math.max(0.54, minimumScore - 0.06))
+      .filter(row => localFieldCandidates.length < 4 || (row.width * row.height >= localFieldMedianArea * 0.72
+        && row.width * row.height <= localFieldMedianArea * 1.80))
+      .filter(oriented => !axisDeduplicated.some(axis => {
+        const orientedArea = oriented.orientedRect.width * oriented.orientedRect.height;
+        const axisArea = axis.width * axis.height;
+        return axis.signals.outerBoundaryScore >= 0.48 && orientedArea < axisArea * 0.78
+          && rectContainment(oriented, axis) >= 0.82;
+      }))
+      .map(row => ({ ...row, row: "", column: "", signals: { ...row.signals, relativeSizeSupport: row.signals.relativeSizeSupport ?? 1 } }));
+    const axisCandidatesForLoose = localFieldCandidates.length >= 4 ? [
+      ...axisDeduplicated.filter(axis => axis.width * axis.height <= localFieldMedianArea * 2.0
+        && !localFieldCandidates.some(local => rectContainment(local, axis) >= 0.72
+          || rectIntersectionRatio(axis, local) >= 0.40)),
+      ...localFieldCandidates
+    ] : axisDeduplicated;
+    const localSupportedAxis = axisCandidatesForLoose.filter(row => row.signals.localCardFieldSupport);
+    const looseAxisPool = axisCandidatesForLoose
+      .filter(row => {
+        if (localSupportedAxis.length < 4 || row.signals.localCardFieldSupport) return true;
+        const rowArea = row.width * row.height;
+        const containedLocalCards = localSupportedAxis.filter(local => {
+          if (local.width * local.height >= rowArea * 0.82) return false;
+          const centerX = local.left + local.width / 2;
+          const centerY = local.top + local.height / 2;
+          return centerX >= row.left && centerX <= row.left + row.width
+            && centerY >= row.top && centerY <= row.top + row.height;
+        }).length;
+        return containedLocalCards < 2;
+      })
+      .filter(row => !((row.candidateSource === "outer_expansion" || row.candidateSource === "perspective_window")
+        && row.signals.areaRatio > 0.15
+        && (orientationSignals.axialRatio < 0.50 || orientationSignals.diagonalRatio > 0.30)))
+      .filter(axis => !(axis.candidateSource === "window_scan"
+      && axis.signals.edgeContinuity < 0.40
+      && axis.signals.edgeBalance < 0.12
+      && axis.signals.outerBoundaryScore < 0.52));
+    const looseAxisCandidates = clusterLooseAxisFallbacks(preparedOriented.length ? looseAxisPool.filter(axis => !preparedOriented.some(oriented =>
+      rectIntersectionRatio(axis, oriented) >= 0.08
+      || (axis.left + axis.width / 2 >= oriented.left && axis.left + axis.width / 2 <= oriented.left + oriented.width
+        && axis.top + axis.height / 2 >= oriented.top && axis.top + axis.height / 2 <= oriented.top + oriented.height))) : looseAxisPool);
+    const deduplicated = (binderGridEvidence ? axisDeduplicated
+      : deduplicateRectangles([...looseAxisCandidates, ...preparedOriented], Number(options.iouThreshold || 0.45))
+        .filter(row => row.score >= (row.signals.orientedGeometry ? Math.max(0.54, minimumScore - 0.06) : minimumScore)))
+      .slice(0, Math.max(1, Number(options.maximumDetections || 80)));
     const detections = deduplicated.map(row => {
       const score = Math.round(row.score * 1000) / 1000;
+      const quadrilateral = candidateCorners(row).map(point => ({
+        x: Math.round(clamp(point.x / sample.width, 0, 1) * 1e6) / 1e6,
+        y: Math.round(clamp(point.y / sample.height, 0, 1) * 1e6) / 1e6
+      }));
       return {
         boundingBox: {
           x: Math.round(row.left / sample.width * 1e6) / 1e6,
@@ -862,6 +1439,7 @@
           width: Math.round(row.width / sample.width * 1e6) / 1e6,
           height: Math.round(row.height / sample.height * 1e6) / 1e6
         },
+        quadrilateral,
         detectionConfidence: score >= 0.82 && row.signals.outerBoundaryScore >= 0.62 && row.signals.relativeSizeSupport >= 0.55
           ? "high" : score >= 0.68 && row.signals.outerBoundaryScore >= 0.45 ? "medium" : "low",
         detectionScore: score,
@@ -873,7 +1451,8 @@
           smallCardRegion: row.signals.areaRatio < 0.018,
           strongRotation: Number(row.signals.rotationDegrees) > 12,
           possiblePerspective: row.signals.edgeBalance < 0.28,
-          candidateSource: row.candidateSource
+          candidateSource: row.candidateSource,
+          orientedCorners: quadrilateral.flatMap(point => [point.x, point.y])
         }
       };
     }).filter(row => normalizedBoundingBox(row.boundingBox));
@@ -890,10 +1469,56 @@
         source: row.candidateSource,
         signals: row.signals
       })) : undefined;
+    const debugAxisCandidates = options.debugCandidates ? calibratedCandidates
+      .filter(row => row.candidateSource !== "outer_expansion")
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 200)
+      .map(row => ({
+        left: row.left,
+        top: row.top,
+        width: row.width,
+        height: row.height,
+        score: row.score,
+        source: row.candidateSource,
+        signals: row.signals
+      })) : undefined;
+    const debugOrientedCandidates = options.debugCandidates ? orientedCandidates
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 200)
+      .map(row => ({
+        left: row.left,
+        top: row.top,
+        width: row.width,
+        height: row.height,
+        score: row.score,
+        source: row.candidateSource,
+        signals: row.signals
+      })) : undefined;
+    const debugFinalAxisPool = options.debugCandidates ? looseAxisPool.map(row => ({
+      left: row.left,
+      top: row.top,
+      width: row.width,
+      height: row.height,
+      score: row.score,
+      source: row.candidateSource,
+      signals: row.signals
+    })) : undefined;
+    const sceneAnalysis = analyzeCollectionScene(detections, photoQuality, { orientationSignals });
     return {
       detections,
       photoQuality,
-      parameters: { iouThreshold: Number(options.iouThreshold || 0.45), minimumScore, maxDimension: options.maxDimension || 480, debugCandidates }
+      sceneAnalysis,
+      parameters: {
+        iouThreshold: Number(options.iouThreshold || 0.45),
+        minimumScore,
+        maxDimension: options.maxDimension || 480,
+        detectorMode: sceneAnalysis.sceneType === "binder_grid" ? "binder_protected" : "rotation_aware_loose_cards",
+        orientationSignals,
+        debugCandidates,
+        debugAxisCandidates,
+        debugOrientedCandidates,
+        debugFinalAxisPool
+      }
     };
   }
 
@@ -914,19 +1539,33 @@
     const options = typeof configuration === "number" ? { iouThreshold: configuration } : (configuration || {});
     const iouThreshold = clamp(Number(options.iouThreshold ?? 0.50), 0, 1);
     const minimumCoverage = clamp(Number(options.minimumCoverage ?? 0), 0, 1);
+    const maximumAreaRatio = Number.isFinite(Number(options.maximumAreaRatio)) ? Math.max(1, Number(options.maximumAreaRatio)) : Infinity;
     const strictOuterBoxes = Boolean(options.strictOuterBoxes || minimumCoverage > 0);
-    const expectedBoxes = expected.map(row => normalizedBoundingBox(row?.boundingBox || row)).filter(Boolean);
-    const detectedBoxes = detected.map(row => normalizedBoundingBox(row?.boundingBox || row)).filter(Boolean);
+    const expectedRows = expected.map(row => ({
+      boundingBox: normalizedBoundingBox(row?.boundingBox || row) || quadrilateralBoundingBox(row?.quadrilateral),
+      quadrilateral: normalizedQuadrilateral(row?.quadrilateral),
+      occluded: Boolean(row?.occluded),
+      visibleFraction: Number.isFinite(Number(row?.visibleFraction)) ? clamp(Number(row.visibleFraction), 0, 1) : null
+    })).filter(row => row.boundingBox);
+    const detectedRows = detected.map(row => ({
+      boundingBox: normalizedBoundingBox(row?.boundingBox || row) || quadrilateralBoundingBox(row?.quadrilateral),
+      quadrilateral: normalizedQuadrilateral(row?.quadrilateral)
+    })).filter(row => row.boundingBox);
+    const expectedBoxes = expectedRows.map(row => row.boundingBox);
+    const detectedBoxes = detectedRows.map(row => row.boundingBox);
     const pairs = [];
     expectedBoxes.forEach((expectedBox, expectedIndex) => detectedBoxes.forEach((detectedBox, detectedIndex) => {
-      pairs.push({ expectedIndex, detectedIndex, ...boundingBoxOverlap(expectedBox, detectedBox) });
+      const expectedPolygon = expectedRows[expectedIndex].quadrilateral;
+      const detectedPolygon = detectedRows[detectedIndex].quadrilateral;
+      pairs.push({ expectedIndex, detectedIndex, ...boundingBoxOverlap(expectedBox, detectedBox),
+        polygonIoU: expectedPolygon && detectedPolygon ? polygonIoU(expectedPolygon, detectedPolygon) : null });
     }));
     pairs.sort((left, right) => right.iou - left.iou || right.coverage - left.coverage);
     const usedExpected = new Set();
     const usedDetected = new Set();
     const matches = [];
     for (const pair of pairs) {
-      if (pair.iou < iouThreshold || (strictOuterBoxes && pair.coverage < minimumCoverage)
+      if (pair.iou < iouThreshold || (strictOuterBoxes && pair.coverage < minimumCoverage) || pair.areaRatio > maximumAreaRatio
         || usedExpected.has(pair.expectedIndex) || usedDetected.has(pair.detectedIndex)) continue;
       usedExpected.add(pair.expectedIndex);usedDetected.add(pair.detectedIndex);matches.push(pair);
     }
@@ -951,6 +1590,11 @@
       meanIoU: matches.length ? matches.reduce((sum, row) => sum + row.iou, 0) / matches.length : 0,
       meanCoverage: matches.length ? matches.reduce((sum, row) => sum + row.coverage, 0) / matches.length : 0,
       meanAreaRatio: matches.length ? matches.reduce((sum, row) => sum + row.areaRatio, 0) / matches.length : 0,
+      meanPolygonIoU: matches.some(row => row.polygonIoU !== null)
+        ? matches.filter(row => row.polygonIoU !== null).reduce((sum, row) => sum + row.polygonIoU, 0) / matches.filter(row => row.polygonIoU !== null).length : null,
+      polygonMatchCount: matches.filter(row => row.polygonIoU !== null).length,
+      occludedExpectedCards: expectedRows.filter(row => row.occluded).length,
+      partiallyVisibleExpectedCards: expectedRows.filter(row => row.visibleFraction !== null && row.visibleFraction < 0.999).length,
       innerCropDetections,
       innerCropPairs,
       precision,
@@ -958,6 +1602,7 @@
       f1: precision + recall ? 2 * precision * recall / (precision + recall) : 0,
       iouThreshold,
       minimumCoverage,
+      maximumAreaRatio: Number.isFinite(maximumAreaRatio) ? maximumAreaRatio : null,
       strictOuterBoxes
     };
   }
@@ -1203,6 +1848,9 @@
     boundedRect,
     boundingBoxIoU,
     boundingBoxOverlap,
+    normalizedQuadrilateral,
+    polygonIoU,
+    analyzeCollectionScene,
     fallbackBounds,
     detectCardBoundsFromRgba,
     candidateBoundsFromRgba,

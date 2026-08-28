@@ -13,6 +13,8 @@ fs.mkdirSync(chromiumData, { recursive: true });
 fs.mkdirSync(path.join(qaData, 'Daten'), { recursive: true });
 if (!fs.existsSync(sourceDatabase)) throw new Error(`Quelldatenbank für Smoke-Test fehlt: ${sourceDatabase}`);
 fs.copyFileSync(sourceDatabase, path.join(qaData, 'Daten', 'tcg_business_manager.sqlite'));
+const sourcePhotoDirectory = path.join(path.dirname(sourceDatabase), 'Sammlungsfotos');
+if (fs.existsSync(sourcePhotoDirectory)) fs.cpSync(sourcePhotoDirectory, path.join(qaData, 'Daten', 'Sammlungsfotos'), { recursive: true });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function waitForPage() {
@@ -82,7 +84,7 @@ async function main() {
         databaseStatus,rendererErrors};
     })()`);
     const viewsOk=result&&Object.values(result.viewChecks||{}).every(Boolean);
-    if(!result||!result.title?.includes('6.12.3')||result.ready!=='complete'||!viewsOk||!result.collectionView||!result.entryFields||!result.germanSearch||!result.englishSearch||!result.priceGuide||!result.maxEk||!result.snapshot||!result.noAutomaticInventory||!result.phase3Bridge||!result.phase4Bridge||result.databaseStatus?.schemaVersion!==12||result.rendererErrors?.length){
+    if(!result||!result.title?.includes('6.12.4')||result.ready!=='complete'||!viewsOk||!result.collectionView||!result.entryFields||!result.germanSearch||!result.englishSearch||!result.priceGuide||!result.maxEk||!result.snapshot||!result.noAutomaticInventory||!result.phase3Bridge||!result.phase4Bridge||result.databaseStatus?.schemaVersion!==12||result.rendererErrors?.length){
       throw new Error(`PHASE-5-Oberflächentest unvollständig: ${JSON.stringify(result)}`);
     }
     process.stdout.write(`${JSON.stringify(result,null,2)}\n`);

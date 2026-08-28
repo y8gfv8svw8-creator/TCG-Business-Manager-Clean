@@ -2355,14 +2355,18 @@ function editInventoryGroup(groupKey, suggestedPrice=0) {
     {name:"listingStatus",label:"Cardmarket-Inserat",type:"select",options:["Nicht inseriert","Inseriert"]},
     {name:"listingPrice",label:"Inseratspreis pro Stück (€)",type:"number",step:"0.01"},
     {name:"targetSell",label:"Aktueller Ziel-VK (€)",type:"number",step:"0.01"},
-    {name:"costStatus",label:"EK-Datenstatus",type:"select",options:["Unverändert",{value:"known",label:"EK bekannt"},{value:"confirmed_zero",label:"0 € bestätigt"},{value:"unknown",label:"EK unbekannt"}]},
-    {name:"cost",label:"Vollständiger EK pro Exemplar (€)",type:"number",step:"0.01"},
+    {name:"costStatus",label:"EK-Datenstatus",type:"select",options:[{value:"Unverändert",label:"Unverändert (EK-Wert darf trotzdem geändert werden)"},{value:"known",label:"EK bekannt"},{value:"confirmed_zero",label:"0 € bestätigt"},{value:"unknown",label:"EK unbekannt"}]},
+    {name:"cost",label:"Vollständiger EK pro Exemplar (€) – Änderung setzt den EK-Status automatisch",type:"number",step:"0.01",min:"0"},
     {name:"holdingProfile",label:"Halteprofil",type:"select",options:(window.TcgBusinessAutomation?.HOLDING_PROFILES||["UNKLASSIFIZIERT"]).map(value=>({value,label:value}))},
     {name:"longTermHold",label:"Bewusst langfristig halten",type:"checkbox"},
     {name:"status",label:"Bestandsstatus",type:"select",options:["Unverändert","Im Bestand","Beschädigt"]},
     {name:"location",label:"Lagerort"},
     {name:"note",label:"Notiz",full:true}
   ], initial, data => {
+    const costValidation=window.TcgBusinessAutomation?.applyInventoryCostEdit?.(
+      {cost:first.cost,costStatus:first.costStatus},data,{initialCost:initial.cost}
+    );
+    if(costValidation?.ok===false){alert("Bitte einen gültigen vollständigen EK ab 0,00 € eingeben.");return false;}
     const ids = new Set(inventoryGroupStats(group).currentItems.map(item=>item.id));
     state.inventory.forEach(item => {
       if (!ids.has(item.id)) return;
@@ -2372,11 +2376,7 @@ function editInventoryGroup(groupKey, suggestedPrice=0) {
       item.listed = nextListed;
       item.listingPrice = nextPrice;
       applyConfirmedTargetSell(item,data.targetSell===""?null:Number(data.targetSell),suggestedPrice>0?"suggested":"manual");
-      if(data.costStatus!=="Unverändert"){
-        item.costStatus=data.costStatus;
-        if(data.costStatus==="known")item.cost=Math.max(0,Number(data.cost||0));
-        if(data.costStatus==="confirmed_zero")item.cost=0;
-      }
+      window.TcgBusinessAutomation?.applyInventoryCostEdit?.(item,data,{initialCost:initial.cost});
       item.holdingProfile=window.TcgBusinessAutomation?.normalizeHoldingProfile?.(data.holdingProfile)||"UNKLASSIFIZIERT";
       item.longTermHold=Boolean(data.longTermHold);
       if(data.status!=="Unverändert"&&item.status!=="Reserviert"){
@@ -3230,6 +3230,8 @@ function collectionObservationLabel(observation,index){
 
 function collectionDetectionConfidenceLabel(value){return ({high:"Hoch",medium:"Mittel",low:"Niedrig",unknown:"Unbekannt"})[value]||"Unbekannt";}
 function collectionQualityWarningLabel(value){return ({very_dark:"Foto ist sehr dunkel",overexposed:"Foto ist stark überbelichtet",low_contrast:"Sehr geringer Kontrast",possibly_blurred:"Foto möglicherweise unscharf",image_too_small:"Bild ist für eine zuverlässige Erkennung zu klein"})[value]||value;}
+function collectionSceneTypeLabel(value){return ({binder_grid:"Binder-Raster",loose_cards:"Lose Karten",mixed_or_uncertain:"Gemischt oder nicht eindeutig"})[value]||"Nicht eindeutig";}
+function collectionSceneComplexityLabel(value){return ({low:"Niedrig",medium:"Mittel",high:"Hoch"})[value]||"Niedrig";}
 
 function renderCollectionPhotoPreviews(analysis){
   (analysis.photos||[]).forEach(async photo=>{
@@ -3245,7 +3247,8 @@ function renderCollectionObservationEditor(analysis,observation){
   fields.hidden=!observation;remove.hidden=!observation;hint.textContent=observation?`${observation.observationSource==="automatic"?"Automatischer Vorschlag":"Manuelle Markierung"} ${analysis.photoObservations.filter(row=>row.photoId===observation.photoId&&row.detectionReviewState!=="rejected").findIndex(row=>row.id===observation.id)+1} wird geprüft.`:"Rechteck zeichnen oder auswählen.";
   if(!observation){document.getElementById("collectionObservationNameResults").innerHTML="";document.getElementById("collectionObservationPrintResults").innerHTML="";return;}
   const automatic=observation.observationSource==="automatic",detection=document.getElementById("collectionObservationDetection"),actions=document.getElementById("collectionDetectionActions");
-  detection.innerHTML=automatic?`<strong>Automatisch erkannte Kartenfläche</strong><span>Detection-Confidence: ${escapeHtml(collectionDetectionConfidenceLabel(observation.detectionConfidence))} · ${Math.round(Number(observation.detectionScore||0)*100)} %</span><small>Diese Sicherheit sagt nur, ob dort wahrscheinlich eine Karte liegt. Sie bestätigt weder Kartenname noch Print.</small>`:'<strong>Manuell markierter Kartenbereich</strong><small>Keine automatische Detection-Confidence. Kartenname und Print werden weiterhin getrennt geprüft.</small>';
+  const rotation=Number(observation.detectionSignals?.rotationDegrees);const geometry=automatic&&Number.isFinite(rotation)?` · erkannter Winkel ${Math.abs(rotation).toFixed(0)}°`:"";
+  detection.innerHTML=automatic?`<strong>Automatisch erkannte Kartenfläche</strong><span>Detection-Confidence: ${escapeHtml(collectionDetectionConfidenceLabel(observation.detectionConfidence))} · ${Math.round(Number(observation.detectionScore||0)*100)} %${geometry}</span><small>Diese Sicherheit sagt nur, ob dort wahrscheinlich eine Karte liegt. Sie bestätigt weder Kartenname noch Print.</small>`:'<strong>Manuell markierter Kartenbereich</strong><small>Keine automatische Detection-Confidence. Kartenname und Print werden weiterhin getrennt geprüft.</small>';
   actions.hidden=!automatic||observation.detectionReviewState==="confirmed";
   const box=observation.boundingBox||{};
   [["collectionBBoxX",box.x],["collectionBBoxY",box.y],["collectionBBoxWidth",box.width],["collectionBBoxHeight",box.height],["collectionObservationRow",observation.row],["collectionObservationColumn",observation.column]].forEach(([id,value])=>{document.getElementById(id).value=value??"";});
@@ -3275,7 +3278,7 @@ function renderCollectionPhotoEvidence(analysis){
   document.getElementById("collectionPhotoSequence").value=photo.sequence||1;document.getElementById("collectionPhotoBinderPage").value=photo.binderPage||"";
   const status=document.getElementById("collectionPhotoDetectionStatus"),quality=document.getElementById("collectionPhotoQuality"),photoSuggestions=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.observationSource==="automatic"&&row.detectionReviewState!=="rejected");
   status.textContent=photo.lastDetectionAt?`Letzte automatische Analyse: ${new Date(photo.lastDetectionAt).toLocaleString("de-DE")} · ${photoSuggestions.length} sichtbare automatische Vorschläge.`:"Noch keine automatische Flächenerkennung für dieses Foto ausgeführt.";
-  const qualityData=photo.detectionQuality||{},warnings=Array.isArray(qualityData.warnings)?qualityData.warnings:[];quality.hidden=!photo.lastDetectionAt;quality.classList.toggle("warning",warnings.length>0);quality.innerHTML=photo.lastDetectionAt?`<strong>Bildqualität</strong><span>Helligkeit ${Number(qualityData.brightness||0).toFixed(0)} · Kontrast ${Number(qualityData.contrast||0).toFixed(0)} · Kantenschärfe ${Number(qualityData.sharpness||0).toFixed(0)}</span><small>${warnings.length?warnings.map(collectionQualityWarningLabel).join(" · "):"Keine deutliche technische Qualitätswarnung. Reflexionen und Folien können die Erkennung trotzdem beeinflussen."}</small>`:"";
+  const qualityData=photo.detectionQuality||{},warnings=Array.isArray(qualityData.warnings)?qualityData.warnings:[],scene=photo.sceneAnalysis||{},complexity=scene.sceneComplexity||{},complexScene=complexity.level==="high";quality.hidden=!photo.lastDetectionAt;quality.classList.toggle("warning",warnings.length>0||complexScene);quality.innerHTML=photo.lastDetectionAt?`<strong>Bildqualität</strong><span>Helligkeit ${Number(qualityData.brightness||0).toFixed(0)} · Kontrast ${Number(qualityData.contrast||0).toFixed(0)} · Kantenschärfe ${Number(qualityData.sharpness||0).toFixed(0)}</span><small>${warnings.length?warnings.map(collectionQualityWarningLabel).join(" · "):"Keine deutliche technische Qualitätswarnung. Reflexionen und Folien können die Erkennung trotzdem beeinflussen."}</small><strong class="collection-scene-heading">Szene: ${escapeHtml(collectionSceneTypeLabel(scene.sceneType))}</strong><span>Scene-Confidence: ${escapeHtml(collectionDetectionConfidenceLabel(scene.sceneConfidence))} · Szenenkomplexität: ${escapeHtml(collectionSceneComplexityLabel(complexity.level))}</span><small>${complexScene?"Komplexe Szene: Überlappungen, starke Drehungen oder unterschiedliche Größen können Karten verdecken. Bitte alle Vorschläge und fehlende Karten manuell prüfen.":scene.sceneType==="mixed_or_uncertain"?"Der Aufbau ist nicht eindeutig. Die Erkennung bleibt bewusst vorsichtig und erfordert eine manuelle Sichtprüfung.":"Bildqualität und Szenenkomplexität werden getrennt bewertet."}</small>`:"";
   const image=document.getElementById("collectionPhotoImage");image.dataset.photoId=photo.id;image.removeAttribute("src");
   const photoObservations=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.detectionReviewState!=="rejected");const overlay=document.getElementById("collectionPhotoOverlay");
   overlay.innerHTML=photoObservations.map((observation,index)=>{const box=observation.boundingBox,source=observation.observationSource==="automatic"?"automatic":"manual",review=observation.detectionReviewState||"manual";return `<div class="collection-photo-box source-${source} detection-${review} ${observation.id===activeCollectionObservationId?"active":""}" data-observation-box="${escapeHtml(observation.id)}" style="left:${box.x*100}%;top:${box.y*100}%;width:${box.width*100}%;height:${box.height*100}%"><span>${escapeHtml(collectionObservationLabel(observation,index))}</span></div>`;}).join("");
@@ -3313,7 +3316,7 @@ async function detectActiveCollectionPhoto(){
   try{
     const result=await window.TcgScannerImageProcessing.detectCollectionCardsFromDataUrl(dataUrl);
     const merged=window.TcgCollectionPhotoModel.mergeDetectionSuggestions(analysis.photoObservations,photo.id,result.detections,{analysisId:analysis.id,idFactory:()=>uid()});
-    analysis.photoObservations=merged.observations;photo.detectionQuality=result.photoQuality||{};photo.lastDetectionAt=new Date().toISOString();photo.detectionSummary={detectionCount:Number(result.detections?.length||0),addedCount:merged.added.length,skippedCount:merged.skipped,iouThreshold:Number(result.parameters?.iouThreshold||.45)};
+    analysis.photoObservations=merged.observations;photo.detectionQuality=result.photoQuality||{};photo.sceneAnalysis=result.sceneAnalysis||{};photo.lastDetectionAt=new Date().toISOString();photo.detectionSummary={detectionCount:Number(result.detections?.length||0),addedCount:merged.added.length,skippedCount:merged.skipped,iouThreshold:Number(result.parameters?.iouThreshold||.45),detectorMode:String(result.parameters?.detectorMode||"")};
     activeCollectionObservationId=merged.added[0]?.id||activeCollectionObservationId;saveState();renderCollectionPhotoEvidence(analysis);
     const qualityWarnings=Array.isArray(result.photoQuality?.warnings)?result.photoQuality.warnings.length:0;
     alert(`${merged.added.length} neue Kartenfläche(n) als prüfbare Vorschläge angelegt.${merged.skipped?` ${merged.skipped} bereits vorhandene oder ignorierte Fläche(n) wurden nicht doppelt angelegt.`:""}${qualityWarnings?" Bitte zusätzlich die Hinweise zur Bildqualität beachten.":""}`);
@@ -4006,7 +4009,7 @@ function openModal(title, fields, initial={}, onSave, options={}) {
         ? `<select name="${f.name}">${f.options.map(option=>{const value=typeof option==="object"?option.value:option;const label=typeof option==="object"?option.label:option;return `<option value="${escapeHtml(value)}" ${String(initial[f.name]??f.value??"")===String(value)?"selected":""}>${escapeHtml(label)}</option>`;}).join("")}</select>`
         : f.type==="checkbox"
           ? `<input name="${f.name}" type="checkbox" value="true" ${(initial[f.name]??f.value)?"checked":""} />`
-        : `<input name="${f.name}" type="${f.type||"text"}" value="${escapeHtml(initial[f.name]??f.value??"")}" ${f.step?`step="${f.step}"`:""} ${f.required?"required":""} />`
+        : `<input name="${f.name}" type="${f.type||"text"}" value="${escapeHtml(initial[f.name]??f.value??"")}" ${f.step?`step="${f.step}"`:""} ${f.min!==undefined?`min="${escapeHtml(f.min)}"`:""} ${f.required?"required":""} />`
       }
     </label>`).join("");
   modalHandler = onSave;

@@ -189,6 +189,56 @@
   const roundMoney = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
   const floorMoney = value => Math.max(0, Math.floor((Number(value) + Number.EPSILON) * 100) / 100);
   const clamp = (value, min, max) => Math.min(max, Math.max(min, asNumber(value)));
+
+  function applyInventoryCostEdit(item = {}, edit = {}, context = {}) {
+    const requestedStatus = String(edit.costStatus ?? 'Unverändert');
+    const explicitStatus = ['known', 'confirmed_zero', 'unknown'].includes(requestedStatus);
+    const rawCost = edit.cost;
+    const costProvided = rawCost !== undefined && rawCost !== null && String(rawCost).trim() !== '';
+    const parsedCost = costProvided ? optionalNumber(rawCost) : null;
+    if (costProvided && (parsedCost === null || parsedCost < 0)) {
+      return { ok: false, changed: false, reason: 'invalid_cost', item };
+    }
+
+    const previousCost = roundMoney(Math.max(0, asNumber(item.cost)));
+    const previousStatus = ['known', 'confirmed_zero', 'unknown'].includes(String(item.costStatus || ''))
+      ? String(item.costStatus)
+      : previousCost > 0 ? 'known' : 'unknown';
+    const baselineValue = optionalNumber(context.initialCost);
+    const baselineCost = baselineValue === null ? previousCost : roundMoney(Math.max(0, baselineValue));
+    const enteredCost = parsedCost === null ? null : roundMoney(Math.max(0, parsedCost));
+    const costChanged = enteredCost !== null && enteredCost !== baselineCost;
+
+    if (!explicitStatus && !costChanged) {
+      return { ok: true, changed: false, costChanged: false, previousCost, previousStatus, item };
+    }
+
+    let nextCost = previousCost;
+    let nextStatus = previousStatus;
+    if (requestedStatus === 'unknown') {
+      nextStatus = 'unknown';
+    } else if (requestedStatus === 'confirmed_zero') {
+      nextCost = 0;
+      nextStatus = 'confirmed_zero';
+    } else if (requestedStatus === 'known' || costChanged) {
+      if (enteredCost !== null) nextCost = enteredCost;
+      nextStatus = nextCost === 0 ? 'confirmed_zero' : 'known';
+    }
+
+    item.cost = nextCost;
+    item.costStatus = nextStatus;
+    return {
+      ok: true,
+      changed: nextCost !== previousCost || nextStatus !== previousStatus,
+      costChanged: nextCost !== previousCost,
+      previousCost,
+      previousStatus,
+      cost: nextCost,
+      costStatus: nextStatus,
+      item
+    };
+  }
+
   const median = values => {
     const sorted = (values || []).filter(value => value !== null && Number.isFinite(Number(value)) && Number(value) > 0).map(Number).sort((a, b) => a - b);
     if (!sorted.length) return 0;
@@ -2546,6 +2596,7 @@
     inspectCardAssignment,
     detectCsvImportType,
     calculateSaleProfit,
+    applyInventoryCostEdit,
     purchaseBusinessCost,
     buildFinancialLedger,
     buildFinancialSummary,

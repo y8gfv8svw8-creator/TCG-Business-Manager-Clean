@@ -1,0 +1,20 @@
+TCG Business Manager 6.12.4 – Loose Cards & Scene Detection Hardening
+
+Bugfix Bestand / vollständiger EK
+- Eine manuelle Änderung von „Vollständiger EK pro Exemplar“ wird im Bearbeitungsdialog jetzt auch gespeichert, wenn der EK-Datenstatus auf „Unverändert“ bleibt.
+- Positive manuelle EK-Werte setzen den Datenstatus automatisch auf „EK bekannt“; ein bewusst gespeicherter Nullwert wird als „0 € bestätigt“ geführt.
+- Reiner Karten-EK, Einkauf, Menge und Bestand bleiben dabei unverändert.
+
+- Adaptive Szenenanalyse für Binder-Raster, lose Karten und unklare Mischszenen ergänzt.
+- Szenenkomplexität wird getrennt von Helligkeit, Kontrast und Kantenschärfe bewertet.
+- Eigener rotationsfähiger Loose-Card-Pfad mit Multi-Scale-Kandidaten ergänzt.
+- Gedrehte Karten können Winkel und normalisierte Quadrilaterale als prüfbare Evidenz speichern.
+- Polygon-IoU sowie winkel-, mittelpunkt- und größenbewusste Deduplizierung ergänzt.
+- Große Sammelboxen über mehreren Karten werden gezielt unterdrückt.
+- Teilüberlappte Karten bleiben konservative Einzelkandidaten; schwache Evidenz erzeugt keine erfundene Vollkarte.
+- Bestehender Binder-Pfad und normale Bounding-Box-Bearbeitung bleiben erhalten.
+- UI zeigt Szenentyp, Szenen-Confidence, Szenenkomplexität und den erkannten Winkel.
+- Schwierige Szenen werden ehrlich als möglicherweise unvollständig gemeldet.
+- Lokale Realfoto-Evaluation unterstützt Kategorien, Quadrilaterale und Verdeckungsangaben, ohne Benutzerfotos zu übernehmen.
+- Keine automatische Namens-, Print-, Preis-, Bestands-, Einkaufs- oder Physical-Card-Zuordnung.
+- SQLite-Schema bleibt 12; keine Datenbankmigration.

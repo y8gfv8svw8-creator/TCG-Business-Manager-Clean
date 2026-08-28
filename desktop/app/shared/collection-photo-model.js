@@ -9,6 +9,8 @@
   const REVIEW_VALUES = Object.freeze(['unreviewed', 'in_review', 'reviewed', 'rejected']);
   const OBSERVATION_SOURCE_VALUES = Object.freeze(['manual', 'automatic']);
   const DETECTION_REVIEW_VALUES = Object.freeze(['manual', 'suggested', 'confirmed', 'rejected']);
+  const SCENE_TYPE_VALUES = Object.freeze(['binder_grid', 'loose_cards', 'mixed_or_uncertain']);
+  const COMPLEXITY_VALUES = Object.freeze(['low', 'medium', 'high']);
 
   const text = value => String(value == null ? '' : value).trim();
   const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -41,6 +43,28 @@
     return Object.fromEntries(Object.entries(value).filter(([key, item]) => text(key) && (item == null || ['string', 'number', 'boolean'].includes(typeof item) || (Array.isArray(item) && item.every(entry => ['string', 'number', 'boolean'].includes(typeof entry))))));
   }
 
+  function normalizeSceneAnalysis(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const sceneType = text(value.sceneType).toLowerCase();
+    const sceneConfidence = normalizeConfidence(value.sceneConfidence);
+    const confidenceScore = finite(value.sceneConfidenceScore);
+    const complexity = value.sceneComplexity && typeof value.sceneComplexity === 'object' && !Array.isArray(value.sceneComplexity)
+      ? value.sceneComplexity : {};
+    const complexityLevel = text(complexity.level).toLowerCase();
+    const complexityScore = finite(complexity.score);
+    return {
+      sceneType: SCENE_TYPE_VALUES.includes(sceneType) ? sceneType : 'mixed_or_uncertain',
+      sceneConfidence: ['low', 'medium', 'high'].includes(sceneConfidence) ? sceneConfidence : 'low',
+      sceneConfidenceScore: confidenceScore === null ? 0 : Math.max(0, Math.min(1, round6(confidenceScore))),
+      sceneSignals: normalizeDetectionSignals(value.sceneSignals),
+      sceneComplexity: {
+        level: COMPLEXITY_VALUES.includes(complexityLevel) ? complexityLevel : 'low',
+        score: complexityScore === null ? 0 : Math.max(0, Math.min(1, round6(complexityScore))),
+        signals: Array.isArray(complexity.signals) ? complexity.signals.map(text).filter(Boolean) : []
+      }
+    };
+  }
+
   function normalizeBoundingBox(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const x = finite(value.x);
@@ -52,6 +76,20 @@
     if (x > 1 || y > 1 || width > 1 || height > 1) return null;
     if (x + width > 1.000001 || y + height > 1.000001) return null;
     return { x: round6(x), y: round6(y), width: round6(width), height: round6(height) };
+  }
+
+  function normalizeQuadrilateral(value) {
+    if (!Array.isArray(value) || value.length !== 4) return null;
+    const points = value.map(point => ({ x: finite(point?.x), y: finite(point?.y) }));
+    if (points.some(point => point.x === null || point.y === null || point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1)) return null;
+    let signedArea = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      signedArea += current.x * next.y - next.x * current.y;
+    }
+    if (Math.abs(signedArea / 2) <= 0.000001) return null;
+    return points.map(point => ({ x: round6(point.x), y: round6(point.y) }));
   }
 
   function normalizeNameCandidate(candidate, index = 0) {
@@ -104,6 +142,7 @@
       width: Math.max(0, Math.round(Number(photo?.width || 0))),
       height: Math.max(0, Math.round(Number(photo?.height || 0))),
       sha256: text(photo?.sha256).toLowerCase(),
+      sceneAnalysis: normalizeSceneAnalysis(photo?.sceneAnalysis),
       createdAt: text(photo?.createdAt)
     };
     for (const forbidden of ['dataUrl', 'bytesBase64', 'base64', 'imageData', 'imageDataUrl', 'bytes']) delete normalized[forbidden];
@@ -125,6 +164,7 @@
       analysisId: text(analysisId || observation?.analysisId),
       photoId: text(observation?.photoId),
       boundingBox: normalizeBoundingBox(observation?.boundingBox),
+      quadrilateral: observationSource === 'automatic' ? normalizeQuadrilateral(observation?.quadrilateral) : null,
       observationSource,
       detectionConfidence: observationSource === 'automatic' ? normalizeConfidence(observation?.detectionConfidence) : 'unknown',
       detectionScore: observationSource === 'automatic' && detectionScore !== null ? Math.max(0, Math.min(1, round6(detectionScore))) : null,
@@ -211,6 +251,7 @@
         analysisId: text(options.analysisId),
         photoId: targetPhotoId,
         boundingBox,
+        quadrilateral: normalizeQuadrilateral(detection?.quadrilateral),
         row: text(detection?.row),
         column: text(detection?.column),
         observationSource: 'automatic',
@@ -283,6 +324,8 @@
     normalizeDetectionReviewState,
     normalizeDetectionSignals,
     normalizeBoundingBox,
+    normalizeQuadrilateral,
+    normalizeSceneAnalysis,
     normalizeNameCandidate,
     normalizePrintCandidate,
     normalizePhoto,

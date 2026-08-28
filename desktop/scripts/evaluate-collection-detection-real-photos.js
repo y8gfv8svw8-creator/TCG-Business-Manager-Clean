@@ -1,4 +1,4 @@
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -10,7 +10,7 @@ const port = 9400 + (process.pid % 300);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function parseArguments(argv) {
-  const values = { split: 'all', detectionsOnly: false, debugCandidates: false };
+  const values = { split: 'all', detectionsOnly: false, debugCandidates: false, maxDimension: 480 };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--images') values.images = argv[++index];
@@ -18,7 +18,9 @@ function parseArguments(argv) {
     else if (token === '--split') values.split = argv[++index];
     else if (token === '--output') values.output = argv[++index];
     else if (token === '--baseline') values.baseline = argv[++index];
+    else if (token === '--detector-git-ref') values.detectorGitRef = String(argv[++index] || '').trim();
     else if (token === '--sha256-prefix') values.sha256Prefix = String(argv[++index] || '').toLowerCase();
+    else if (token === '--max-dimension') values.maxDimension = Math.max(320, Math.min(1200, Number(argv[++index] || 480)));
     else if (token === '--debug-candidates') values.debugCandidates = true;
     else if (token === '--detections-only') values.detectionsOnly = true;
     else throw new Error(`Unbekannter Parameter: ${token}`);
@@ -56,8 +58,9 @@ function readGroundTruth(filePath) {
     const sha256 = String(row.sha256 || '').toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Jeder Ground-Truth-Eintrag braucht einen vollständigen SHA-256.');
     if (!['development', 'holdout'].includes(row.split)) throw new Error(`Ungültiger Split für ${sha256.slice(0, 12)}.`);
-    if (!Array.isArray(row.boxes)) throw new Error(`Bounding Boxes fehlen für ${sha256.slice(0, 12)}.`);
-    rows.set(sha256, { ...row, sha256 });
+    const annotations = Array.isArray(row.annotations) ? row.annotations : Array.isArray(row.boxes) ? row.boxes : null;
+    if (!annotations) throw new Error(`Karten-Annotationen fehlen für ${sha256.slice(0, 12)}.`);
+    rows.set(sha256, { ...row, sha256, annotations, category: String(row.category || 'Uncategorized') });
   });
   return rows;
 }
@@ -100,9 +103,10 @@ function aggregate(rows) {
     result.iouSum += metrics.meanIoU * metrics.matches.length;
     result.coverageSum += metrics.meanCoverage * metrics.matches.length;
     result.areaRatioSum += metrics.meanAreaRatio * metrics.matches.length;
+    if (metrics.meanPolygonIoU !== null) { result.polygonIouSum += metrics.meanPolygonIoU * metrics.polygonMatchCount;result.polygonMatches += metrics.polygonMatchCount; }
     result.matches += metrics.matches.length;
     return result;
-  }, { images: 0, expectedCards: 0, detectedCards: 0, truePositives: 0, falsePositives: 0, falseNegatives: 0, innerCropDetections: 0, iouSum: 0, coverageSum: 0, areaRatioSum: 0, matches: 0 });
+  }, { images: 0, expectedCards: 0, detectedCards: 0, truePositives: 0, falsePositives: 0, falseNegatives: 0, innerCropDetections: 0, iouSum: 0, coverageSum: 0, areaRatioSum: 0, polygonIouSum: 0, polygonMatches: 0, matches: 0 });
   const precision = totals.detectedCards ? totals.truePositives / totals.detectedCards : totals.expectedCards ? 0 : 1;
   const recall = totals.expectedCards ? totals.truePositives / totals.expectedCards : totals.detectedCards ? 0 : 1;
   return {
@@ -118,7 +122,9 @@ function aggregate(rows) {
     f1: precision + recall ? 2 * precision * recall / (precision + recall) : 0,
     meanIoU: totals.matches ? totals.iouSum / totals.matches : 0,
     meanCoverage: totals.matches ? totals.coverageSum / totals.matches : 0,
-    meanAreaRatio: totals.matches ? totals.areaRatioSum / totals.matches : 0
+    meanAreaRatio: totals.matches ? totals.areaRatioSum / totals.matches : 0,
+    meanPolygonIoU: totals.polygonMatches ? totals.polygonIouSum / totals.polygonMatches : null,
+    polygonMatchCount: totals.polygonMatches
   };
 }
 
@@ -145,18 +151,25 @@ async function main() {
   try {
     const page = await waitForPage();
     await delay(1500);
+    if (args.detectorGitRef) {
+      const detectorSource = execFileSync('git', ['show', `${args.detectorGitRef}:desktop/app/shared/scanner-image-processing.js`], {
+        cwd: path.resolve(root, '..'), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024
+      });
+      const replaced = await evaluate(page.webSocketDebuggerUrl, `(async()=>{const currentEvaluation=window.TcgScannerImageProcessing?.evaluateCollectionDetections;(0,eval)(${JSON.stringify(detectorSource)});window.__tcgCurrentCollectionEvaluation=currentEvaluation;return Boolean(window.TcgScannerImageProcessing?.detectCollectionCardsFromDataUrl&&window.__tcgCurrentCollectionEvaluation);})()`);
+      if (!replaced) throw new Error(`Detection-Code aus Git-Stand ${args.detectorGitRef} konnte nicht geladen werden.`);
+    }
     const rows = [];
     for (const image of selected) {
       const mimeType = path.extname(image.fileName).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg';
       const dataUrl = `data:${mimeType};base64,${image.bytes.toString('base64')}`;
       const truth = groundTruth.get(image.sha256);
       const result = await evaluate(page.webSocketDebuggerUrl, `(async()=>{
-        const detection=await TcgScannerImageProcessing.detectCollectionCardsFromDataUrl(${JSON.stringify(dataUrl)},{debugCandidates:${args.detectionsOnly || args.debugCandidates ? 'true' : 'false'}});
-        const expected=${JSON.stringify(truth?.boxes || [])};
-        const metrics=TcgScannerImageProcessing.evaluateCollectionDetections(expected,detection.detections,{iouThreshold:.45,minimumCoverage:.72,strictOuterBoxes:true});
-        return {detections:detection.detections,photoQuality:detection.photoQuality,parameters:detection.parameters,imageWidth:detection.imageWidth,imageHeight:detection.imageHeight,metrics};
+        const detection=await TcgScannerImageProcessing.detectCollectionCardsFromDataUrl(${JSON.stringify(dataUrl)},{debugCandidates:${args.detectionsOnly || args.debugCandidates ? 'true' : 'false'},maxDimension:${args.maxDimension}});
+        const expected=${JSON.stringify(truth?.annotations || [])};
+        const metrics=(window.__tcgCurrentCollectionEvaluation||TcgScannerImageProcessing.evaluateCollectionDetections)(expected,detection.detections,{iouThreshold:.45,minimumCoverage:.72,maximumAreaRatio:1.60,strictOuterBoxes:true});
+        return {detections:detection.detections,photoQuality:detection.photoQuality,sceneAnalysis:detection.sceneAnalysis,parameters:detection.parameters,imageWidth:detection.imageWidth,imageHeight:detection.imageHeight,metrics};
       })()`);
-      rows.push({ sha256: image.sha256, split: truth?.split || '', expectedBoxes: truth?.boxes || [], ...result });
+      rows.push({ sha256: image.sha256, split: truth?.split || '', category: truth?.category || 'Uncategorized', expectedAnnotations: truth?.annotations || [], ...result });
     }
     const report = {
       formatVersion: 1,
@@ -165,12 +178,14 @@ async function main() {
       uniqueSourceImages: images.length,
       selectedSplit: args.split,
       detectionsOnly: args.detectionsOnly,
+      detectorGitRef: args.detectorGitRef || '',
       summary: args.detectionsOnly ? null : aggregate(rows),
+      summaryByCategory: args.detectionsOnly ? null : Object.fromEntries([...new Set(rows.map(row => row.category))].sort().map(category => [category, aggregate(rows.filter(row => row.category === category))])),
       images: rows
     };
     if (args.baseline && report.summary) {
       const baseline = JSON.parse(fs.readFileSync(path.resolve(args.baseline), 'utf8'));
-      report.comparisonToBaseline = Object.fromEntries(['precision', 'recall', 'f1', 'meanIoU', 'meanCoverage', 'meanAreaRatio'].map(key => [key, report.summary[key] - Number(baseline.summary?.[key] || 0)]));
+      report.comparisonToBaseline = Object.fromEntries(['precision', 'recall', 'f1', 'meanIoU', 'meanCoverage', 'meanAreaRatio', 'meanPolygonIoU'].map(key => [key, report.summary[key] == null ? null : report.summary[key] - Number(baseline.summary?.[key] || 0)]));
     }
     const serialized = `${JSON.stringify(report, null, 2)}\n`;
     if (args.output) fs.writeFileSync(path.resolve(args.output), serialized, 'utf8');

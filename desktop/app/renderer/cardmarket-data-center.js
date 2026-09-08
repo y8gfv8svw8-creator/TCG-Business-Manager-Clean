@@ -1449,7 +1449,7 @@
       if (!metacardId) continue;
       if (!byMetacard.has(metacardId)) byMetacard.set(metacardId,{
         metacardId,externalIds:new Set(),englishNames:new Set(),germanNames:new Set(),
-        englishAliases:new Set(),germanAliases:new Set(),ambiguous:false
+        englishAliases:new Set(),germanAliases:new Set(),passcodes:new Set(),ambiguous:false
       });
       const target = byMetacard.get(metacardId);
       const englishName = cmExtractIdentity(product.officialBaseName || product.officialName || product.name || "").baseName;
@@ -1463,6 +1463,8 @@
       const ygoCandidates = [...new Set(exactYgoCandidates.length ? exactYgoCandidates : (ygoByEnglishKey.get(`c:${englishCompactKey}`) || []))];
       const uniqueYgoIds = new Set(ygoCandidates.map(row => String(row?.id || "")).filter(Boolean));
       const ygoCard = uniqueYgoIds.size === 1 ? ygoCandidates[0] : null;
+      const passcode=String(ygoCard?.id||"").trim();
+      if(/^\d{8}$/.test(passcode))target.passcodes.add(passcode);
       const resourceIds = cmLocalizedNameIds(resourceEnglish,englishKey,englishCompactKey);
       let externalId = cmYgoKonamiId(ygoCard || {});
       if (!externalId && resourceIds.size === 1) externalId = [...resourceIds][0];
@@ -1485,6 +1487,7 @@
 
     const mappings = [];
     const aliases = [];
+    const passcodes = [];
     let unmatchedMetacardCount = 0;
     let ambiguousMetacardCount = 0;
     for (const target of byMetacard.values()) {
@@ -1507,9 +1510,10 @@
       });
       for (const alias of target.englishAliases) if (alias) aliases.push({metacardId:target.metacardId,language:"en",alias});
       for (const alias of target.germanAliases) if (alias) aliases.push({metacardId:target.metacardId,language:"de",alias});
+      for (const passcode of target.passcodes) passcodes.push({metacardId:target.metacardId,passcode});
     }
     return {
-      mappings,aliases,
+      mappings,aliases,passcodes,
       status:{
         englishNameCount:resourceEnglish.count,
         germanNameCount:resourceGerman.count,
@@ -1844,6 +1848,7 @@
     await cmWriteRows("germanAliases",germanAliasRows,(done,total)=>cmSetProgress(`<strong>Zweisprachiger Suchindex wird aufgebaut …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Kartenaliasen`,75+done/Math.max(1,total)*10));
     await cmSyncProductsToSqlite(updated,(done,total)=>cmSetProgress(`<strong>Deutsche Kartennamen werden in SQLite aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,85+done/Math.max(1,total)*15));
     const sqliteCatalog = cmBuildSqliteNameCatalog(updated,englishRows,germanRows,resources?.english,resources?.german);
+    state.cardNamePasscodes=sqliteCatalog.passcodes.map(row=>({...row}));
     const germanMetacards = new Set(sqliteCatalog.mappings.filter(row => row.nameDe).map(row => String(row.metacardId)));
     matched = updated.reduce((count,product) => count + (germanMetacards.has(String(product.metacardId || "")) ? 1 : 0),0);
     unchanged = Math.max(0,updated.length-matched);
@@ -2215,7 +2220,7 @@
       cmGetAll("germanAliases"),
       window.desktopApp?.getCardNameBackup ? window.desktopApp.getCardNameBackup() : null
     ]);
-    const payload = {format:"tcg-cardmarket-data-v2",createdAt:new Date().toISOString(),metadata:state.cardmarket,products,latestPrices,priceHistory,germanAliases,cardNames};
+    const payload = {format:"tcg-cardmarket-data-v2",createdAt:new Date().toISOString(),metadata:state.cardmarket,products,latestPrices,priceHistory,germanAliases,cardNames:{...(cardNames||{}),passcodes:(state.cardNamePasscodes||[]).map(row=>({...row}))}};
     const blob = new Blob([JSON.stringify(payload)],{type:"application/json"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
@@ -2246,6 +2251,7 @@
         replaceAliases:true
       });
     }
+    state.cardNamePasscodes=Array.isArray(payload.cardNames?.passcodes)?payload.cardNames.passcodes.map(row=>({metacardId:String(row?.metacardId||""),passcode:String(row?.passcode||"")})).filter(row=>/^\d+$/.test(row.metacardId)&&/^\d{8}$/.test(row.passcode)):[];
     if(window.desktopApp?.upsertMarketPrices) await cmSyncPricesToSqlite(payload.priceHistory,String(payload.metadata?.priceDate||""),new Date().toISOString(),(done,total)=>cmSetProgress(`<strong>SQLite-Preishistorie wird wiederhergestellt …</strong><br>${done.toLocaleString("de-DE")} / ${total.toLocaleString("de-DE")}`,88+done/Math.max(1,total)*12));
     state.cardmarket={...CM_META_DEFAULTS,...(payload.metadata||{}),productCount:payload.products.length,priceRowCount:(payload.latestPrices||[]).length,historyRowCount:payload.priceHistory.length};
     state.imports.push({id:uid(),type:"cardmarketBackup",key:`cm-backup-${Date.now()}`,file:source,date:new Date().toISOString(),rows:payload.priceHistory.length,cards:payload.products.length});
@@ -2261,6 +2267,7 @@
     await Promise.all([cmClearStore("products"),cmClearStore("latestPrices"),cmClearStore("priceHistory"),cmClearStore("germanAliases")]);
     if(window.desktopApp?.clearMarketData) await window.desktopApp.clearMarketData();
     state.cardmarket={...CM_META_DEFAULTS};
+    state.cardNamePasscodes=[];
     state.imports=state.imports.filter(record=>!["catalog","prices","cardmarketBackup"].includes(record.type));
     cmInvalidateCache();
     saveState();renderAll();

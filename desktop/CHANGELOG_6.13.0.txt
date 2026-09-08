@@ -1,0 +1,15 @@
+TCG Business Manager 6.13.0 – Vorsichtige automatische Kartennamenerkennung
+
+- Erkennt die Metakarte aus vorhandenen Kartenflächen mit lokaler deutscher und englischer OCR.
+- Mehrere relative Namensbereiche, lokale Kontrast-/Schwellwertvarianten und vorsichtige adaptive Entzerrung tolerieren Reflexionen und leicht ungenaue Kartenboxen besser.
+- Typische allgemeine OCR-Abweichungen, kurze Randartefakte sowie Umlaute, Apostrophe und Bindestriche werden beim zweisprachigen Kandidatenvergleich berücksichtigt.
+- Candidate Retrieval bewahrt mehrere plausible Metakarten, sodass Top-3 einen messbaren Nutzen gegenüber Top-1 hat.
+- Kartenpasscodes können einen Metakarten-Kandidaten unterstützen; sie bestätigen niemals einen konkreten Print.
+- Leichte Artwork-Fingerprints kombinieren dHash, Farbhistogramm und Helligkeitsraster. Artwork bleibt ein unterstützendes Signal und kann allein keine hohe Sicherheit erzeugen.
+- OCR, Passcode, Artwork, Alias-Konsistenz und Kandidatenabstand werden vorsichtig fusioniert; widersprüchliche Signale senken die Sicherheit sichtbar.
+- Unlesbare Fotos dürfen weiterhin ehrlich als unbekannt enden. Bestätigte Namen werden bei Stapelprüfungen nicht überschrieben.
+- Die technische Begründung zeigt OCR-, Passcode-, Artwork- und Konfliktsignale einklappbar an.
+- Keine automatische Auswahl von Cardmarket-Produkt-ID, Print, Rarität, Edition, Sprache, Preis, Einkauf, Bestand oder physischer Kartenidentität.
+- Kein Webzugriff zur Laufzeit erforderlich; Referenzen und Tesseract laufen lokal und werden wiederverwendet.
+- Realfoto-Evaluation: Development 83,33 % Top-1 / 91,67 % Top-3; Holdout 75,00 % Top-1 / 75,00 % Top-3; insgesamt 79,17 % Top-1 / 83,33 % Top-3 bei 0 % falsch-sicheren Treffern.
+- SQLite-Schema bleibt 12; keine Datenbankmigration.

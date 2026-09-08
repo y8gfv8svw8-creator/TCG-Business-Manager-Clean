@@ -9,7 +9,8 @@ const DATA_URL_PATTERN = /^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=\s
 const PASS_CONFIG = Object.freeze({
   title: { mode: PSM.SINGLE_LINE, whitelist: '' },
   setCode: { mode: PSM.SINGLE_LINE, whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-' },
-  footer: { mode: PSM.SINGLE_LINE, whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ' }
+  footer: { mode: PSM.SINGLE_LINE, whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ' },
+  passcode: { mode: PSM.SPARSE_TEXT, whitelist: '0123456789OIL' }
 });
 
 function imageBuffer(dataUrl) {
@@ -18,9 +19,10 @@ function imageBuffer(dataUrl) {
 }
 
 class CardScannerRecognizer {
-  constructor({ cacheRoot, logger = () => {} } = {}) {
+  constructor({ cacheRoot, logger = () => {}, workerFactory = createWorker } = {}) {
     this.cacheRoot = path.resolve(cacheRoot || path.join(process.cwd(), '.ocr-cache'));
     this.logger = logger;
+    this.workerFactory = workerFactory;
     this.workerPromise = null;
     this.queue = Promise.resolve();
   }
@@ -38,7 +40,7 @@ class CardScannerRecognizer {
   async worker() {
     if (!this.workerPromise) {
       this.prepareLanguageData();
-      this.workerPromise = createWorker(['eng', 'deu'], OEM.LSTM_ONLY, {
+      this.workerPromise = this.workerFactory(['eng', 'deu'], OEM.LSTM_ONLY, {
         langPath: this.cacheRoot,
         cachePath: this.cacheRoot,
         cacheMethod: 'readOnly',
@@ -65,14 +67,16 @@ class CardScannerRecognizer {
       const startedAt = Date.now();
       const worker = await this.worker();
       const passResults = [];
-      const passes = Array.isArray(payload.passes) ? payload.passes.slice(0, 12) : [];
+      const passes = Array.isArray(payload.passes) ? payload.passes.slice(0, 20) : [];
       for (const pass of passes) {
         const config = PASS_CONFIG[pass?.kind];
         const buffer = config ? imageBuffer(pass?.imageDataUrl) : null;
         if (!config || !buffer) continue;
         try {
           await worker.setParameters({
-            tessedit_pageseg_mode: config.mode,
+            tessedit_pageseg_mode: pass?.segmentation === 'sparse' && (pass.kind === 'title' || pass.kind === 'passcode')
+              ? PSM.SPARSE_TEXT
+              : pass?.segmentation === 'raw-line' && pass.kind === 'title' ? PSM.RAW_LINE : config.mode,
             preserve_interword_spaces: '1',
             tessedit_char_whitelist: config.whitelist
           });
@@ -90,7 +94,7 @@ class CardScannerRecognizer {
 
       const titleTexts = passResults.filter(row => row.kind === 'title' && row.text).map(row => row.text);
       const setCodeTexts = passResults.filter(row => row.kind === 'setCode' && row.text).map(row => row.text);
-      const footerTexts = passResults.filter(row => row.kind === 'footer' && row.text).map(row => row.text);
+      const footerTexts = passResults.filter(row => (row.kind === 'footer' || row.kind === 'passcode') && row.text).map(row => row.text);
       let fullText = '';
       let fullConfidence = 0;
       const targetedSetCodes = setCodeTexts.flatMap(ScannerRecognition.extractSetCodes);

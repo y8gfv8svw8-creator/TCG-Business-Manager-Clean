@@ -97,6 +97,8 @@
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
     const name = text(candidate.name || candidate.germanName || candidate.englishName);
     if (!name) return null;
+    const score = finite(candidate.score);
+    const ocrConfidence = finite(candidate.ocrConfidence);
     return {
       id: text(candidate.id) || `name-candidate-${index}`,
       name,
@@ -105,7 +107,26 @@
       metacardId: text(candidate.metacardId),
       source: text(candidate.source) || 'manual',
       signal: text(candidate.signal),
-      confidence: normalizeConfidence(candidate.confidence)
+      confidence: normalizeConfidence(candidate.confidence),
+      score: score === null ? null : Math.max(0, Math.min(1, round6(score))),
+      matchedAlias: text(candidate.matchedAlias),
+      matchedLanguage: text(candidate.matchedLanguage).toLowerCase(),
+      ocrText: text(candidate.ocrText),
+      ocrConfidence: ocrConfidence === null ? null : Math.max(0, Math.min(100, Math.round(ocrConfidence * 10) / 10)),
+      supportCount: Math.max(0, Math.round(Number(candidate.supportCount || 0))),
+      setCodeMatched: Boolean(candidate.setCodeMatched),
+      passcodeMatched: Boolean(candidate.passcodeMatched),
+      matchedPasscode: text(candidate.matchedPasscode),
+      artworkSimilarity: Math.max(0, Math.min(1, Number(candidate.artworkSimilarity || 0))),
+      signalConflict: Boolean(candidate.signalConflict),
+      signalScores: candidate.signalScores && typeof candidate.signalScores === 'object'
+        ? {
+            ocr: Math.max(0, Math.min(1, Number(candidate.signalScores.ocr || 0))),
+            passcode: Math.max(0, Math.min(1, Number(candidate.signalScores.passcode || 0))),
+            artwork: Math.max(0, Math.min(1, Number(candidate.signalScores.artwork || 0)))
+          }
+        : {},
+      reasonCodes: Array.isArray(candidate.reasonCodes) ? candidate.reasonCodes.map(text).filter(Boolean) : []
     };
   }
 
@@ -181,6 +202,16 @@
       recognitionSignals: Array.isArray(observation?.recognitionSignals)
         ? observation.recognitionSignals.map(text).filter(Boolean)
         : [],
+      nameRecognition: observation?.nameRecognition && typeof observation.nameRecognition === 'object'
+        ? {
+            ...observation.nameRecognition,
+            passcodes: Array.isArray(observation.nameRecognition.passcodes) ? observation.nameRecognition.passcodes.map(text).filter(Boolean) : [],
+            artworkFingerprints: Array.isArray(observation.nameRecognition.artworkFingerprints)
+              ? observation.nameRecognition.artworkFingerprints.filter(row => row && typeof row === 'object').map(row => ({ ...row }))
+              : [],
+            conflicts: Array.isArray(observation.nameRecognition.conflicts) ? observation.nameRecognition.conflicts.map(text).filter(Boolean) : []
+          }
+        : undefined,
       economicRelevant: Boolean(observation?.economicRelevant),
       detailPhotoRequired: Boolean(observation?.detailPhotoRequired),
       reviewStatus: normalizeReviewStatus(observation?.reviewStatus),

@@ -49,6 +49,7 @@ const defaultState = {
   capitalEntries: [],
   scannerMappings: [],
   scannerHistory: [],
+  cardNamePasscodes: [],
   sync: {autoFolder:true, autoPrices:true, lastPriceUpdate:"", processedFiles:{}, pendingFiles:[]},
   partnerExclusions: {sellers: [], customers: []},
   productCatalog: structuredClone(BUILTIN_PRODUCT_CATALOG)
@@ -479,6 +480,7 @@ function migrateState(data) {
   migrated.capitalEntries = Array.isArray(data.capitalEntries) ? data.capitalEntries : [];
   migrated.scannerMappings = Array.isArray(data.scannerMappings) ? data.scannerMappings : [];
   migrated.scannerHistory = Array.isArray(data.scannerHistory) ? data.scannerHistory.slice(-200) : [];
+  migrated.cardNamePasscodes = (Array.isArray(data.cardNamePasscodes) ? data.cardNamePasscodes : []).map(row=>({metacardId:String(row?.metacardId||""),passcode:String(row?.passcode||"")})).filter(row=>/^\d+$/.test(row.metacardId)&&/^\d{8}$/.test(row.passcode));
   migrated.sellers = (Array.isArray(data.sellers) ? data.sellers : []).map(s=>normalizePartnerRecord(s,"seller"));
   migrated.customers = (Array.isArray(data.customers) ? data.customers : []).map(c=>normalizePartnerRecord(c,"customer"));
   migrated.imports = Array.isArray(data.imports) ? data.imports : [];
@@ -3183,6 +3185,8 @@ let collectionObservationPrintSearchSequence=0;
 let collectionObservationNameSearchProducts=new Map();
 let collectionObservationPrintSearchProducts=new Map();
 const collectionPhotoDataUrls=new Map();
+let collectionNameRecognitionBatchToken=0;
+const collectionNameRecognitionRunningIds=new Set();
 
 function activeCollectionAnalysis(){
   return (state.collectionPurchaseAnalyses||[]).find(row=>row.id===state.activeCollectionAnalysisId)||null;
@@ -3229,6 +3233,17 @@ function collectionObservationLabel(observation,index){
 }
 
 function collectionDetectionConfidenceLabel(value){return ({high:"Hoch",medium:"Mittel",low:"Niedrig",unknown:"Unbekannt"})[value]||"Unbekannt";}
+function collectionNameConfidenceLabel(value){return ({high:"Hoch",medium:"Mittel",low:"Niedrig",unknown:"Unbekannt",confirmed:"Manuell bestätigt"})[value]||"Unbekannt";}
+function collectionNameCandidateContext(candidate={}){
+  if(candidate.source!=="automatic_ocr")return "Manuell aus dem Kartenkatalog hinzugefügt";
+  const details=[];
+  if(candidate.ocrText)details.push(`${candidate.matchedLanguage==="de"?"Deutscher":candidate.matchedLanguage==="en"?"Englischer":"Zweisprachiger"} OCR-Treffer „${candidate.ocrText}“${candidate.matchedAlias?` → „${candidate.matchedAlias}“`:""}`);
+  if(candidate.passcodeMatched)details.push(`Karten-ID ${candidate.matchedPasscode||"erkannt"} stimmt überein`);
+  if(Number(candidate.artworkSimilarity||0)>=.58)details.push(`Artwork ${Math.round(Number(candidate.artworkSimilarity)*100)} % ähnlich`);
+  if(Number(candidate.supportCount||0)>1)details.push("mehrere OCR-Varianten stimmen überein");
+  if(candidate.signalConflict)details.push("Konflikt zwischen Erkennungssignalen – bitte manuell prüfen");
+  return `${candidate.score==null?collectionNameConfidenceLabel(candidate.confidence):`${Math.round(Number(candidate.score)*100)} %`} · ${details.join(" · ")||"unsicherer Namenskandidat"}`;
+}
 function collectionQualityWarningLabel(value){return ({very_dark:"Foto ist sehr dunkel",overexposed:"Foto ist stark überbelichtet",low_contrast:"Sehr geringer Kontrast",possibly_blurred:"Foto möglicherweise unscharf",image_too_small:"Bild ist für eine zuverlässige Erkennung zu klein"})[value]||value;}
 function collectionSceneTypeLabel(value){return ({binder_grid:"Binder-Raster",loose_cards:"Lose Karten",mixed_or_uncertain:"Gemischt oder nicht eindeutig"})[value]||"Nicht eindeutig";}
 function collectionSceneComplexityLabel(value){return ({low:"Niedrig",medium:"Mittel",high:"Hoch"})[value]||"Niedrig";}
@@ -3258,7 +3273,11 @@ function renderCollectionObservationEditor(analysis,observation){
   document.getElementById("collectionObservationSignals").value=(observation.recognitionSignals||[]).join("\n");
   document.getElementById("collectionObservationEconomicRelevant").checked=Boolean(observation.economicRelevant);
   document.getElementById("collectionObservationDetailRequired").checked=Boolean(observation.detailPhotoRequired);
-  document.getElementById("collectionObservationNameCandidates").innerHTML=(observation.nameCandidates||[]).length?(observation.nameCandidates||[]).map(candidate=>`<div class="collection-candidate-row"><span><strong>${escapeHtml(candidate.name)}</strong>${candidate.englishName?`<small>Englisch: ${escapeHtml(candidate.englishName)}</small>`:""}</span><span class="collection-candidate-actions"><button type="button" class="secondary" data-select-observation-name="${escapeHtml(candidate.id)}">Auswählen</button><button type="button" class="icon-button danger-text" data-remove-observation-name="${escapeHtml(candidate.id)}">×</button></span></div>`).join(""):'<div class="muted">Noch kein Namenskandidat gespeichert.</div>';
+  const nameRecognition=observation.nameRecognition||{},automaticNameCandidates=(observation.nameCandidates||[]).filter(candidate=>candidate.source==="automatic_ocr");
+  const recognitionButton=document.getElementById("recognizeCollectionObservationNameBtn"),discardRecognition=document.getElementById("discardCollectionObservationNameRecognitionBtn"),recognitionStatus=document.getElementById("collectionObservationNameRecognitionStatus");
+  recognitionButton.textContent=collectionNameRecognitionRunningIds.has(observation.id)?"Name wird geprüft …":nameRecognition.lastRunAt?"Namensprüfung erneut ausführen":"Kartennamen aus Fläche erkennen";recognitionButton.disabled=collectionNameRecognitionRunningIds.has(observation.id);discardRecognition.hidden=!automaticNameCandidates.length&&!nameRecognition.lastRunAt;
+  recognitionStatus.innerHTML=nameRecognition.lastRunAt?`Letzte OCR-Prüfung: ${escapeHtml(new Date(nameRecognition.lastRunAt).toLocaleString("de-DE"))} · Sicherheit ${escapeHtml(collectionNameConfidenceLabel(observation.nameConfidence))} · ${Math.round(Number(nameRecognition.confidenceScore||0)*100)} %${nameRecognition.durationMs?` · ${Math.round(Number(nameRecognition.durationMs))} ms`:""}<br><small>${escapeHtml(nameRecognition.message||"Die Vorschläge sind nicht bestätigt. Bitte einen Namen bewusst bestätigen.")}</small>`:"Noch keine automatische Namensprüfung ausgeführt.";
+  document.getElementById("collectionObservationNameCandidates").innerHTML=(observation.nameCandidates||[]).length?(observation.nameCandidates||[]).map(candidate=>{const confirmed=observation.nameConfidence==="confirmed"&&normalizeCardName(observation.selectedName)===normalizeCardName(candidate.name);return `<div class="collection-candidate-row ${confirmed?"selected":""}"><span><strong>${escapeHtml(candidate.name)}</strong>${candidate.englishName&&normalizeCardName(candidate.englishName)!==normalizeCardName(candidate.name)?`<small>Englisch: ${escapeHtml(candidate.englishName)}</small>`:""}<small>${escapeHtml(collectionNameCandidateContext(candidate))}</small></span><span class="collection-candidate-actions"><button type="button" class="secondary" data-select-observation-name="${escapeHtml(candidate.id)}">${confirmed?"Bestätigt":"Diesen Namen bestätigen"}</button><button type="button" class="icon-button danger-text" data-remove-observation-name="${escapeHtml(candidate.id)}">×</button></span></div>`;}).join(""):'<div class="muted">Noch kein Namenskandidat gespeichert.</div>';
   document.getElementById("collectionObservationPrintCandidates").innerHTML=(observation.printCandidates||[]).length?(observation.printCandidates||[]).map(candidate=>`<div class="collection-candidate-row"><span><strong>${escapeHtml(candidate.name||`CM ${candidate.productId}`)}</strong><small>${escapeHtml([candidate.setName,candidate.collectorNumber,candidate.rarity].filter(Boolean).join(" · ")||"Druckdaten unvollständig")} · CM ${escapeHtml(candidate.productId)}</small></span><span class="collection-candidate-actions"><button type="button" class="secondary" data-confirm-observation-print="${escapeHtml(candidate.id)}">Diesen Print bestätigen</button><button type="button" class="icon-button danger-text" data-remove-observation-print="${escapeHtml(candidate.id)}">×</button></span></div>`).join(""):'<div class="muted">Noch kein Print-Kandidat gespeichert.</div>';
   const physicalSelect=document.getElementById("collectionObservationPhysicalCard");
   physicalSelect.innerHTML=`<option value="">Noch nicht verknüpft</option>${(analysis.physicalCards||[]).map((card,index)=>`<option value="${escapeHtml(card.id)}" ${card.id===observation.physicalCardId?"selected":""}>${escapeHtml(card.label||`Physische Karte ${index+1}`)}${card.productId?` · CM ${escapeHtml(card.productId)}`:""}</option>`).join("")}`;
@@ -3322,6 +3341,74 @@ async function detectActiveCollectionPhoto(){
     alert(`${merged.added.length} neue Kartenfläche(n) als prüfbare Vorschläge angelegt.${merged.skipped?` ${merged.skipped} bereits vorhandene oder ignorierte Fläche(n) wurden nicht doppelt angelegt.`:""}${qualityWarnings?" Bitte zusätzlich die Hinweise zur Bildqualität beachten.":""}`);
   }catch(error){console.error("Sammlungsfoto-Erkennung fehlgeschlagen:",error);alert(`Kartenflächen konnten nicht erkannt werden: ${error.message}`);}
   finally{button.disabled=false;button.textContent=originalLabel;}
+}
+
+function mergeAutomaticCollectionNameCandidates(observation,candidates=[]){
+  const selectedKey=normalizeCardName(observation.selectedName||"");
+  const preserved=(observation.nameCandidates||[]).filter(candidate=>candidate.source!=="automatic_ocr"||(observation.nameConfidence==="confirmed"&&normalizeCardName(candidate.name)===selectedKey));
+  const merged=[];
+  for(const candidate of [...candidates,...preserved]){
+    const key=String(candidate.metacardId||"").trim()||normalizeCardName(candidate.name||"");
+    if(!key||merged.some(row=>(String(row.metacardId||"").trim()||normalizeCardName(row.name||""))===key))continue;
+    merged.push(candidate);
+  }
+  observation.nameCandidates=merged;
+}
+
+async function recognizeCollectionObservationName(analysis,photo,observation,{dataUrl="",render=true,persist=true}={}){
+  if(!analysis||!photo||!observation)return null;
+  if(!window.TcgScannerImageProcessing?.prepareCollectionObservationRecognitionPayload||!window.desktopApp?.recognizeCollectionCardName)throw new Error("Die automatische Namensprüfung ist in dieser Installation nicht verfügbar.");
+  if(collectionNameRecognitionRunningIds.has(observation.id))return null;
+  collectionNameRecognitionRunningIds.add(observation.id);if(render)renderCollectionPhotoEvidence(analysis);
+  try{
+    const sourceDataUrl=dataUrl||await loadCollectionPhotoData(photo);if(!sourceDataUrl)throw new Error("Das Sammlungsfoto konnte nicht geladen werden.");
+    const prepared=await window.TcgScannerImageProcessing.prepareCollectionObservationRecognitionPayload(sourceDataUrl,observation);
+    const result=await window.desktopApp.recognizeCollectionCardName(prepared);
+    mergeAutomaticCollectionNameCandidates(observation,result.candidates||[]);
+    if(observation.nameConfidence!=="confirmed")observation.nameConfidence=result.nameConfidence||"unknown";
+    const ocr=result.ocr||{},readings=(ocr.titleReadings||[]).map(row=>String(row.text||"").trim()).filter(Boolean),setCodes=ocr.setCodes||[],passcodes=ocr.passcodes||[],artworkFingerprints=ocr.artworkFingerprints||[];
+    observation.recognitionSignals=(observation.recognitionSignals||[]).filter(signal=>! /^(?:OCR-(?:Name|Setcode)|Karten-ID|Artwork|Signalkonflikt):/i.test(signal));
+    if(readings.length)observation.recognitionSignals.push(`OCR-Name: ${[...new Set(readings)].slice(0,4).join(" | ")}`);
+    if(setCodes.length)observation.recognitionSignals.push(`OCR-Setcode: ${setCodes.join(" | ")} (nur unterstützendes Signal)`);
+    if(passcodes.length)observation.recognitionSignals.push(`Karten-ID: ${passcodes.join(" | ")} (bestimmt nur die Metakarte, keinen Print)`);
+    const artworkScore=Math.max(0,...(result.candidates||[]).map(candidate=>Number(candidate.artworkSimilarity||0)));
+    if(artworkScore>=.58)observation.recognitionSignals.push(`Artwork: bester Referenzvergleich ${Math.round(artworkScore*100)} % (nur unterstützendes Signal)`);
+    if(result.conflicts?.length)observation.recognitionSignals.push(`Signalkonflikt: ${result.conflicts.join(" | ")} – manuelle Prüfung erforderlich`);
+    const message=result.candidates?.length?`${result.candidates.length} prüfbare Namenskandidat(en). Kein Name wurde automatisch bestätigt.`:"Kein belastbarer Kartenname gefunden. Bitte Ausschnitt prüfen, manuell suchen oder ein Detailfoto verwenden.";
+    observation.nameRecognition={lastRunAt:new Date().toISOString(),engine:String(ocr.engine||"tesseract-local-regions"),durationMs:Number(ocr.durationMs||0),confidenceScore:Number(result.confidenceScore||0),margin:Number(result.margin||0),readings:(result.readings||[]).map(row=>({text:row.text,confidence:row.confidence,variant:row.variant})),setCodes:[...setCodes],passcodes:[...passcodes],artworkFingerprints:artworkFingerprints.map(row=>({...row})),conflicts:[...(result.conflicts||[])],message};
+    if(!result.candidates?.length&&observation.economicRelevant)observation.detailPhotoRequired=true;
+    observation.updatedAt=new Date().toISOString();if(persist)saveState();return result;
+  }finally{collectionNameRecognitionRunningIds.delete(observation.id);if(render)renderCollectionPhotoEvidence(analysis);}
+}
+
+async function recognizeActiveCollectionObservationName(){
+  const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis),observation=activeCollectionObservation(analysis);if(!analysis||!photo||!observation)return;
+  try{await recognizeCollectionObservationName(analysis,photo,observation);}
+  catch(error){console.error("Kartennamenerkennung fehlgeschlagen:",error);alert(`Kartenname konnte nicht geprüft werden: ${error.message}`);renderCollectionPhotoEvidence(analysis);}
+}
+
+async function recognizeActiveCollectionPhotoNames(){
+  const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);if(!analysis||!photo)return;
+  const observations=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.detectionReviewState!=="rejected"&&row.boundingBox);if(!observations.length){alert("Auf diesem Foto sind noch keine Kartenflächen markiert.");return;}
+  const dataUrl=await loadCollectionPhotoData(photo);if(!dataUrl){alert("Das Sammlungsfoto konnte nicht geladen werden.");return;}
+  const token=++collectionNameRecognitionBatchToken,progress=document.getElementById("collectionNameBatchProgress"),bar=document.getElementById("collectionNameBatchProgressBar"),label=document.getElementById("collectionNameBatchProgressLabel"),value=document.getElementById("collectionNameBatchProgressValue"),button=document.getElementById("recognizeCollectionPhotoNamesBtn");
+  progress.hidden=false;bar.max=observations.length;bar.value=0;value.textContent=`0 / ${observations.length}`;label.textContent="Kartennamen werden nacheinander geprüft …";button.disabled=true;
+  let completed=0,failed=0;
+  try{
+    for(const observation of observations){
+      if(token!==collectionNameRecognitionBatchToken)break;
+      activeCollectionObservationId=observation.id;label.textContent=`Prüfe ${observation.row&&observation.column?`Reihe ${observation.row}, Spalte ${observation.column}`:`Kartenfläche ${completed+1}`} …`;
+      try{await recognizeCollectionObservationName(analysis,photo,observation,{dataUrl,render:false,persist:false});}catch(error){failed+=1;observation.nameRecognition={lastRunAt:new Date().toISOString(),confidenceScore:0,message:`Prüfung fehlgeschlagen: ${error.message}`};observation.updatedAt=new Date().toISOString();}
+      completed+=1;bar.value=completed;value.textContent=`${completed} / ${observations.length}`;renderCollectionPhotoEvidence(analysis);await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    saveState();const cancelled=token!==collectionNameRecognitionBatchToken;label.textContent=cancelled?`Abgebrochen nach ${completed} von ${observations.length}.`:`Namensprüfung abgeschlossen${failed?` · ${failed} Fehler`:""}.`;
+  }finally{button.disabled=false;if(token===collectionNameRecognitionBatchToken)setTimeout(()=>{if(token===collectionNameRecognitionBatchToken)progress.hidden=true;},1800);}
+}
+
+function discardActiveCollectionNameRecognition(){
+  const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;
+  const selectedKey=normalizeCardName(observation.selectedName||"");observation.nameCandidates=(observation.nameCandidates||[]).filter(candidate=>candidate.source!=="automatic_ocr"||(observation.nameConfidence==="confirmed"&&normalizeCardName(candidate.name)===selectedKey));
+  if(observation.nameConfidence!=="confirmed")observation.nameConfidence="unknown";delete observation.nameRecognition;observation.recognitionSignals=(observation.recognitionSignals||[]).filter(signal=>! /^(?:OCR-(?:Name|Setcode)|Karten-ID|Artwork|Signalkonflikt):/i.test(signal));observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);
 }
 
 function createCollectionObservation(boundingBox){
@@ -6722,6 +6809,10 @@ document.getElementById("collectionPhotoInput").addEventListener("change",async 
 document.getElementById("collectionPhotoList").addEventListener("click",event=>{const button=event.target.closest("[data-select-collection-photo]");if(!button)return;activeCollectionPhotoId=button.dataset.selectCollectionPhoto;activeCollectionObservationId="";renderCollectionPhotoEvidence(activeCollectionAnalysis());});
 document.getElementById("deleteCollectionPhotoBtn").onclick=()=>deleteActiveCollectionPhoto().catch(error=>{console.error(error);alert(`Foto konnte nicht gelöscht werden: ${error.message}`);});
 document.getElementById("detectCollectionCardsBtn").onclick=()=>detectActiveCollectionPhoto();
+document.getElementById("recognizeCollectionPhotoNamesBtn").onclick=()=>recognizeActiveCollectionPhotoNames().catch(error=>{console.error(error);alert(`Kartennamen konnten nicht geprüft werden: ${error.message}`);});
+document.getElementById("cancelCollectionNameBatchBtn").onclick=()=>{collectionNameRecognitionBatchToken+=1;document.getElementById("collectionNameBatchProgressLabel").textContent="Namensprüfung wird nach der aktuellen Karte beendet …";};
+document.getElementById("recognizeCollectionObservationNameBtn").onclick=()=>recognizeActiveCollectionObservationName();
+document.getElementById("discardCollectionObservationNameRecognitionBtn").onclick=discardActiveCollectionNameRecognition;
 ["collectionPhotoSequence","collectionPhotoBinderPage"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);if(!photo)return;photo.sequence=Math.max(1,Math.round(Number(document.getElementById("collectionPhotoSequence").value||1)));photo.binderPage=document.getElementById("collectionPhotoBinderPage").value.trim();saveState();renderCollectionPhotoEvidence(analysis);}));
 
 let collectionPhotoPointerAction=null;
@@ -6753,7 +6844,7 @@ document.getElementById("collectionObservationPrintSearch").addEventListener("in
 document.getElementById("collectionPhotoWorkspace").addEventListener("click",event=>{
   const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;
   const addName=event.target.closest("[data-add-observation-name]");if(addName){const product=collectionObservationNameSearchProducts.get(addName.dataset.addObservationName);if(!product)return;const names=cardDisplayNames(product),candidate={id:uid(),name:names.primary,germanName:product.germanName||names.primary,englishName:product.englishName||"",metacardId:product.metacardId||"",source:"catalog_search",confidence:"unknown"};if(!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push(candidate);observation.selectedName=candidate.name;document.getElementById("collectionObservationNameSearch").value="";document.getElementById("collectionObservationNameResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
-  const selectName=event.target.closest("[data-select-observation-name]");if(selectName){const candidate=observation.nameCandidates.find(row=>row.id===selectName.dataset.selectObservationName);if(candidate)observation.selectedName=candidate.name;saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const selectName=event.target.closest("[data-select-observation-name]");if(selectName){const candidate=observation.nameCandidates.find(row=>row.id===selectName.dataset.selectObservationName);if(candidate){observation.selectedName=candidate.name;observation.nameConfidence="confirmed";candidate.confidence="confirmed";const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.name=candidate.name;physical.updatedAt=new Date().toISOString();}observation.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}
   const removeName=event.target.closest("[data-remove-observation-name]");if(removeName){const candidate=observation.nameCandidates.find(row=>row.id===removeName.dataset.removeObservationName);observation.nameCandidates=observation.nameCandidates.filter(row=>row.id!==removeName.dataset.removeObservationName);if(candidate&&observation.selectedName===candidate.name){observation.selectedName="";observation.nameConfidence="unknown";}saveState();renderCollectionPhotoEvidence(analysis);return;}
   const addPrint=event.target.closest("[data-add-observation-print]");if(addPrint){const product=collectionObservationPrintSearchProducts.get(addPrint.dataset.addObservationPrint);if(!product)return;const candidate={id:uid(),productId:cleanProductId(product.productId),name:cardDisplayNames(product).primary,germanName:product.germanName||"",englishName:product.englishName||"",setName:product.setName||product.set||"",collectorNumber:product.collectorNumber||product.setCode||"",rarity:product.rarity||product.variant||"",source:"manual_search",signals:[]};if(!observation.printCandidates.some(row=>row.productId===candidate.productId))observation.printCandidates.push(candidate);document.getElementById("collectionObservationPrintSearch").value="";document.getElementById("collectionObservationPrintResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
   const confirmPrint=event.target.closest("[data-confirm-observation-print]");if(confirmPrint){const candidate=observation.printCandidates.find(row=>row.id===confirmPrint.dataset.confirmObservationPrint);if(!candidate)return;observation.selectedProductId=candidate.productId;observation.printConfidence="confirmed";if(!observation.selectedName){observation.selectedName=candidate.name;if(candidate.name&&!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push({id:uid(),name:candidate.name,germanName:candidate.germanName||"",englishName:candidate.englishName||"",source:"confirmed_print",confidence:"unknown"});}const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=candidate.productId;physical.name=observation.selectedName||candidate.name;physical.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}

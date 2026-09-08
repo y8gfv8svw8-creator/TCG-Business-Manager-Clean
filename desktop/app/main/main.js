@@ -8,7 +8,7 @@ const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.12.4';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.0';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
@@ -70,6 +70,37 @@ function setupIpcHandlers() {
   ipcMain.handle('scanner:stop', () => scannerServer.stop());
   ipcMain.handle('scanner:status', () => scannerServer.status());
   ipcMain.handle('scanner:recognize-card', (_event, payload) => scannerRecognizer.recognize(payload));
+  ipcMain.handle('scanner:recognize-collection-card-name', async (_event, payload = {}) => {
+    const recognition = await scannerRecognizer.recognize(payload);
+    const titleReadings = (recognition.regionResults || [])
+      .filter(row => row.kind === 'title' && String(row.text || '').trim())
+      .map(row => ({ text: row.text, confidence: row.confidence, variant: row.variant }));
+    if (!titleReadings.length) {
+      for (const text of recognition.titleCandidates || []) {
+        titleReadings.push({ text, confidence: recognition.confidence, variant: 'full-text-fallback' });
+      }
+    }
+    const ranked = database.recognizeCardNames({
+      readings: titleReadings,
+      setCodes: recognition.setCodes || [],
+      passcodes: recognition.passcodes || [],
+      artworkFingerprints: payload.artworkFingerprints || [],
+      limit: payload?.candidateLimit || 5
+    });
+    return {
+      ...ranked,
+      ocr: {
+        engine: recognition.engine,
+        durationMs: recognition.durationMs,
+        confidence: recognition.confidence,
+        titleReadings,
+        setCodes: recognition.setCodes || [],
+        passcodes: recognition.passcodes || [],
+        artworkFingerprints: payload.artworkFingerprints || [],
+        regionResults: recognition.regionResults || []
+      }
+    };
+  });
 
   ipcMain.handle('data:load-state', () => database.loadState());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));

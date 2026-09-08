@@ -2,6 +2,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
+const scannerRecognition = require('../shared/scanner-recognition');
 const businessAutomation = require('../shared/business-automation');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
@@ -210,6 +211,7 @@ class TcgDatabase {
     this.backupRoot = backupRoot;
     this.photoStore = photoStore;
     this.db = null;
+    this.cardNameRecognitionIndex = null;
   }
 
   open() {
@@ -513,6 +515,7 @@ class TcgDatabase {
     if (!this.db) return;
     this.db.close();
     this.db = null;
+    this.cardNameRecognitionIndex = null;
   }
 
   ensureSnapshotSummaries() {
@@ -662,6 +665,7 @@ class TcgDatabase {
         state?.settings?.backupRetentionDays
       );
     }
+    this.cardNameRecognitionIndex = null;
     return {
       ok: true,
       updatedAt,
@@ -1987,6 +1991,7 @@ class TcgDatabase {
       throw error;
     }
 
+    this.cardNameRecognitionIndex = null;
     return { written };
   }
 
@@ -2144,7 +2149,89 @@ class TcgDatabase {
       throw error;
     }
 
+    this.cardNameRecognitionIndex = null;
     return { mappingsWritten, aliasesWritten, metacardsTouched: touchedMetacards.length };
+  }
+
+  getCardNameRecognitionIndex() {
+    this.open();
+    if (this.cardNameRecognitionIndex) return this.cardNameRecognitionIndex;
+    const rows = this.db.prepare(`
+      SELECT m.metacard_id AS metacardId, m.name_de AS germanName, m.name_en AS englishName
+      FROM card_name_mappings m
+      WHERE EXISTS (SELECT 1 FROM products p WHERE p.metacard_id = m.metacard_id)
+      ORDER BY CAST(m.metacard_id AS INTEGER)
+    `).all();
+    const byId = new Map(rows.map(row => [String(row.metacardId), { ...row, aliases: [], setCodes: [], passcodes: [], artworkFingerprints: [] }]));
+    for (const row of this.db.prepare(`
+      SELECT metacard_id AS metacardId, language, alias FROM card_aliases
+      ORDER BY metacard_id, language, alias
+    `).iterate()) {
+      const entry = byId.get(String(row.metacardId));
+      if (!entry) continue;
+      entry.aliases.push({ language: row.language, alias: row.alias });
+      if (String(row.language || '').toLowerCase() === 'passcode') {
+        const passcode = scannerRecognition.normalizePasscode(row.alias);
+        if (passcode && !entry.passcodes.includes(passcode)) entry.passcodes.push(passcode);
+      }
+    }
+    for (const row of this.db.prepare(`
+      SELECT DISTINCT metacard_id AS metacardId, set_code AS setCode, collector_number AS collectorNumber
+      FROM products WHERE NULLIF(metacard_id, '') IS NOT NULL
+    `).iterate()) {
+      const entry = byId.get(String(row.metacardId));
+      if (!entry) continue;
+      for (const value of [row.setCode, row.collectorNumber]) {
+        const normalized = scannerRecognition.normalizeSetCode(value);
+        if (normalized && !entry.setCodes.includes(normalized)) entry.setCodes.push(normalized);
+      }
+    }
+    const state = this.loadState().state || {};
+    const productToMetacard = new Map(this.db.prepare(`
+      SELECT product_id AS productId, metacard_id AS metacardId
+      FROM products WHERE NULLIF(metacard_id, '') IS NOT NULL
+    `).all().map(row => [String(row.productId), String(row.metacardId)]));
+    const addReference = (metacardId, passcode, fingerprints = []) => {
+      const entry = byId.get(String(metacardId || ''));
+      if (!entry) return;
+      const normalizedPasscode = scannerRecognition.normalizePasscode(passcode);
+      if (normalizedPasscode && !entry.passcodes.includes(normalizedPasscode)) entry.passcodes.push(normalizedPasscode);
+      for (const fingerprint of Array.isArray(fingerprints) ? fingerprints : []) {
+        if (!fingerprint || typeof fingerprint !== 'object') continue;
+        const key = JSON.stringify(fingerprint);
+        if (!entry.artworkFingerprints.some(value => JSON.stringify(value) === key)) entry.artworkFingerprints.push(fingerprint);
+      }
+    };
+    for (const row of Array.isArray(state.cardNamePasscodes) ? state.cardNamePasscodes : []) {
+      addReference(row.metacardId, row.passcode);
+    }
+    for (const mapping of Array.isArray(state.scannerMappings) ? state.scannerMappings : []) {
+      const metacardId = mapping.metacardId || productToMetacard.get(String(mapping.productId || ''));
+      const legacyFingerprint = mapping.fingerprint ? [{ version: 'legacy-dhash', dHash: String(mapping.fingerprint) }] : [];
+      addReference(metacardId, mapping.passcode || mapping.cardPasscode, [
+        ...legacyFingerprint,
+        ...(Array.isArray(mapping.artworkFingerprints) ? mapping.artworkFingerprints : [])
+      ]);
+    }
+    for (const analysis of Array.isArray(state.collectionPurchaseAnalyses) ? state.collectionPurchaseAnalyses : []) {
+      for (const observation of Array.isArray(analysis.photoObservations) ? analysis.photoObservations : []) {
+        if (String(observation.nameConfidence || '') !== 'confirmed') continue;
+        const selectedName = scannerRecognition.compact(observation.selectedName || '');
+        const candidate = (Array.isArray(observation.nameCandidates) ? observation.nameCandidates : []).find(row =>
+          scannerRecognition.compact(row?.name || row?.germanName || row?.englishName || '') === selectedName
+        );
+        const metacardId = candidate?.metacardId || productToMetacard.get(String(observation.selectedProductId || ''));
+        addReference(metacardId, observation.nameRecognition?.passcodes?.[0], observation.nameRecognition?.artworkFingerprints);
+      }
+    }
+    this.cardNameRecognitionIndex = [...byId.values()];
+    return this.cardNameRecognitionIndex;
+  }
+
+  recognizeCardNames({ readings = [], setCodes = [], passcodes = [], artworkFingerprints = [], limit = 5 } = {}) {
+    return scannerRecognition.rankNameCandidates(this.getCardNameRecognitionIndex(), readings, {
+      setCodes, passcodes, artworkFingerprints, limit
+    });
   }
 
   getCardNameStatus() {
@@ -2791,6 +2878,7 @@ class TcgDatabase {
       this.db.exec('ROLLBACK;');
       throw error;
     }
+    this.cardNameRecognitionIndex = null;
     return { ok: true };
   }
 

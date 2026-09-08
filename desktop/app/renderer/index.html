@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.12.4</title>
+  <title>TCG Business Manager 6.13.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.12.4 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.13.0 · SQLite</div>
         </div>
       </div>
 
@@ -587,7 +587,13 @@
                 <label>Bildnummer<input id="collectionPhotoSequence" type="number" min="1" step="1" /></label>
                 <label>Binder-Seite (optional)<input id="collectionPhotoBinderPage" placeholder="z. B. Seite 4" /></label>
                 <button id="detectCollectionCardsBtn" class="primary" type="button">Karten automatisch erkennen</button>
+                <button id="recognizeCollectionPhotoNamesBtn" class="secondary" type="button">Namen im Bild erkennen</button>
                 <button id="deleteCollectionPhotoBtn" class="danger" type="button">Foto löschen</button>
+              </div>
+              <div id="collectionNameBatchProgress" class="collection-name-batch-progress" hidden>
+                <div><strong id="collectionNameBatchProgressLabel">Kartennamen werden geprüft …</strong><span id="collectionNameBatchProgressValue">0 / 0</span></div>
+                <progress id="collectionNameBatchProgressBar" max="1" value="0"></progress>
+                <button id="cancelCollectionNameBatchBtn" class="secondary" type="button">Abbrechen</button>
               </div>
               <div id="collectionPhotoDetectionStatus" class="collection-detection-status muted">Noch keine automatische Flächenerkennung für dieses Foto ausgeführt.</div>
               <div id="collectionPhotoQuality" class="collection-photo-quality" hidden></div>
@@ -611,6 +617,11 @@
                   <label>Spalte<input id="collectionObservationColumn" placeholder="optional" /></label>
                 </div>
                 <hr />
+                <div class="collection-name-recognition-actions">
+                  <button id="recognizeCollectionObservationNameBtn" class="primary" type="button">Kartennamen aus Fläche erkennen</button>
+                  <button id="discardCollectionObservationNameRecognitionBtn" class="secondary" type="button" hidden>OCR-Vorschläge verwerfen</button>
+                </div>
+                <div id="collectionObservationNameRecognitionStatus" class="collection-name-recognition-status muted">Noch keine automatische Namensprüfung ausgeführt.</div>
                 <label>Kartenname suchen<input id="collectionObservationNameSearch" placeholder="Deutsch oder Englisch …" autocomplete="off" /></label>
                 <div id="collectionObservationNameResults" class="collection-candidate-results"></div>
                 <div id="collectionObservationNameCandidates" class="collection-candidate-list"></div>

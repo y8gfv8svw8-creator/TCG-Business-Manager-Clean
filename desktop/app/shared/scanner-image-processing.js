@@ -7,10 +7,15 @@
 
   const CARD_ASPECT = 0.68;
   const REGION_LAYOUTS = Object.freeze({
-    title: { x: 0.035, y: 0.050, width: 0.82, height: 0.075, targetHeight: 220 },
+    title: { x: 0.025, y: 0.050, width: 0.91, height: 0.145, targetHeight: 220 },
+    titleHigh: { x: 0.020, y: 0.005, width: 0.92, height: 0.145, targetHeight: 220 },
+    titleLower: { x: 0.020, y: 0.105, width: 0.92, height: 0.145, targetHeight: 220 },
+    titleWide: { x: 0.010, y: 0.020, width: 0.96, height: 0.300, targetHeight: 260 },
     setCode: { x: 0.664, y: 0.6614, width: 0.222, height: 0.0369, targetHeight: 100 },
     footer: { x: 0.014, y: 0.920, width: 0.359, height: 0.037, targetHeight: 100 },
-    artwork: { x: 0.10, y: 0.18, width: 0.80, height: 0.48, targetHeight: 420 }
+    passcode: { x: 0.012, y: 0.862, width: 0.62, height: 0.118, targetHeight: 180 },
+    artwork: { x: 0.10, y: 0.18, width: 0.80, height: 0.48, targetHeight: 420 },
+    artworkWide: { x: 0.065, y: 0.145, width: 0.87, height: 0.545, targetHeight: 420 }
   });
 
   const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
@@ -1785,7 +1790,7 @@
       const red = pixels.data[offset];
       const green = pixels.data[offset + 1];
       const blue = pixels.data[offset + 2];
-      const value = channel === "red" ? red : channel === "blue" ? blue : Math.round(red * 0.299 + green * 0.587 + blue * 0.114);
+      const value = channel === "red" ? red : channel === "green" ? green : channel === "blue" ? blue : Math.round(red * 0.299 + green * 0.587 + blue * 0.114);
       values[index] = value;
       histogram[value] += 1;
     }
@@ -1812,6 +1817,319 @@
     const context = canvas.getContext("2d");
     context.drawImage(image, rect.left, rect.top, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/jpeg", 0.82);
+  }
+
+  function observationCorners(observation, imageWidth, imageHeight) {
+    const quadrilateral = normalizedQuadrilateral(observation?.quadrilateral);
+    if (quadrilateral) return quadrilateral.map(point => ({ x: point.x * imageWidth, y: point.y * imageHeight }));
+    const box = normalizedBoundingBox(observation?.boundingBox || observation);
+    if (!box) return [];
+    let left = box.x * imageWidth;
+    let top = box.y * imageHeight;
+    let width = box.width * imageWidth;
+    let height = box.height * imageHeight;
+    const aspect = width / Math.max(1, height);
+    if (aspect > CARD_ASPECT * 1.08) {
+      const expectedHeight = Math.min(imageHeight, width / CARD_ASPECT);
+      if (box.y + box.height >= 0.90) top = Math.max(0, top + height - expectedHeight);
+      else if (box.y <= 0.10) top = 0;
+      else top = Math.max(0, top - (expectedHeight - height) / 2);
+      height = Math.min(expectedHeight, imageHeight - top);
+    } else if (aspect < CARD_ASPECT * 0.90) {
+      const expectedWidth = Math.min(imageWidth, height * CARD_ASPECT);
+      if (box.x + box.width >= 0.90) left = Math.max(0, left + width - expectedWidth);
+      else if (box.x <= 0.10) left = 0;
+      else left = Math.max(0, left - (expectedWidth - width) / 2);
+      width = Math.min(expectedWidth, imageWidth - left);
+    }
+    return axisAlignedCorners({ left, top, width, height });
+  }
+
+  function orientedCardPoint(u, v, orientation) {
+    if (orientation === 180) return { u: 1 - u, v: 1 - v };
+    if (orientation === 90) return { u: 1 - v, v: u };
+    if (orientation === 270) return { u: v, v: 1 - u };
+    return { u, v };
+  }
+
+  function quadrilateralPoint(corners, u, v) {
+    const [topLeft, topRight, bottomRight, bottomLeft] = corners;
+    return {
+      x: (1 - u) * (1 - v) * topLeft.x + u * (1 - v) * topRight.x + u * v * bottomRight.x + (1 - u) * v * bottomLeft.x,
+      y: (1 - u) * (1 - v) * topLeft.y + u * (1 - v) * topRight.y + u * v * bottomRight.y + (1 - u) * v * bottomLeft.y
+    };
+  }
+
+  function sampleObservationRegion(source, corners, kind, orientation = 0) {
+    const layout = REGION_LAYOUTS[kind] || REGION_LAYOUTS.title;
+    const distance = (left, right) => Math.hypot(right.x - left.x, right.y - left.y);
+    const cardWidth = (distance(corners[0], corners[1]) + distance(corners[3], corners[2])) / 2;
+    const cardHeight = (distance(corners[0], corners[3]) + distance(corners[1], corners[2])) / 2;
+    const aspect = clamp(cardWidth / Math.max(1, cardHeight), 0.50, 0.88);
+    const isTitleRegion = kind.startsWith("title");
+    const targetHeight = Number(layout.targetHeight || (isTitleRegion ? 180 : 96));
+    const targetWidth = clamp(Math.round(targetHeight * layout.width * aspect / Math.max(0.001, layout.height)), 140, isTitleRegion ? 1500 : 700);
+    const values = new Uint8ClampedArray(targetWidth * targetHeight * 4);
+    for (let y = 0; y < targetHeight; y += 1) {
+      for (let x = 0; x < targetWidth; x += 1) {
+        const baseU = layout.x + ((x + 0.5) / targetWidth) * layout.width;
+        const baseV = layout.y + ((y + 0.5) / targetHeight) * layout.height;
+        const oriented = orientedCardPoint(baseU, baseV, orientation);
+        const point = quadrilateralPoint(corners, oriented.u, oriented.v);
+        const sourceX = clamp(point.x, 0, source.width - 1);
+        const sourceY = clamp(point.y, 0, source.height - 1);
+        const left = Math.floor(sourceX);
+        const top = Math.floor(sourceY);
+        const right = Math.min(source.width - 1, left + 1);
+        const bottom = Math.min(source.height - 1, top + 1);
+        const mixX = sourceX - left;
+        const mixY = sourceY - top;
+        const offsets = [
+          (top * source.width + left) * 4,
+          (top * source.width + right) * 4,
+          (bottom * source.width + left) * 4,
+          (bottom * source.width + right) * 4
+        ];
+        const targetOffset = (y * targetWidth + x) * 4;
+        for (let channel = 0; channel < 3; channel += 1) {
+          const topValue = source.data[offsets[0] + channel] * (1 - mixX) + source.data[offsets[1] + channel] * mixX;
+          const bottomValue = source.data[offsets[2] + channel] * (1 - mixX) + source.data[offsets[3] + channel] * mixX;
+          values[targetOffset + channel] = Math.round(topValue * (1 - mixY) + bottomValue * mixY);
+        }
+        values[targetOffset + 3] = 255;
+      }
+    }
+    return { width: targetWidth, height: targetHeight, data: values };
+  }
+
+  function regionVariantCanvas(region, channel = "luma", thresholded = false, inverted = false) {
+    const canvas = document.createElement("canvas");
+    canvas.width = region.width;
+    canvas.height = region.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const pixels = context.createImageData(region.width, region.height);
+    const histogram = new Uint32Array(256);
+    const values = new Uint8Array(region.width * region.height);
+    for (let index = 0; index < values.length; index += 1) {
+      const offset = index * 4;
+      const red = region.data[offset];
+      const green = region.data[offset + 1];
+      const blue = region.data[offset + 2];
+      const value = channel === "red" ? red : channel === "green" ? green : channel === "blue" ? blue : Math.round(red * 0.299 + green * 0.587 + blue * 0.114);
+      values[index] = value;
+      histogram[value] += 1;
+    }
+    const low = percentile(histogram, values.length, 0.02);
+    const high = Math.max(low + 12, percentile(histogram, values.length, 0.98));
+    const threshold = low + (high - low) * 0.56;
+    for (let index = 0; index < values.length; index += 1) {
+      let normalized = clamp(Math.round((values[index] - low) * 255 / (high - low)), 0, 255);
+      if (thresholded) {
+        const bright = values[index] >= threshold;
+        normalized = (inverted ? !bright : bright) ? 255 : 0;
+      }
+      const offset = index * 4;
+      pixels.data[offset] = normalized;
+      pixels.data[offset + 1] = normalized;
+      pixels.data[offset + 2] = normalized;
+      pixels.data[offset + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    return canvas;
+  }
+
+  function regionVariantDataUrl(region, channel = "luma", thresholded = false, inverted = false) {
+    return regionVariantCanvas(region, channel, thresholded, inverted).toDataURL("image/png");
+  }
+
+  function estimateHorizontalSkew(region) {
+    const width = region.width;
+    const height = region.height;
+    if (width < 80 || height < 40) return 0;
+    const values = new Float32Array(width * height);
+    for (let index = 0; index < values.length; index += 1) {
+      const offset = index * 4;
+      values[index] = region.data[offset] * 0.299 + region.data[offset + 1] * 0.587 + region.data[offset + 2] * 0.114;
+    }
+    const gradient = new Float32Array(width * height);
+    for (let y = 1; y < height - 1; y += 1) for (let x = 0; x < width; x += 1) {
+      gradient[y * width + x] = Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x]);
+    }
+    let best = { degrees: 0, score: 0 };
+    const centerX = (width - 1) / 2;
+    for (let degrees = -12; degrees <= 12; degrees += 2) {
+      const slope = Math.tan(degrees * Math.PI / 180);
+      let strongest = 0;
+      for (let baseY = Math.round(height * 0.08); baseY <= Math.round(height * 0.72); baseY += 2) {
+        let total = 0;
+        let count = 0;
+        for (let x = 2; x < width - 2; x += 3) {
+          const y = Math.round(baseY + slope * (x - centerX));
+          if (y <= 1 || y >= height - 2) continue;
+          total += gradient[y * width + x];
+          count += 1;
+        }
+        if (count >= width / 9) strongest = Math.max(strongest, total / count);
+      }
+      if (strongest > best.score) best = { degrees, score: strongest };
+    }
+    return Math.abs(best.degrees) >= 2 ? best.degrees : 0;
+  }
+
+  function deskewedRegionDataUrl(region, channel = "luma") {
+    const source = regionVariantCanvas(region, channel);
+    const degrees = estimateHorizontalSkew(region);
+    if (!degrees) return source.toDataURL("image/png");
+    const radians = -degrees * Math.PI / 180;
+    const cosine = Math.abs(Math.cos(radians));
+    const sine = Math.abs(Math.sin(radians));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(source.width * cosine + source.height * sine);
+    canvas.height = Math.ceil(source.width * sine + source.height * cosine);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "white";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(radians);
+    context.drawImage(source, -source.width / 2, -source.height / 2);
+    return canvas.toDataURL("image/png");
+  }
+
+  function regionLocalContrastDataUrl(region, channel = "luma") {
+    const width = region.width;
+    const height = region.height;
+    const values = new Float32Array(width * height);
+    const integral = new Float64Array((width + 1) * (height + 1));
+    for (let y = 0; y < height; y += 1) {
+      let rowSum = 0;
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        const red = region.data[offset];
+        const green = region.data[offset + 1];
+        const blue = region.data[offset + 2];
+        const value = channel === "red" ? red : channel === "green" ? green : channel === "blue" ? blue : red * 0.299 + green * 0.587 + blue * 0.114;
+        values[y * width + x] = value;
+        rowSum += value;
+        integral[(y + 1) * (width + 1) + x + 1] = integral[y * (width + 1) + x + 1] + rowSum;
+      }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const pixels = context.createImageData(width, height);
+    const radius = Math.max(5, Math.round(Math.min(width, height) * 0.055));
+    for (let y = 0; y < height; y += 1) {
+      const top = Math.max(0, y - radius);
+      const bottom = Math.min(height, y + radius + 1);
+      for (let x = 0; x < width; x += 1) {
+        const left = Math.max(0, x - radius);
+        const right = Math.min(width, x + radius + 1);
+        const sum = integral[bottom * (width + 1) + right] - integral[top * (width + 1) + right]
+          - integral[bottom * (width + 1) + left] + integral[top * (width + 1) + left];
+        const mean = sum / Math.max(1, (right - left) * (bottom - top));
+        const normalized = clamp(Math.round(128 + (values[y * width + x] - mean) * 2.4), 0, 255);
+        const offset = (y * width + x) * 4;
+        pixels.data[offset] = normalized;
+        pixels.data[offset + 1] = normalized;
+        pixels.data[offset + 2] = normalized;
+        pixels.data[offset + 3] = 255;
+      }
+    }
+    context.putImageData(pixels, 0, 0);
+    return canvas.toDataURL("image/png");
+  }
+
+  function sampledLuma(region, targetWidth, targetHeight) {
+    const values = [];
+    for (let y = 0; y < targetHeight; y += 1) {
+      for (let x = 0; x < targetWidth; x += 1) {
+        const sourceX = clamp(Math.floor((x + 0.5) * region.width / targetWidth), 0, region.width - 1);
+        const sourceY = clamp(Math.floor((y + 0.5) * region.height / targetHeight), 0, region.height - 1);
+        const offset = (sourceY * region.width + sourceX) * 4;
+        values.push(Math.round(region.data[offset] * 0.299 + region.data[offset + 1] * 0.587 + region.data[offset + 2] * 0.114));
+      }
+    }
+    return values;
+  }
+
+  function artworkFingerprint(region, variant = "artwork") {
+    const differenceGrid = sampledLuma(region, 9, 8);
+    let bits = "";
+    for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) {
+      bits += differenceGrid[y * 9 + x] > differenceGrid[y * 9 + x + 1] ? "1" : "0";
+    }
+    const histogram = new Array(64).fill(0);
+    const stride = Math.max(1, Math.floor(Math.sqrt(region.width * region.height / 18000)));
+    let samples = 0;
+    for (let y = 0; y < region.height; y += stride) for (let x = 0; x < region.width; x += stride) {
+      const offset = (y * region.width + x) * 4;
+      const red = Math.min(3, Math.floor(region.data[offset] / 64));
+      const green = Math.min(3, Math.floor(region.data[offset + 1] / 64));
+      const blue = Math.min(3, Math.floor(region.data[offset + 2] / 64));
+      histogram[red * 16 + green * 4 + blue] += 1;
+      samples += 1;
+    }
+    const grid = sampledLuma(region, 8, 8);
+    const mean = grid.reduce((sum, value) => sum + value, 0) / Math.max(1, grid.length);
+    const deviation = Math.sqrt(grid.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, grid.length)) || 1;
+    return {
+      version: "art-v1",
+      variant,
+      dHash: bits.match(/.{1,4}/g).map(group => parseInt(group, 2).toString(16)).join(""),
+      histogram: histogram.map(value => Math.round(value / Math.max(1, samples) * 10000) / 10000),
+      lumaGrid: grid.map(value => Math.round((value - mean) / deviation * 1000) / 1000)
+    };
+  }
+
+  async function prepareCollectionObservationRecognitionPayload(imageDataUrl, observation = {}) {
+    const image = await loadImage(imageDataUrl);
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = image.naturalWidth;
+    sourceCanvas.height = image.naturalHeight;
+    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    sourceContext.drawImage(image, 0, 0);
+    const source = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+    const corners = observationCorners(observation, source.width, source.height);
+    if (corners.length !== 4) throw new Error("Für diese Kartenbeobachtung fehlt ein gültiger Bildausschnitt.");
+    const box = normalizedBoundingBox(observation?.boundingBox || observation);
+    const hasPerspectiveGeometry = Boolean(normalizedQuadrilateral(observation?.quadrilateral));
+    const boxAspect = box ? (box.width * source.width) / Math.max(1, box.height * source.height) : CARD_ASPECT;
+    const rotation = Math.abs(Number(observation?.rotation || observation?.detectionSignals?.rotationDegrees || 0)) % 180;
+    const probablySideways = !hasPerspectiveGeometry && (boxAspect > 1.05 || (rotation >= 55 && rotation <= 125));
+    const orientations = probablySideways ? [90, 270] : [0, 180];
+    const passes = [];
+    for (const orientation of orientations) {
+      const title = sampleObservationRegion(source, corners, "title", orientation);
+      passes.push({ kind: "title", variant: `observation-${orientation}-luma`, segmentation: "raw-line", imageDataUrl: regionVariantDataUrl(title, "luma") });
+      passes.push({ kind: "title", variant: `observation-${orientation}-sparse-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(title, "luma") });
+      passes.push({ kind: "title", variant: `observation-${orientation}-sparse-threshold`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(title, "luma", true) });
+      const titleHigh = sampleObservationRegion(source, corners, "titleHigh", orientation);
+      passes.push({ kind: "title", variant: `observation-${orientation}-high-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleHigh, "luma") });
+      const titleLower = sampleObservationRegion(source, corners, "titleLower", orientation);
+      passes.push({ kind: "title", variant: `observation-${orientation}-lower-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleLower, "luma") });
+      const titleWide = sampleObservationRegion(source, corners, "titleWide", orientation);
+      passes.push({ kind: "title", variant: `observation-${orientation}-wide-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleWide, "luma") });
+      passes.push({ kind: "title", variant: `observation-${orientation}-wide-threshold`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleWide, "luma", true) });
+      passes.push({ kind: "title", variant: `observation-${orientation}-wide-deskew`, segmentation: "sparse", imageDataUrl: deskewedRegionDataUrl(titleWide, "luma") });
+      const setCode = sampleObservationRegion(source, corners, "setCode", orientation);
+      passes.push({ kind: "setCode", variant: `observation-${orientation}-luma`, imageDataUrl: regionVariantDataUrl(setCode, "luma", true) });
+      const passcode = sampleObservationRegion(source, corners, "passcode", orientation);
+      passes.push({ kind: "passcode", variant: `observation-${orientation}-local-contrast`, segmentation: "sparse", imageDataUrl: regionLocalContrastDataUrl(passcode) });
+    }
+    const artworkFingerprints = ["artwork", "artworkWide"].map(kind => artworkFingerprint(sampleObservationRegion(source, corners, kind, orientations[0]), kind));
+    return {
+      imageDataUrl: passes[0]?.imageDataUrl || imageDataUrl,
+      passes: passes.slice(0, 20),
+      candidateLimit: 5,
+      artworkFingerprints,
+      cropInfo: {
+        sourceWidth: source.width,
+        sourceHeight: source.height,
+        perspectiveCorrected: hasPerspectiveGeometry,
+        orientations
+      }
+    };
   }
 
   async function prepareRecognitionPayload(imageDataUrl) {
@@ -1858,6 +2176,8 @@
     detectCollectionCardsFromDataUrl,
     evaluateCollectionDetections,
     regionRect,
+    artworkFingerprint,
+    prepareCollectionObservationRecognitionPayload,
     prepareRecognitionPayload
   });
 });

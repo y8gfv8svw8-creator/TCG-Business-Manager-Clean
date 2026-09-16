@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const recognition = require('../app/shared/scanner-recognition');
 const photoModel = require('../app/shared/collection-photo-model');
+const imageProcessing = require('../app/shared/scanner-image-processing');
 const { CardScannerRecognizer } = require('../app/main/card-scanner-recognizer');
 const { TcgDatabase } = require('../app/main/database');
 
@@ -33,6 +34,20 @@ function sandboxDatabase(t) {
   t.after(() => { database.close();fs.rmSync(root, { recursive: true, force: true }); });
   return database;
 }
+
+test('Mehrkartenbox im Binder wird vor der Namens-OCR als unbekannt gestoppt', async () => {
+  const result = await imageProcessing.prepareCollectionObservationRecognitionPayload('kein-bild-noetig', {
+    observationSource: 'automatic',
+    boundingBox: { x: .05, y: .05, width: .62, height: .72 },
+    detectionConfidence: 'low',
+    detectionSignals: { multiCardBoxLikely: true }
+  });
+  assert.equal(result.skipRecognition, true);
+  assert.equal(result.skipReason, 'binder_multi_card_region');
+  assert.deepEqual(result.passes, []);
+  assert.deepEqual(result.artworkFingerprints, []);
+  assert.match(result.message, /Kartenfläche prüfen/);
+});
 
 test('englischer OCR-Name liefert den kanonischen zweisprachigen Top-1-Kandidaten', () => {
   const result = recognition.rankNameCandidates(sampleEntries, [

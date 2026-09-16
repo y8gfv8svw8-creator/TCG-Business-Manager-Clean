@@ -1,0 +1,10 @@
+TCG Business Manager 6.13.1 – Dynamische Mehrkartenbox-Erkennung
+
+- Die typische lokale Kartengröße und -orientierung wird aus räumlich getrennten, plausiblen Einzelkarten des jeweiligen Fotos abgeleitet.
+- Geometrisch unplausible Großboxen mit mehreren enthaltenen Kartenstrukturen werden erkannt und verworfen.
+- Reihen und Spalten bleiben ein dynamisch aus dem Foto abgeleitetes Zusatzsignal; es wird keine feste Raster- oder Kartenanzahl vorausgesetzt.
+- Fehlende Einzelkarten in einem ansonsten belegten Binderlayout werden nur dann ergänzt, wenn an der dynamisch abgeleiteten Position eigene plausible Außenkanten messbar sind.
+- Verworfene Mehrkartenbereiche erhalten höchstens niedrige Detection-Confidence und niemals 100 Prozent.
+- Die Namens-OCR analysiert erkannte Mehrkartenbereiche nicht; der Status bleibt unknown mit dem Hinweis „Kartenfläche prüfen“.
+- Bestehende Bindererkennung und die Erkennung loser Karten bleiben erhalten.
+- Keine Print-Erkennung, keine Datenbankmigration und keine Schemaänderung; Schema bleibt 12.

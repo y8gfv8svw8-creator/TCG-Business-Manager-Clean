@@ -137,6 +137,108 @@ test('nutzt eine regelmäßige 3x3-Anordnung nur als Zusatzsignal', () => {
   assert.ok(result.detections.filter(row => row.row && row.column).length >= 7);
 });
 
+test('3x3-Binder verwirft vier große Mehrkartenrahmen und behält einzelne Rasterzellen', () => {
+  const target = image(900, 900, [52, 55, 60]);
+  for (let row = 0; row < 3; row += 1) for (let column = 0; column < 3; column += 1) {
+    paintCard(target, { x: 72 + column * 274, y: 38 + row * 282, width: 170, height: 250 }, {
+      border: 5,
+      borderColor: [92, 94, 98],
+      bodyColor: [169, 119, 88]
+    });
+  }
+  // Reflektierende Binderstege beziehungsweise Seitenrahmen können vier
+  // kartenförmige Großbereiche vortäuschen, obwohl in jedem davon weitere
+  // vollständige horizontale und vertikale Kartengrenzen sichtbar sind.
+  const falseGroupFrames = [
+    { x: 34, y: 18, width: 354, height: 520 },
+    { x: 496, y: 18, width: 354, height: 520 },
+    { x: 34, y: 362, width: 354, height: 520 },
+    { x: 496, y: 362, width: 354, height: 520 }
+  ];
+  falseGroupFrames.forEach(box => {
+    paintOutline(target, box, [225, 225, 218], 5);
+    paintOutline(target, { x: Math.round(box.x + box.width / 2) - 2, y: box.y, width: 4, height: box.height }, [225, 225, 218], 4);
+    paintOutline(target, { x: box.x, y: Math.round(box.y + box.height / 2) - 2, width: box.width, height: 4 }, [225, 225, 218], 4);
+  });
+  const result = detect(target, { maxDimension: 480 });
+  const cardCenters = target.boxes.map(box => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }));
+  const coveredCenters = detection => cardCenters.filter(center => center.x >= detection.boundingBox.x
+    && center.x <= detection.boundingBox.x + detection.boundingBox.width
+    && center.y >= detection.boundingBox.y
+    && center.y <= detection.boundingBox.y + detection.boundingBox.height).length;
+  assert.ok(result.detections.every(row => coveredCenters(row) <= 1), JSON.stringify(result.detections));
+  assert.ok(result.detections.every(row => !row.detectionSignals.multiCardBoxLikely));
+  assert.ok(result.parameters.rejectedMultiCardRegions.length >= 1, JSON.stringify(result.parameters.rejectedMultiCardRegions));
+  assert.ok(result.parameters.rejectedMultiCardRegions.every(row => row.detectionConfidence === 'low'));
+  assert.ok(result.parameters.rejectedMultiCardRegions.every(row => row.detectionScore <= .49));
+  assert.ok(result.parameters.rejectedMultiCardRegions.every(row => row.multiCardBoxScore >= .59));
+});
+
+test('dynamisches Kartenmodell verwirft die gemeldete Mehrkartenbox auch bei 20 Binderkarten', () => {
+  const target = image(900, 1200, [52, 55, 60]);
+  for (let row = 0; row < 4; row += 1) for (let column = 0; column < 5; column += 1) {
+    paintCard(target, { x: 10 + column * 175, y: 100 + row * 260, width: 145, height: 214 }, {
+      border: 5,
+      borderColor: [92, 94, 98],
+      bodyColor: [169, 119, 88]
+    });
+  }
+  const reportedMultiCardBox = {
+    x: 0,
+    y: Math.round(0.058333 * target.height),
+    width: Math.round(0.375342 * target.width),
+    height: Math.round(0.460417 * target.height)
+  };
+  paintOutline(target, reportedMultiCardBox, [225, 225, 218], 5);
+  const result = detect(target, { maxDimension: 480 });
+  const evaluation = imageProcessing.evaluateCollectionDetections(target.boxes, result.detections, .38);
+  const normalizedReportedBox = {
+    x: reportedMultiCardBox.x / target.width,
+    y: reportedMultiCardBox.y / target.height,
+    width: reportedMultiCardBox.width / target.width,
+    height: reportedMultiCardBox.height / target.height
+  };
+  assert.ok(evaluation.truePositives >= 18, JSON.stringify({ evaluation, detections: result.detections }));
+  assert.ok(result.detections.every(row => imageProcessing.boundingBoxIoU(row.boundingBox, normalizedReportedBox) < .40));
+  const rejected = result.parameters.rejectedMultiCardRegions.find(row =>
+    imageProcessing.boundingBoxIoU(row.boundingBox, normalizedReportedBox) >= .40);
+  assert.ok(rejected, JSON.stringify(result.parameters.rejectedMultiCardRegions));
+  assert.equal(rejected.detectionConfidence, 'low');
+  assert.ok(rejected.detectionScore <= .49);
+  assert.ok(rejected.containedCardStructures >= 2);
+});
+
+test('dynamische Außenkantenprüfung ergänzt einen realistischen 7-von-9-Binderfall', () => {
+  const target = image(765, 1005, [174, 166, 151]);
+  const cards = [
+    { x: 42, y: 54, width: 196, height: 274, weak: true },
+    { x: 258, y: 45, width: 194, height: 278 },
+    { x: 474, y: 38, width: 190, height: 276 },
+    { x: 40, y: 330, width: 204, height: 292 },
+    { x: 264, y: 320, width: 202, height: 292 },
+    { x: 486, y: 306, width: 198, height: 298 },
+    { x: 30, y: 628, width: 212, height: 330 },
+    { x: 272, y: 620, width: 216, height: 334 },
+    { x: 508, y: 606, width: 224, height: 338, weak: true }
+  ];
+  cards.forEach((box, index) => paintCard(target, box, box.weak ? {
+    border: 4,
+    borderColor: [137, 132, 124],
+    bodyColor: index ? [166, 132, 106] : [171, 138, 111]
+  } : {
+    border: 6,
+    borderColor: [62, 61, 59],
+    bodyColor: [171, 132, 102]
+  }));
+  const result = detect(target, { maxDimension: 480 });
+  const evaluation = imageProcessing.evaluateCollectionDetections(target.boxes, result.detections, .36);
+  assert.equal(evaluation.truePositives, 9, JSON.stringify({ evaluation, detections: result.detections }));
+  assert.ok(evaluation.precision >= .90);
+  assert.ok(result.detections.filter(row => row.detectionSignals.dynamicLayoutRecovered).length >= 2,
+    JSON.stringify(result.detections));
+  assert.ok(result.detections.every(row => !row.detectionSignals.multiCardBoxLikely));
+});
+
 test('leicht schräge Karte bleibt ein unsicherer aber brauchbarer Vorschlag', () => {
   const target = image(700, 560);paintCard(target, { x: 250, y: 100, width: 180, height: 265 }, { angle: 7 });
   const result = detect(target, { minimumScore: .55 });

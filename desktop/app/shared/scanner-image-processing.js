@@ -790,6 +790,325 @@
     return intersection / Math.max(1, inner.width * inner.height);
   }
 
+  function candidateGeometryQuality(candidate) {
+    return clamp(Number(candidate?.score || 0) * 0.34
+      + Number(candidate?.signals?.outerBoundaryScore || 0) * 0.30
+      + Number(candidate?.signals?.edgeContinuity || 0) * 0.22
+      + Number(candidate?.signals?.aspectScore || 0) * 0.14, 0, 1);
+  }
+
+  function spatialRepresentatives(candidates) {
+    const representatives = [];
+    [...candidates].sort((left, right) => candidateGeometryQuality(right) - candidateGeometryQuality(left)).forEach(candidate => {
+      const centerX = candidate.left + candidate.width / 2;
+      const centerY = candidate.top + candidate.height / 2;
+      const duplicate = representatives.some(existing => {
+        const averageWidth = (candidate.width + existing.width) / 2;
+        const averageHeight = (candidate.height + existing.height) / 2;
+        const dx = Math.abs(centerX - existing.left - existing.width / 2) / Math.max(1, averageWidth);
+        const dy = Math.abs(centerY - existing.top - existing.height / 2) / Math.max(1, averageHeight);
+        return rectIntersectionRatio(candidate, existing) >= 0.30 || (dx < 0.72 && dy < 0.72);
+      });
+      if (!duplicate) representatives.push(candidate);
+    });
+    return representatives;
+  }
+
+  function deriveDynamicLocalCardModels(candidates, context) {
+    const eligible = candidates.filter(candidate => candidate.score >= 0.45
+      && candidate.signals.aspectScore >= 0.44
+      && candidate.signals.outerBoundaryScore >= 0.48
+      && candidate.signals.edgeContinuity >= 0.40
+      && candidate.signals.areaRatio >= 0.007
+      && candidate.signals.areaRatio <= 0.32
+      && (candidate.candidateSource !== "window_scan" || candidate.signals.localCardFieldSupport === true))
+      .sort((left, right) => candidateGeometryQuality(right) - candidateGeometryQuality(left))
+      .slice(0, 220);
+    if (eligible.length < 3) return [];
+    const median = values => [...values].sort((left, right) => left - right)[Math.floor(values.length / 2)] || 0;
+    const models = [];
+    for (const seed of eligible) {
+      const comparable = eligible.filter(candidate => {
+        const widthRatio = candidate.width / Math.max(1, seed.width);
+        const heightRatio = candidate.height / Math.max(1, seed.height);
+        return widthRatio >= 0.72 && widthRatio <= 1.38 && heightRatio >= 0.72 && heightRatio <= 1.38;
+      });
+      const representatives = spatialRepresentatives(comparable);
+      if (representatives.length < 3) continue;
+      const width = median(representatives.map(candidate => candidate.width));
+      const height = median(representatives.map(candidate => candidate.height));
+      const area = median(representatives.map(candidate => candidate.width * candidate.height));
+      if (!width || !height || !area) continue;
+      const quality = representatives.reduce((sum, candidate) => sum + candidateGeometryQuality(candidate), 0) / representatives.length;
+      const localFieldSupport = spatialRepresentatives(comparable.filter(candidate => {
+        const widthRatio = candidate.width / Math.max(1, width);
+        const heightRatio = candidate.height / Math.max(1, height);
+        return candidate.signals.localCardFieldSupport === true
+          && widthRatio >= 0.82 && widthRatio <= 1.22 && heightRatio >= 0.82 && heightRatio <= 1.22;
+      })).length;
+      const windowSupport = representatives.filter(candidate => candidate.candidateSource === "window_scan").length;
+      const minLeft = Math.min(...representatives.map(candidate => candidate.left));
+      const minTop = Math.min(...representatives.map(candidate => candidate.top));
+      const maxRight = Math.max(...representatives.map(candidate => candidate.left + candidate.width));
+      const maxBottom = Math.max(...representatives.map(candidate => candidate.top + candidate.height));
+      const layoutCoverage = (maxRight - minLeft) * (maxBottom - minTop) / Math.max(1, context.width * context.height);
+      const candidateModel = { width, height, area, representatives, support: representatives.length, localFieldSupport,
+        windowSupport, layoutCoverage, quality };
+      const duplicateModelIndex = models.findIndex(model => {
+        const widthRatio = width / Math.max(1, model.width);
+        const heightRatio = height / Math.max(1, model.height);
+        return widthRatio >= 0.88 && widthRatio <= 1.14 && heightRatio >= 0.88 && heightRatio <= 1.14;
+      });
+      if (duplicateModelIndex < 0) models.push(candidateModel);
+      else if (candidateModel.support > models[duplicateModelIndex].support
+        || (candidateModel.support === models[duplicateModelIndex].support
+          && candidateModel.quality > models[duplicateModelIndex].quality)) models[duplicateModelIndex] = candidateModel;
+    }
+    const localFieldRepresentatives = spatialRepresentatives(candidates.filter(candidate => candidate.signals.localCardFieldSupport === true));
+    if (localFieldRepresentatives.length >= 3) {
+      const width = median(localFieldRepresentatives.map(candidate => candidate.width));
+      const height = median(localFieldRepresentatives.map(candidate => candidate.height));
+      const area = median(localFieldRepresentatives.map(candidate => candidate.width * candidate.height));
+      const minLeft = Math.min(...localFieldRepresentatives.map(candidate => candidate.left));
+      const minTop = Math.min(...localFieldRepresentatives.map(candidate => candidate.top));
+      const maxRight = Math.max(...localFieldRepresentatives.map(candidate => candidate.left + candidate.width));
+      const maxBottom = Math.max(...localFieldRepresentatives.map(candidate => candidate.top + candidate.height));
+      const localFieldModel = {
+        width,
+        height,
+        area,
+        representatives: localFieldRepresentatives,
+        support: localFieldRepresentatives.length,
+        localFieldSupport: localFieldRepresentatives.length,
+        windowSupport: localFieldRepresentatives.length,
+        layoutCoverage: (maxRight - minLeft) * (maxBottom - minTop) / Math.max(1, context.width * context.height),
+        quality: localFieldRepresentatives.reduce((sum, candidate) => sum + candidateGeometryQuality(candidate), 0) / localFieldRepresentatives.length
+      };
+      const duplicateModel = models.some(model => {
+        const widthRatio = width / Math.max(1, model.width);
+        const heightRatio = height / Math.max(1, model.height);
+        return widthRatio >= 0.88 && widthRatio <= 1.14 && heightRatio >= 0.88 && heightRatio <= 1.14;
+      });
+      if (!duplicateModel) models.push(localFieldModel);
+    }
+    for (const model of models) {
+      const smallerModels = models.filter(other => other.area <= model.area / 1.65 && other.support >= 3);
+      model.multiContainerCount = model.representatives.filter(candidate => smallerModels.some(smaller => {
+        const contained = smaller.representatives.filter(inner => rectContainment(inner, candidate) >= 0.78);
+        if (contained.length < 2) return false;
+        const minX = Math.min(...contained.map(inner => inner.left + inner.width / 2));
+        const maxX = Math.max(...contained.map(inner => inner.left + inner.width / 2));
+        const minY = Math.min(...contained.map(inner => inner.top + inner.height / 2));
+        const maxY = Math.max(...contained.map(inner => inner.top + inner.height / 2));
+        return maxX - minX >= smaller.width * 0.52 || maxY - minY >= smaller.height * 0.52;
+      })).length;
+      model.effectiveSupport = model.support - model.multiContainerCount * 1.25;
+    }
+    return models.sort((left, right) => right.effectiveSupport - left.effectiveSupport
+      || right.support - left.support || right.area - left.area || right.quality - left.quality);
+  }
+
+  function recoverDynamicLayoutCandidates(candidates, model, context) {
+    if (!model || model.localFieldSupport < 3 || model.support < 4 || model.layoutCoverage < 0.30) return null;
+    const anchors = spatialRepresentatives(candidates.filter(candidate => candidate.signals.localCardFieldSupport === true
+      && !candidate.signals.multiCardBoxLikely
+      && candidate.width / Math.max(1, model.width) >= 0.76
+      && candidate.width / Math.max(1, model.width) <= 1.24
+      && candidate.height / Math.max(1, model.height) >= 0.76
+      && candidate.height / Math.max(1, model.height) <= 1.24
+      && candidate.signals.outerBoundaryScore >= 0.50
+      && candidate.signals.edgeContinuity >= 0.40
+      && candidateGeometryQuality(candidate) >= 0.58));
+    if (anchors.length < 4) return null;
+    const cluster = (axis, dimension, tolerance) => {
+      const groups = [];
+      [...anchors].sort((left, right) => (left[axis] + left[dimension] / 2) - (right[axis] + right[dimension] / 2)).forEach(candidate => {
+        const center = candidate[axis] + candidate[dimension] / 2;
+        let group = groups.find(row => Math.abs(row.center - center) <= tolerance);
+        if (!group) { group = { center, items: [] };groups.push(group); }
+        group.items.push(candidate);
+        group.center = group.items.reduce((sum, row) => sum + row[axis] + row[dimension] / 2, 0) / group.items.length;
+      });
+      return groups;
+    };
+    const rows = cluster("top", "height", model.height * 0.48);
+    const columns = cluster("left", "width", model.width * 0.48);
+    if (rows.filter(group => group.items.length >= 2).length < 2
+      || columns.filter(group => group.items.length >= 2).length < 2) return null;
+    const possiblePositions = rows.length * columns.length;
+    if (possiblePositions < anchors.length || possiblePositions > anchors.length * 1.60) return null;
+    const median = values => [...values].sort((left, right) => left - right)[Math.floor(values.length / 2)] || 0;
+    const regression = (items, input, output, fallback) => {
+      if (items.length < 2) return () => fallback;
+      const inputMean = items.reduce((sum, row) => sum + input(row), 0) / items.length;
+      const outputMean = items.reduce((sum, row) => sum + output(row), 0) / items.length;
+      const variance = items.reduce((sum, row) => sum + (input(row) - inputMean) ** 2, 0);
+      if (variance < 1) return () => outputMean;
+      const slope = items.reduce((sum, row) => sum + (input(row) - inputMean) * (output(row) - outputMean), 0) / variance;
+      return value => outputMean + slope * (value - inputMean);
+    };
+    const centerX = candidate => candidate.left + candidate.width / 2;
+    const centerY = candidate => candidate.top + candidate.height / 2;
+    const recovered = [];
+    for (const row of rows) for (const column of columns) {
+      const columnX = regression(column.items, centerY, centerX, column.center);
+      const rowY = regression(row.items, centerX, centerY, row.center);
+      let predictedX = columnX(row.center);
+      let predictedY = rowY(predictedX);
+      predictedX = columnX(predictedY);
+      const occupied = anchors.some(candidate => Math.abs(centerX(candidate) - predictedX) <= model.width * 0.62
+        && Math.abs(centerY(candidate) - predictedY) <= model.height * 0.62);
+      if (occupied) continue;
+      const typicalWidth = median(row.items.map(candidate => candidate.width)) || model.width;
+      const typicalHeight = median(row.items.map(candidate => candidate.height)) || model.height;
+      let best = null;
+      for (const scale of [0.90, 1, 1.10]) for (const offsetX of [-0.12, 0, 0.12]) for (const offsetY of [-0.12, 0, 0.12]) {
+        const width = Math.round(typicalWidth * scale);
+        const height = Math.round(typicalHeight * scale);
+        const rect = boundedRect({
+          left: Math.round(predictedX - width / 2 + typicalWidth * offsetX),
+          top: Math.round(predictedY - height / 2 + typicalHeight * offsetY),
+          width,
+          height
+        }, context.width, context.height);
+        if (rect.width < width * 0.96 || rect.height < height * 0.96) continue;
+        const scored = scoreCardRectangle(rect, context);
+        if (!scored || scored.signals.outerBoundaryScore < 0.52 || scored.signals.edgeContinuity < 0.38
+          || candidateGeometryQuality(scored) < 0.52) continue;
+        if (!best || candidateGeometryQuality(scored) > candidateGeometryQuality(best)) best = scored;
+      }
+      if (!best) continue;
+      recovered.push({
+        ...best,
+        candidateSource: "dynamic_layout_recovery",
+        score: clamp(best.score + 0.20, 0, 1),
+        signals: { ...best.signals, dynamicLayoutSupport: true, dynamicLayoutRecovered: true,
+          localCardModelSupport: model.support, multiCardBoxLikely: false, multiCardBoxScore: 0 }
+      });
+    }
+    return { anchors, recovered, rows: rows.length, columns: columns.length };
+  }
+
+  function applyDynamicCardGeometry(candidates, context) {
+    const models = deriveDynamicLocalCardModels(candidates, context);
+    const model = models[0];
+    if (!model) return { candidates: candidates.map(candidate => ({
+      ...candidate,
+      signals: { ...candidate.signals, multiCardBoxLikely: false, multiCardBoxScore: 0 }
+    })), model: null };
+    const members = new Set(model.representatives);
+    const calibrated = candidates.map(candidate => {
+      const area = candidate.width * candidate.height;
+      const areaRatio = area / Math.max(1, model.area);
+      const widthRatio = candidate.width / Math.max(1, model.width);
+      const heightRatio = candidate.height / Math.max(1, model.height);
+      const contained = model.representatives.filter(inner => inner !== candidate
+        && inner.width * inner.height <= area * 0.68
+        && rectContainment(inner, candidate) >= 0.78);
+      let separated = false;
+      if (contained.length >= 2) {
+        const minX = Math.min(...contained.map(inner => inner.left + inner.width / 2));
+        const maxX = Math.max(...contained.map(inner => inner.left + inner.width / 2));
+        const minY = Math.min(...contained.map(inner => inner.top + inner.height / 2));
+        const maxY = Math.max(...contained.map(inner => inner.top + inner.height / 2));
+        separated = maxX - minX >= model.width * 0.52 || maxY - minY >= model.height * 0.52;
+      }
+      const clearlyLarger = areaRatio >= 1.65 && (widthRatio >= 1.34 || heightRatio >= 1.34);
+      const likely = !members.has(candidate) && clearlyLarger && contained.length >= 2 && separated;
+      const multiCardScore = likely ? clamp(0.52 + Math.min(0.22, (areaRatio - 1.65) * 0.08)
+        + Math.min(0.18, (contained.length - 1) * 0.06) + Math.min(0.08, Math.max(widthRatio, heightRatio) * 0.025), 0, 1) : 0;
+      const dynamicLayoutSupport = members.has(candidate) && model.support >= 4;
+      return {
+        ...candidate,
+        score: likely ? Math.min(candidate.score, 0.49) : dynamicLayoutSupport ? clamp(candidate.score + 0.22, 0, 1) : candidate.score,
+        signals: {
+          ...candidate.signals,
+          dynamicLayoutSupport,
+          localCardModelSupport: model.support,
+          localCardAreaRatio: Math.round(areaRatio * 1000) / 1000,
+          containedCardStructures: contained.length,
+          multiCardBoxLikely: likely,
+          multiCardBoxScore: Math.round(multiCardScore * 1000) / 1000
+        }
+      };
+    });
+    const localModel = models.filter(candidateModel => candidateModel.localFieldSupport >= 3
+      && candidateModel.support >= 4
+      && candidateModel.layoutCoverage >= 0.30
+      && (candidateModel === model || model.area >= candidateModel.area * 1.35))
+      .sort((left, right) => right.localFieldSupport - left.localFieldSupport
+        || right.quality - left.quality || right.support - left.support || left.area - right.area)[0];
+    const localLayout = localModel ? recoverDynamicLayoutCandidates(calibrated, localModel, context) : null;
+    if (localLayout) {
+      const anchorSet = new Set(localLayout.anchors);
+      const locallyCalibrated = calibrated.map(candidate => {
+        const area = candidate.width * candidate.height;
+        const areaRatio = area / Math.max(1, localModel.area);
+        const widthRatio = candidate.width / Math.max(1, localModel.width);
+        const heightRatio = candidate.height / Math.max(1, localModel.height);
+        const contained = localLayout.anchors.filter(inner => inner !== candidate
+          && inner.width * inner.height <= area * 0.68
+          && rectContainment(inner, candidate) >= 0.78);
+        let separated = false;
+        if (contained.length >= 2) {
+          const minX = Math.min(...contained.map(inner => inner.left + inner.width / 2));
+          const maxX = Math.max(...contained.map(inner => inner.left + inner.width / 2));
+          const minY = Math.min(...contained.map(inner => inner.top + inner.height / 2));
+          const maxY = Math.max(...contained.map(inner => inner.top + inner.height / 2));
+          separated = maxX - minX >= localModel.width * 0.52 || maxY - minY >= localModel.height * 0.52;
+        }
+        const localMultiCardBox = !anchorSet.has(candidate) && areaRatio >= 1.65
+          && (widthRatio >= 1.34 || heightRatio >= 1.34) && contained.length >= 2 && separated;
+        const multiCardBoxLikely = candidate.signals.multiCardBoxLikely || localMultiCardBox;
+        const dynamicLayoutSupport = anchorSet.has(candidate);
+        const multiCardBoxScore = localMultiCardBox ? clamp(0.52 + Math.min(0.22, (areaRatio - 1.65) * 0.08)
+          + Math.min(0.18, (contained.length - 1) * 0.06), 0, 1) : Number(candidate.signals.multiCardBoxScore || 0);
+        return {
+          ...candidate,
+          score: multiCardBoxLikely ? Math.min(candidate.score, 0.49)
+            : dynamicLayoutSupport ? clamp(candidate.score + 0.22, 0, 1) : candidate.score,
+          signals: {
+            ...candidate.signals,
+            dynamicLayoutSupport,
+            dynamicLayoutRecovered: false,
+            localCardModelSupport: localModel.support,
+            localCardAreaRatio: Math.round(areaRatio * 1000) / 1000,
+            containedCardStructures: Math.max(Number(candidate.signals.containedCardStructures || 0), contained.length),
+            multiCardBoxLikely,
+            multiCardBoxScore: Math.round(multiCardBoxScore * 1000) / 1000
+          }
+        };
+      });
+      return {
+        candidates: [...locallyCalibrated, ...localLayout.recovered],
+        model: {
+          width: localModel.width,
+          height: localModel.height,
+          area: localModel.area,
+          support: localModel.support,
+          localFieldSupport: localModel.localFieldSupport,
+          windowSupport: localModel.windowSupport,
+          layoutCoverage: Math.round(localModel.layoutCoverage * 1000) / 1000,
+          quality: Math.round(localModel.quality * 1000) / 1000,
+          recovered: localLayout.recovered.length
+        }
+      };
+    }
+    return {
+      candidates: calibrated,
+      model: {
+        width: model.width,
+        height: model.height,
+        area: model.area,
+        support: model.support,
+        localFieldSupport: model.localFieldSupport,
+        windowSupport: model.windowSupport,
+        layoutCoverage: Math.round(model.layoutCoverage * 1000) / 1000,
+        quality: Math.round(model.quality * 1000) / 1000
+      }
+    };
+  }
+
   function isAnchoredOuterCandidate(candidate) {
     return (candidate.candidateSource === "edge_component" || candidate.candidateSource === "contrast_component")
       && candidate.signals.areaRatio <= 0.30
@@ -902,7 +1221,6 @@
       && candidate.signals.edgeContinuity >= 0.74
       && candidate.signals.aspectScore >= 0.44), 0.42);
     if (localSeeds.length < 4) return candidates;
-    if (localSeeds.length >= 9 && localSeeds.length <= 10) return candidates;
     const heights = localSeeds.map(candidate => candidate.height).sort((left, right) => left - right);
     const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
     const replacements = new Map(localSeeds.map(candidate => {
@@ -1011,98 +1329,6 @@
         signals: { ...candidate.signals, nestedInteriorSupport: support }
       };
     });
-  }
-
-  function boostRegularTwoByTwoGrid(candidates, enabled = true) {
-    if (!enabled) return candidates;
-    const preliminary = candidates.filter(row => row.score >= 0.42
-      && row.signals.areaRatio >= 0.085
-      && row.signals.areaRatio <= 0.25
-      && row.signals.aspectScore >= 0.52
-      && row.signals.outerBoundaryScore >= 0.40)
-      .sort((left, right) => right.score - left.score);
-    const pool = [];
-    preliminary.forEach(candidate => {
-      if (pool.length >= 120 || pool.some(existing => rectIntersectionRatio(candidate, existing) >= 0.72)) return;
-      pool.push(candidate);
-    });
-    if (pool.length < 4) return candidates;
-    const center = row => ({ x: row.left + row.width / 2, y: row.top + row.height / 2 });
-    const horizontalPairs = [];
-    for (let leftIndex = 0; leftIndex < pool.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < pool.length; rightIndex += 1) {
-        let left = pool[leftIndex];let right = pool[rightIndex];
-        if (center(left).x > center(right).x) [left, right] = [right, left];
-        const averageWidth = (left.width + right.width) / 2;
-        const averageHeight = (left.height + right.height) / 2;
-        const widthRatio = left.width / Math.max(1, right.width);
-        const heightRatio = left.height / Math.max(1, right.height);
-        const deltaX = (center(right).x - center(left).x) / Math.max(1, averageWidth);
-        const deltaY = Math.abs(center(right).y - center(left).y) / Math.max(1, averageHeight);
-        if (widthRatio < 0.70 || widthRatio > 1.43 || heightRatio < 0.70 || heightRatio > 1.43
-          || deltaX < 0.90 || deltaX > 1.70 || deltaY > 0.30 || rectIntersectionRatio(left, right) > 0.12) continue;
-        horizontalPairs.push({ left, right, centerY: (center(left).y + center(right).y) / 2, averageWidth, averageHeight,
-          score: left.score + right.score - deltaY * 0.55 - Math.abs(deltaX - 1.12) * 0.26
-            - Math.abs(Math.log(widthRatio)) * 0.12 - Math.abs(Math.log(heightRatio)) * 0.12 });
-      }
-    }
-    const rows = horizontalPairs.sort((left, right) => right.score - left.score).slice(0, 100);
-    let best = null;
-    for (let topIndex = 0; topIndex < rows.length; topIndex += 1) {
-      for (let bottomIndex = topIndex + 1; bottomIndex < rows.length; bottomIndex += 1) {
-        let top = rows[topIndex];let bottom = rows[bottomIndex];
-        if (top.centerY > bottom.centerY) [top, bottom] = [bottom, top];
-        const members = [top.left, top.right, bottom.left, bottom.right];
-        if (new Set(members).size < 4) continue;
-        const averageHeight = members.reduce((sum, row) => sum + row.height, 0) / 4;
-        const averageWidth = members.reduce((sum, row) => sum + row.width, 0) / 4;
-        const verticalDistance = (bottom.centerY - top.centerY) / Math.max(1, averageHeight);
-        const leftAlignment = Math.abs(center(top.left).x - center(bottom.left).x) / Math.max(1, averageWidth);
-        const rightAlignment = Math.abs(center(top.right).x - center(bottom.right).x) / Math.max(1, averageWidth);
-        if (verticalDistance < 0.90 || verticalDistance > 1.70 || leftAlignment > 0.34 || rightAlignment > 0.34) continue;
-        const areaLogs = members.map(row => Math.log(Math.max(1, row.width * row.height)));
-        const areaVariation = Math.max(...areaLogs) - Math.min(...areaLogs);
-        if (areaVariation > 0.72) continue;
-        const layoutMinLeft = Math.min(...members.map(row => row.left));
-        const layoutMinTop = Math.min(...members.map(row => row.top));
-        const layoutMaxRight = Math.max(...members.map(row => row.left + row.width));
-        const layoutMaxBottom = Math.max(...members.map(row => row.top + row.height));
-        const layoutImageArea = members.reduce((sum, row) => sum + (row.width * row.height) / Math.max(0.0001, row.signals.areaRatio), 0) / 4;
-        const layoutEnvelopeRatio = (layoutMaxRight - layoutMinLeft) * (layoutMaxBottom - layoutMinTop) / Math.max(1, layoutImageArea);
-        const averageAreaRatio = members.reduce((sum, row) => sum + row.signals.areaRatio, 0) / 4;
-        const layoutScore = top.score + bottom.score - leftAlignment * 0.30 - rightAlignment * 0.30
-          - Math.abs(verticalDistance - 1.12) * 0.10 - areaVariation * 0.12
-          + clamp(layoutEnvelopeRatio, 0, 0.90) * 0.90 + clamp(averageAreaRatio, 0, 0.24) * 0.45;
-        if (!best || layoutScore > best.score) best = { members, score: layoutScore };
-      }
-    }
-    if (!best) return candidates;
-    const minLeft = Math.min(...best.members.map(row => row.left));
-    const minTop = Math.min(...best.members.map(row => row.top));
-    const maxRight = Math.max(...best.members.map(row => row.left + row.width));
-    const maxBottom = Math.max(...best.members.map(row => row.top + row.height));
-    const estimatedImageArea = best.members.reduce((sum, row) => sum + (row.width * row.height) / Math.max(0.0001, row.signals.areaRatio), 0) / 4;
-    const envelopeRatio = (maxRight - minLeft) * (maxBottom - minTop) / Math.max(1, estimatedImageArea);
-    if (envelopeRatio < 0.38) return candidates;
-    const anchoredRegions = [];
-    candidates.filter(isAnchoredOuterCandidate).forEach(candidate => {
-      const centerX = candidate.left + candidate.width / 2;
-      const centerY = candidate.top + candidate.height / 2;
-      const duplicateRegion = anchoredRegions.some(existing => {
-        const averageWidth = (candidate.width + existing.width) / 2;
-        const averageHeight = (candidate.height + existing.height) / 2;
-        return Math.abs(centerX - existing.left - existing.width / 2) < averageWidth * 0.72
-          && Math.abs(centerY - existing.top - existing.height / 2) < averageHeight * 0.72;
-      });
-      if (!duplicateRegion) anchoredRegions.push(candidate);
-    });
-    if (anchoredRegions.length >= 7) return candidates;
-    const selected = new Set(best.members);
-    return candidates.map(candidate => selected.has(candidate) ? {
-      ...candidate,
-      score: clamp(candidate.score + 0.28, 0, 1),
-      signals: { ...candidate.signals, regularGridSupport: true }
-    } : candidate);
   }
 
   function expandedOuterCandidates(candidates, context) {
@@ -1324,19 +1550,22 @@
     }
     candidates.push(...expandedOuterCandidates(candidates, context));
     const minimumScore = clamp(Number(options.minimumScore ?? 0.60), 0.45, 0.95);
-    const calibratedCandidates = boostLooseCardField(boostRegularTwoByTwoGrid(
-      recalibrateCandidateScales(boostOuterContainment(candidates)),
-      sample.height / Math.max(1, sample.width) >= 1.12
-    ), context);
-    const regularGridCandidates = calibratedCandidates.filter(row => row.signals.regularGridSupport);
-    const localFieldCandidates = calibratedCandidates.filter(row => row.signals.localCardFieldSupport);
+    const dynamicGeometry = applyDynamicCardGeometry(boostLooseCardField(
+      recalibrateCandidateScales(boostOuterContainment(candidates)), context), context);
+    const calibratedCandidates = dynamicGeometry.candidates;
+    const rejectedMultiCardCandidates = deduplicateRectangles(calibratedCandidates.filter(row => row.signals.multiCardBoxLikely), 0.48)
+      .sort((left, right) => right.signals.multiCardBoxScore - left.signals.multiCardBoxScore || right.score - left.score)
+      .slice(0, 16);
+    const plausibleCalibratedCandidates = calibratedCandidates.filter(row => !row.signals.multiCardBoxLikely);
+    const dynamicLayoutCandidates = plausibleCalibratedCandidates.filter(row => row.signals.dynamicLayoutSupport);
+    const localFieldCandidates = plausibleCalibratedCandidates.filter(row => row.signals.localCardFieldSupport);
     const localFieldAreas = localFieldCandidates.map(row => row.width * row.height).sort((left, right) => left - right);
     const localFieldMedianArea = localFieldAreas.length ? localFieldAreas[Math.floor(localFieldAreas.length / 2)] : 0;
-    const baseConsideredCandidates = regularGridCandidates.length === 4 ? regularGridCandidates : calibratedCandidates;
-    const protectedRegularGrid = regularGridCandidates.length === 4
+    const baseConsideredCandidates = dynamicLayoutCandidates.length >= 4 ? dynamicLayoutCandidates : plausibleCalibratedCandidates;
+    const protectedDynamicLayout = dynamicLayoutCandidates.length >= 4
       && orientationSignals.axialRatio >= 0.48
       && orientationSignals.diagonalRatio <= 0.29;
-    const consideredCandidates = !protectedRegularGrid && localFieldCandidates.length >= 4 ? baseConsideredCandidates.filter(row => {
+    const consideredCandidates = !protectedDynamicLayout && localFieldCandidates.length >= 4 ? baseConsideredCandidates.filter(row => {
       if (row.signals.localCardFieldSupport) return true;
       const rowArea = row.width * row.height;
       const containedLocalCards = localFieldCandidates.filter(local => {
@@ -1461,6 +1690,24 @@
         }
       };
     }).filter(row => normalizedBoundingBox(row.boundingBox));
+    const rejectedMultiCardRegions = rejectedMultiCardCandidates.map(row => ({
+      boundingBox: {
+        x: Math.round(row.left / sample.width * 1e6) / 1e6,
+        y: Math.round(row.top / sample.height * 1e6) / 1e6,
+        width: Math.round(row.width / sample.width * 1e6) / 1e6,
+        height: Math.round(row.height / sample.height * 1e6) / 1e6
+      },
+      detectionConfidence: "low",
+      detectionScore: Math.min(0.49, Math.round(row.score * 1000) / 1000),
+      multiCardBoxScore: Math.round(row.signals.multiCardBoxScore * 1000) / 1000,
+      containedCardStructures: Number(row.signals.containedCardStructures || 0),
+      localCardAreaRatio: Number(row.signals.localCardAreaRatio || 0)
+    })).filter(region => !detections.some(detection => {
+      const regionArea = region.boundingBox.width * region.boundingBox.height;
+      const detectionArea = detection.boundingBox.width * detection.boundingBox.height;
+      const areaRatio = regionArea / Math.max(0.000001, detectionArea);
+      return areaRatio >= 0.72 && areaRatio <= 1.38 && boundingBoxIoU(region.boundingBox, detection.boundingBox) >= 0.60;
+    }));
     const debugCandidates = options.debugCandidates ? calibratedCandidates
       .filter(row => row.signals.areaRatio >= 0.055)
       .sort((left, right) => right.score - left.score)
@@ -1522,7 +1769,9 @@
         debugCandidates,
         debugAxisCandidates,
         debugOrientedCandidates,
-        debugFinalAxisPool
+        debugFinalAxisPool,
+        localCardModel: dynamicGeometry.model,
+        rejectedMultiCardRegions
       }
     };
   }
@@ -2083,6 +2332,18 @@
   }
 
   async function prepareCollectionObservationRecognitionPayload(imageDataUrl, observation = {}) {
+    if (observation?.observationSource === "automatic"
+      && (observation?.detectionSignals?.multiCardBoxLikely === true || observation?.detectionSignals?.multiCardGridLikely === true)) {
+      return {
+        imageDataUrl: "",
+        passes: [],
+        candidateLimit: 0,
+        artworkFingerprints: [],
+        skipRecognition: true,
+        skipReason: "binder_multi_card_region",
+        message: "Kartenfläche prüfen: Der erkannte Bereich umfasst wahrscheinlich mehrere Binder-Rasterzellen. Die Namens-OCR wurde nicht ausgeführt."
+      };
+    }
     const image = await loadImage(imageDataUrl);
     const sourceCanvas = document.createElement("canvas");
     sourceCanvas.width = image.naturalWidth;

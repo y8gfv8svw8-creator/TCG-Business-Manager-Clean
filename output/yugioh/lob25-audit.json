@@ -1,0 +1,768 @@
+{
+  "added": 112,
+  "rarities": {
+    "Secret Rare": 2,
+    "Ultra Rare": 10,
+    "Common": 82,
+    "Super Rare": 10,
+    "Rare": 22
+  },
+  "entries": [
+    {
+      "cid": 4711,
+      "name": "Tri-Horned Dragon",
+      "code": "LOB-EN000",
+      "rarity": "Secret Rare"
+    },
+    {
+      "cid": 4007,
+      "name": "Blue-Eyes White Dragon",
+      "code": "LOB-EN001",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4009,
+      "name": "Hitotsu-Me Giant",
+      "code": "LOB-EN002",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4021,
+      "name": "Flame Swordsman",
+      "code": "LOB-EN003",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4030,
+      "name": "Skull Servant",
+      "code": "LOB-EN004",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4041,
+      "name": "Dark Magician",
+      "code": "LOB-EN005",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4044,
+      "name": "Gaia The Fierce Knight",
+      "code": "LOB-EN006",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4047,
+      "name": "Celtic Guardian",
+      "code": "LOB-EN007",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4056,
+      "name": "Basic Insect",
+      "code": "LOB-EN008",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4065,
+      "name": "Mammoth Graveyard",
+      "code": "LOB-EN009",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4071,
+      "name": "Silver Fang",
+      "code": "LOB-EN010",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4119,
+      "name": "Dark Gray",
+      "code": "LOB-EN011",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4125,
+      "name": "Trial of Nightmare",
+      "code": "LOB-EN012",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4135,
+      "name": "Nemuriko",
+      "code": "LOB-EN013",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4138,
+      "name": "The 13th Grave",
+      "code": "LOB-EN014",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4139,
+      "name": "Charubin the Fire Knight",
+      "code": "LOB-EN015",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4148,
+      "name": "Flame Manipulator",
+      "code": "LOB-EN016",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4153,
+      "name": "Monster Egg",
+      "code": "LOB-EN017",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4163,
+      "name": "Firegrass",
+      "code": "LOB-EN018",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4174,
+      "name": "Darkfire Dragon",
+      "code": "LOB-EN019",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4175,
+      "name": "Dark King of the Abyss",
+      "code": "LOB-EN020",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4192,
+      "name": "Fiend Reflection #2",
+      "code": "LOB-EN021",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4195,
+      "name": "Fusionist",
+      "code": "LOB-EN022",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4199,
+      "name": "Turtle Tiger",
+      "code": "LOB-EN023",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4206,
+      "name": "Petit Dragon",
+      "code": "LOB-EN024",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4214,
+      "name": "Petit Angel",
+      "code": "LOB-EN025",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4216,
+      "name": "Hinotama Soul",
+      "code": "LOB-EN026",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4219,
+      "name": "Aqua Madoor",
+      "code": "LOB-EN027",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4220,
+      "name": "Kagemusha of the Blue Flame",
+      "code": "LOB-EN028",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4221,
+      "name": "Flame Ghost",
+      "code": "LOB-EN029",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4224,
+      "name": "Two-Mouth Darkruler",
+      "code": "LOB-EN030",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4250,
+      "name": "Dissolverock",
+      "code": "LOB-EN031",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4253,
+      "name": "Root Water",
+      "code": "LOB-EN032",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4271,
+      "name": "The Furious Sea King",
+      "code": "LOB-EN033",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4280,
+      "name": "Green Phantom King",
+      "code": "LOB-EN034",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4282,
+      "name": "Ray & Temperature",
+      "code": "LOB-EN035",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4285,
+      "name": "King Fog",
+      "code": "LOB-EN036",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4288,
+      "name": "Mystical Sheep #2",
+      "code": "LOB-EN037",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4299,
+      "name": "Masaki the Legendary Swordsman",
+      "code": "LOB-EN038",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4306,
+      "name": "Kurama",
+      "code": "LOB-EN039",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4307,
+      "name": "Legendary Sword",
+      "code": "LOB-EN040",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4314,
+      "name": "Beast Fangs",
+      "code": "LOB-EN041",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4328,
+      "name": "Violet Crystal",
+      "code": "LOB-EN042",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4329,
+      "name": "Book of Secret Arts",
+      "code": "LOB-EN043",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4334,
+      "name": "Power of Kaishin",
+      "code": "LOB-EN044",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4335,
+      "name": "Dragon Capture Jar",
+      "code": "LOB-EN045",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4336,
+      "name": "Forest",
+      "code": "LOB-EN046",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4337,
+      "name": "Wasteland",
+      "code": "LOB-EN047",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4338,
+      "name": "Mountain",
+      "code": "LOB-EN048",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4339,
+      "name": "Sogen",
+      "code": "LOB-EN049",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4340,
+      "name": "Umi",
+      "code": "LOB-EN050",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4341,
+      "name": "Yami",
+      "code": "LOB-EN051",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4342,
+      "name": "Dark Hole",
+      "code": "LOB-EN052",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4343,
+      "name": "Raigeki",
+      "code": "LOB-EN053",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4345,
+      "name": "Red Medicine",
+      "code": "LOB-EN054",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4349,
+      "name": "Sparks",
+      "code": "LOB-EN055",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4350,
+      "name": "Hinotama",
+      "code": "LOB-EN056",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4835,
+      "name": "Fissure",
+      "code": "LOB-EN057",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4836,
+      "name": "Trap Hole",
+      "code": "LOB-EN058",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4837,
+      "name": "Polymerization",
+      "code": "LOB-EN059",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4838,
+      "name": "Remove Trap",
+      "code": "LOB-EN060",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4839,
+      "name": "Two-Pronged Attack",
+      "code": "LOB-EN061",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4008,
+      "name": "Mystical Elf",
+      "code": "LOB-EN062",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4019,
+      "name": "Tyhone",
+      "code": "LOB-EN063",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4033,
+      "name": "Beaver Warrior",
+      "code": "LOB-EN064",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4845,
+      "name": "Gravedigger Ghoul",
+      "code": "LOB-EN065",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4045,
+      "name": "Curse of Dragon",
+      "code": "LOB-EN066",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4049,
+      "name": "Karbonala Warrior",
+      "code": "LOB-EN067",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4080,
+      "name": "Giant Soldier of Stone",
+      "code": "LOB-EN068",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4086,
+      "name": "Uraby",
+      "code": "LOB-EN069",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4088,
+      "name": "Red-Eyes Black Dragon",
+      "code": "LOB-EN070",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4090,
+      "name": "Reaper of the Cards",
+      "code": "LOB-EN071",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4142,
+      "name": "Witty Phantom",
+      "code": "LOB-EN072",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4161,
+      "name": "Larvas",
+      "code": "LOB-EN073",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4162,
+      "name": "Hard Armor",
+      "code": "LOB-EN074",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4164,
+      "name": "Man Eater",
+      "code": "LOB-EN075",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4166,
+      "name": "M-Warrior #1",
+      "code": "LOB-EN076",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4167,
+      "name": "M-Warrior #2",
+      "code": "LOB-EN077",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4176,
+      "name": "Spirit of the Harp",
+      "code": "LOB-EN078",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4178,
+      "name": "Armaill",
+      "code": "LOB-EN079",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4200,
+      "name": "Terra the Terrible",
+      "code": "LOB-EN080",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4207,
+      "name": "Frenzied Panda",
+      "code": "LOB-EN081",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4227,
+      "name": "Kumootoko",
+      "code": "LOB-EN082",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4251,
+      "name": "Meda Bat",
+      "code": "LOB-EN083",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4257,
+      "name": "Enchanting Mermaid",
+      "code": "LOB-EN084",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4297,
+      "name": "Fireyarou",
+      "code": "LOB-EN085",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4300,
+      "name": "Dragoness the Wicked Knight",
+      "code": "LOB-EN086",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4302,
+      "name": "One-Eyed Shield Dragon",
+      "code": "LOB-EN087",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4309,
+      "name": "Dark Energy",
+      "code": "LOB-EN088",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4311,
+      "name": "Laser Cannon Armor",
+      "code": "LOB-EN089",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4316,
+      "name": "Vile Germs",
+      "code": "LOB-EN090",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4318,
+      "name": "Silver Bow and Arrow",
+      "code": "LOB-EN091",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4321,
+      "name": "Dragon Treasure",
+      "code": "LOB-EN092",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4322,
+      "name": "Electro-Whip",
+      "code": "LOB-EN093",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4325,
+      "name": "Mystical Moon",
+      "code": "LOB-EN094",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4326,
+      "name": "Stop Defense",
+      "code": "LOB-EN095",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4331,
+      "name": "Machine Conversion Factory",
+      "code": "LOB-EN096",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4332,
+      "name": "Raise Body Heat",
+      "code": "LOB-EN097",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4333,
+      "name": "Follow Wind",
+      "code": "LOB-EN098",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4346,
+      "name": "Goblin's Secret Remedy",
+      "code": "LOB-EN099",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4351,
+      "name": "Final Flame",
+      "code": "LOB-EN100",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4354,
+      "name": "Swords of Revealing Light",
+      "code": "LOB-EN101",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4415,
+      "name": "Metal Dragon",
+      "code": "LOB-EN102",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4454,
+      "name": "Spike Seadra",
+      "code": "LOB-EN103",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4465,
+      "name": "Tripwire Beast",
+      "code": "LOB-EN104",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4472,
+      "name": "Skull Red Bird",
+      "code": "LOB-EN105",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4475,
+      "name": "Armed Ninja",
+      "code": "LOB-EN106",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4493,
+      "name": "Flower Wolf",
+      "code": "LOB-EN107",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4507,
+      "name": "Man-Eater Bug",
+      "code": "LOB-EN108",
+      "rarity": "Super Rare"
+    },
+    {
+      "cid": 4523,
+      "name": "Sand Stone",
+      "code": "LOB-EN109",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4547,
+      "name": "Hane-Hane",
+      "code": "LOB-EN110",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4548,
+      "name": "Misairuzame",
+      "code": "LOB-EN111",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4563,
+      "name": "Steel Ogre Grotto #1",
+      "code": "LOB-EN112",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4567,
+      "name": "Lesser Dragon",
+      "code": "LOB-EN113",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4573,
+      "name": "Darkworld Thorns",
+      "code": "LOB-EN114",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4575,
+      "name": "Drooling Lizard",
+      "code": "LOB-EN115",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4621,
+      "name": "Armored Starfish",
+      "code": "LOB-EN116",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4627,
+      "name": "Succubus Knight",
+      "code": "LOB-EN117",
+      "rarity": "Common"
+    },
+    {
+      "cid": 4842,
+      "name": "Monster Reborn",
+      "code": "LOB-EN118",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4844,
+      "name": "Pot of Greed",
+      "code": "LOB-EN119",
+      "rarity": "Rare"
+    },
+    {
+      "cid": 4023,
+      "name": "Right Leg of the Forbidden One",
+      "code": "LOB-EN120",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4024,
+      "name": "Left Leg of the Forbidden One",
+      "code": "LOB-EN121",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4025,
+      "name": "Right Arm of the Forbidden One",
+      "code": "LOB-EN122",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4026,
+      "name": "Left Arm of the Forbidden One",
+      "code": "LOB-EN123",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4027,
+      "name": "Exodia the Forbidden One",
+      "code": "LOB-EN124",
+      "rarity": "Ultra Rare"
+    },
+    {
+      "cid": 4043,
+      "name": "Gaia the Dragon Champion",
+      "code": "LOB-EN125",
+      "rarity": "Secret Rare"
+    }
+  ]
+}

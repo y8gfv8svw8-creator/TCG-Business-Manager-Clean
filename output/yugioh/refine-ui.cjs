@@ -1,0 +1,21 @@
+const fs=require('fs'),vm=require('vm');const dir=__dirname+'/YuGiOh-Sammler/';let app=fs.readFileSync(dir+'app.js','utf8'),html=fs.readFileSync(dir+'index.html','utf8');
+function edit(a,b){if(!app.includes(a))throw Error(a);app=app.replace(a,b);}
+edit("c.frame==='token'?'token':'monster'","c.frame==='token'?'token':c.frame==='unknown'?'unknown':'monster'");
+edit("const list=prints.filter(p=>p.card===cardIndex&&", "const list=prints.filter(p=>inCatalog(p)&&p.card===cardIndex&&");
+edit("p.auditState==='legacy'?'<br><span", "p.auditState!=='verified'?'<br><span");
+edit('<div class="setline">${grouped?', '<div class="setline">${p.auditState!==\'verified\'?\'<span class="badge">Ungeprüft – bitte selbst prüfen</span><br>\':\'\'}${grouped?');
+edit("const content={format:'yugioh-sammler',version:2", "const content={catalogCheckedAt:data.meta.builtAt,entryNotes:prints.filter(p=>owned.has(p.id)||favorites.has(p.id)).map(p=>({id:p.id,set:p.set,code:p.code,rarity:p.rarity,verification:p.auditState==='verified'?'Set, Nummer und Seltenheit laut Konami':'Ungeprüft – bitte selbst prüfen',source:p.source||null,foil:'Ungeprüft – bitte selbst prüfen'})),format:'yugioh-sammler',version:2");
+edit("selectedSet?.officialPid?", "selectedSet?.officialPid&&$('catalogScope').value==='official'?");
+edit("+' <a href=\"'+esc(selectedSet.source)", "+(selectedSet.sourceNote?' '+esc(selectedSet.sourceNote):'')+' <a href=\"'+esc(selectedSet.productSource||selectedSet.source)");
+app=app.replaceAll("s.auditState==='legacy'", "s.legacyPrints>0");
+edit("${s.cards} Karten · ${s.prints?s.prints+' Druckvarianten':'noch ohne Kartendaten'} · ${s.officialPid?'Konami-Liste':'Altbestand · ungeprüft'}", "${$('catalogScope').value==='legacy'?s.legacyCards:s.cards} Karten · ${$('catalogScope').value==='legacy'?s.legacyPrints:s.prints} Druckvarianten · ${$('catalogScope').value==='legacy'||!s.officialPid?'Altbestand · ungeprüft':'Konami-Liste'}");
+const start=app.indexOf("$('catalogScope').addEventListener('change',()=>{$('setlist')");if(start<0)throw Error('Scope handler');app=app.slice(0,start)+`function inCatalog(p){return $('catalogScope').value==='all'||($('catalogScope').value==='legacy'?p.auditState==='legacy':p.auditState!=='legacy');}
+function refreshSetlist(){if(!data)return;$('setlist').innerHTML=data.sets.filter(s=>$('catalogScope').value==='all'||($('catalogScope').value==='legacy'?s.legacyPrints>0:s.officialPid)).map(s=>'<option value="'+esc(s.name)+'">'+esc(s.code)+' · '+($('catalogScope').value==='legacy'?s.legacyCards:s.cards)+' Karten</option>').join('');}
+$('catalogScope').addEventListener('change',refreshSetlist);
+$('reset').addEventListener('click',refreshSetlist);
+`;
+html=html.replace('<option value="token">Token</option>', '<option value="token">Token</option><option value="unknown">Typ ungeprüft</option>');
+html=html.replace('Hake die ausgewählte Druckvariante ab.', 'Hake ab, was du bereits besitzt. Bilder bleiben als Beispielmotive sichtbar. Foil/Oberfläche: Ungeprüft – bitte selbst prüfen.');
+html=html.replace(/Der lokale Katalog basiert auf[\s\S]*?Sonderprodukte können fehlen\./, 'Das offizielle Setverzeichnis wurde am 15.09.2026 mit allen 933 Produktlisten der <a href="https://www.db.yugioh-card.com/yugiohdb/card_list.action?request_locale=en" target="_blank" rel="noopener">Konami-TCG-Datenbank</a> abgeglichen. Setmitgliedschaft, englische Kartennummern und die dort genannten Seltenheiten werden anhand der jeweiligen Ausgabe geführt. Noch ungeklärte Angaben sind gekennzeichnet. Der Abgleich bestätigt keine Foil-Oberfläche und keine getrennten Sprach-, Auflagen- oder regionalen Varianten. Kartenbilder und ergänzende Texte stammen von <a href="https://ygoprodeck.com/api-guide/" target="_blank" rel="noopener">YGOPRODeck</a>; die historischen Preise von <a href="https://www.cardmarket.com/de/YuGiOh/Data" target="_blank" rel="noopener">Cardmarket</a>.');
+html=html.replace('Alle Setnamen aus dem Katalog bleiben sichtbar. Sets ohne zugeordnete Karten sind als „noch ohne Kartendaten“ markiert.', 'Der Katalogfilter zeigt das offizielle Setverzeichnis oder den ungeprüften Altbestand. Frühere Sammlungseinträge bleiben mit ihren bisherigen Kennungen erhalten.');
+new vm.Script(app);fs.writeFileSync(dir+'app.js',app);fs.writeFileSync(dir+'index.html',html);

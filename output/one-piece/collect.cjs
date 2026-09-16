@@ -1,0 +1,17 @@
+const fs=require('fs');
+const dir=__dirname; const cat=Object.values(JSON.parse(fs.readFileSync(dir+'/catalog.json'))); const old=JSON.parse(fs.readFileSync(dir+'/existing.json'));
+const names=new Set([...old.map(c=>c.character),'Sogeking']);
+const bases=new Map(cat.filter(c=>names.has(c.name)).map(c=>[c.id.split('_')[0],c]));
+fs.mkdirSync(dir+'/pages',{recursive:true});
+const clean=s=>s.replace(/<[^>]*>/g,' ').replace(/&amp;/g,'&').replace(/&#039;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ').trim();
+async function get(path){const file=dir+'/pages/'+encodeURIComponent(path)+'.html';if(fs.existsSync(file))return fs.readFileSync(file,'utf8');let r=await fetch('https://onepiece.limitlesstcg.com'+path,{signal:AbortSignal.timeout(30000)});if(!r.ok)throw Error(r.status+' '+path);let t=await r.text();fs.writeFileSync(file,t);return t;}
+async function pool(items,fn){let i=0;await Promise.all(Array.from({length:3},async()=>{while(i<items.length){let x=items[i++];try{await fn(x)}catch(e){errors.push(String(e))} }}));}
+let errors=[],prints=[];
+(async()=>{
+await pool([...names],async name=>{let h=await get('/cards?q='+encodeURIComponent(name)+'&show=all');for(let m of h.matchAll(/href="\/cards\/(?:en\/)?((?:OP|ST|EB|P|PRB)\d*-\d+)(?:\?[^" ]*)?"/g)){if(!bases.has(m[1]))bases.set(m[1],{id:m[1],name,rarity:'Unbekannt'});}});
+console.log('Basis-Karten',bases.size);
+await pool([...bases],async([code,c])=>{let path='/cards/en/'+code;let h=await get(path);let actual=clean(h.match(/<span class="card-text-name">([\s\S]*?)<\/span>/)?.[1]||'');if(!names.has(actual))return;c={...c,name:actual};const detail=clean(h.match(/<div class="prints-current-details">([\s\S]*?)<\/div>/)?.[1]||'');if(c.rarity==='Unbekannt'){c.rarity=['Secret Rare','Super Rare','Treasure Rare','Rare','Uncommon','Common','Leader'].find(x=>detail.endsWith(x))||'Unbekannt';}let table=h.match(/<table class="card-prints-versions">([\s\S]*?)<\/table>/)?.[1]||'';for(let row of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)){let cells=[...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m=>m[1]);if(!cells.length)continue;let p=cells[0].match(/href="([^"]+)"/)?.[1]||path;let marker=clean(cells[0].match(/<span[^>]*>([\s\S]*?)<\/span>/)?.[1]||'');let set=clean(cells[0].replace(/<span[\s\S]*?<\/span>/g,''));let variant=p.includes('?');let eligible=variant||['Rare','SuperRare','Super Rare','SecretRare','Secret Rare','Special'].includes(c.rarity)||/promo|collection|premium|tournament|winner|participation|prize/i.test(set)||old.some(o=>o.code===code);if(!eligible)continue;let cm=cells[2]?.match(/href="([^"]+)"/)?.[1];prints.push({code,character:c.name==='Sogeking'?'Usopp':c.name,name:c.name,rarity:c.rarity,set,marker,path:p,url:cm?clean(cm).split('?')[0]:null,price:cm?Number(clean(cells[2]).replace('€','')):null});} });
+console.log('Varianten',prints.length,'Fehler',errors.length);
+await pool(prints,async p=>{let h=await get(p.path);p.image=h.match(/<div class="card-image">[\s\S]*?src="([^"]+)"/)?.[1];p.note=clean(h.match(/<div class="card-prints-notes">([\s\S]*?)<\/div>/)?.[1]||'');p.print=clean(h.match(/<div class="prints-current-details">([\s\S]*?)<\/div>/)?.[1]||'').replace(p.set,'').trim()||'Standard';});
+fs.writeFileSync(dir+'/prints.json',JSON.stringify(prints,null,2));fs.writeFileSync(dir+'/collection-errors.json',JSON.stringify(errors,null,2));console.log('Fertig',prints.length,errors.length);
+})();

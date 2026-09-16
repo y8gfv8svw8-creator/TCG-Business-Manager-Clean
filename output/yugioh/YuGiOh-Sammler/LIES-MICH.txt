@@ -1,0 +1,54 @@
+Yu-Gi-Oh! TCG-Sammler – Stand 10.09.2026
+
+STARTEN
+Doppelklick auf Start.cmd. Der Browser öffnet sich automatisch.
+Der gesamte Ordner muss zusammenbleiben. Node.js ist auf diesem Computer bereits vorhanden.
+Der lokale Helfer beendet sich nach 30 Minuten ohne weitere Zugriffe.
+
+ENTHALTEN
+14.050 TCG-Karten inklusive Speed Duel, 1.036 Set-Einträge und 44.602 Set-/Seltenheitsvarianten.
+Deutsche Namen, soweit verfügbar; englische Kartenbilder und Set-Codes.
+Suche, Setübersicht, Seltenheiten, Kartentypen, Favoriten, eigene Preise,
+Von-bis-Preisfilter und 5-Euro-Schnellwahl bis 100 Euro.
+
+BILDER
+Bilder werden beim Ansehen geladen und im Unterordner bilder gespeichert.
+Noch nicht geladene Bilder benötigen Internet. Die Kartendaten sind vollständig lokal.
+Alternative Motive sind in den Details auswählbar. Das Bild zeigt nicht zwingend
+die Setnummer, Sprache oder Foil-Oberfläche der ausgewählten Druckvariante.
+
+PREISE
+16.814 EUR-Trendpreise sind über eindeutig übereinstimmende Set-Inhalte abgeleitet
+zugeordnet. Das ist keine direkte offizielle Verknüpfung der beiden Datenquellen.
+Mehrdeutige Fälle bleiben ohne Setpreis. Sprache, Auflage und Zustand werden nicht
+getrennt bepreist. Karte ab (EUR) ist ein allgemeiner Einstiegspreis über mehrere Drucke.
+Eigene Preise können in der Detailansicht eingetragen werden.
+
+VIER SETS OHNE KARTENZUORDNUNG IN DER QUELLE
+Adidas collaboration card; Kaiba's Collector Box; The Lost Art Promotion 2023 D;
+Yugi's Collector Box. Sie sind in der Setübersicht gekennzeichnet.
+31 Karten haben keine Setzuordnung; sie bleiben über die Kartensuche auffindbar.
+Regionale Drucke, 1. Auflage/Unlimited und Sondervarianten sind nicht vollständig erfasst.
+
+SICHERUNG
+Mit Sammlung sichern speicherst du Besitz, Favoriten und eigene Preise als JSON-Datei.
+Sicherung laden führt vorhandene Einträge mit der Sicherung zusammen.
+Vor einem Browserwechsel oder dem Löschen von Browserdaten bitte sichern.
+
+QUELLEN
+https://ygoprodeck.com/api-guide/
+https://www.cardmarket.com/de/YuGiOh/Data
+https://www.db.yugioh-card.com/yugiohdb/
+
+Privates Fan-Projekt. Karten und Illustrationen gehören den jeweiligen Rechteinhabern.
+
+Unklare Seltenheitsangaben: 225 Einträge sind als Seltenheit ungeklärt markiert.
+Fertigstellung und Funktionsprüfung: 13.09.2026. Datenstand: 10.09.2026.
+
+BESITZLISTE
+In der Besitzliste kannst du Karten je Set abhaken. Bei mehreren Varianten wählst du
+zuerst die gewünschte Setnummer und Seltenheit. Der Besitz gilt für diese Variante.
+Der Besitzfilter zeigt alle, vorhandene oder fehlende Varianten. Setnummer aufsteigend
+sortiert die Nummern in ihrer natürlichen Reihenfolge. Änderungen bleiben im Browser gespeichert.
+Links beziehen sich auf die ausgewählte Variante im Set. Ohne eindeutige Produktzuordnung
+öffnet CM-Suche eine Suche mit Kartenname, Set, Setnummer und Seltenheit.

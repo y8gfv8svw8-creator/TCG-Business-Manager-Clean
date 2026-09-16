@@ -6269,11 +6269,42 @@ async function updateOfficialMarketPrices(manual=true) {
   }
 }
 
-function openSyncDb(){
-  return new Promise((resolve,reject)=>{const req=indexedDB.open("tcgWawiHandles",1);req.onupgradeneeded=()=>req.result.createObjectStore("handles");req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+const syncHandleCache = window.TcgIndexedDbRecovery.createIndexedDbRecovery({
+  indexedDB,
+  name:"tcgWawiHandles",
+  version:1,
+  onUpgrade:db=>{
+    if(!db.objectStoreNames.contains("handles")) db.createObjectStore("handles");
+  },
+  onStatus:event=>{
+    if(event.status==="defect-detected") console.warn("Defekter Ordner-Cache erkannt; er wird automatisch neu aufgebaut.",event.reason);
+    if(event.status==="repair-error") console.error("Ordner-Cache konnte nicht repariert werden.",event.error);
+  }
+});
+function openSyncDb(){return syncHandleCache.open();}
+async function saveDirectoryHandle(handle){
+  return syncHandleCache.withRecovery(db=>new Promise((resolve,reject)=>{
+    let tx;
+    try{tx=db.transaction("handles","readwrite");tx.objectStore("handles").put(handle,"syncDirectory");}
+    catch(error){reject(error);return;}
+    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  }));
 }
-async function saveDirectoryHandle(handle){const db=await openSyncDb();return new Promise((resolve,reject)=>{const tx=db.transaction("handles","readwrite");tx.objectStore("handles").put(handle,"syncDirectory");tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}
-async function loadDirectoryHandle(){const db=await openSyncDb();return new Promise((resolve,reject)=>{const req=db.transaction("handles").objectStore("handles").get("syncDirectory");req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);});}
+async function loadDirectoryHandle(){
+  return syncHandleCache.withRecovery(db=>new Promise((resolve,reject)=>{
+    let req;
+    try{req=db.transaction("handles","readonly").objectStore("handles").get("syncDirectory");}
+    catch(error){reject(error);return;}
+    req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);
+  }));
+}
+async function repairSyncHandleCache(){
+  syncDirectoryHandle=null;
+  await syncHandleCache.repair();
+  updateAutomationUi();
+  return {ok:true};
+}
+window.tcgRepairSyncHandleCache=repairSyncHandleCache;
 
 async function ensureDirectoryPermission(handle,write=false){
   if(!handle) return false; const opts={mode:write?"readwrite":"read"};

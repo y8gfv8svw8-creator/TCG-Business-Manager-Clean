@@ -153,8 +153,8 @@ test('migriert eine bestehende v3-Datenbank verlustfrei und legt vorher eine SQL
   const backupRoot = path.join(root, 'backups');
   const currentSchema = fs.readFileSync(schemaPath, 'utf8');
   const legacySchema = currentSchema
-    .replace("  search_text TEXT NOT NULL DEFAULT '',\n", '')
-    .replace("  search_compact TEXT NOT NULL DEFAULT '',\n", '');
+    .replace(/^\s*search_text TEXT NOT NULL DEFAULT '',\r?$/m, '')
+    .replace(/^\s*search_compact TEXT NOT NULL DEFAULT '',\r?$/m, '');
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(legacySchema);
   legacy.prepare('INSERT INTO schema_version (version, applied_at) VALUES (3, ?)').run(new Date().toISOString());

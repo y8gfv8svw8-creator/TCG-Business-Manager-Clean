@@ -17,6 +17,7 @@ let dataRoot = '';
 let mainWindow = null;
 let scannerRecognizer = null;
 let collectionPhotoStore = null;
+let startupValidation = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
@@ -52,6 +53,11 @@ function initializeDatabase() {
     backupRoot: path.join(dataRoot, 'Backups'),
     photoStore: collectionPhotoStore
   }).open();
+  startupValidation = database.validateStartup();
+  if (!startupValidation?.valid) {
+    throw new Error('SQLite wurde beim Start nicht vollständig validiert.');
+  }
+  return startupValidation;
 }
 
 function setupIpcHandlers() {
@@ -103,6 +109,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('data:load-state', () => database.loadState());
+  ipcMain.handle('data:validate-startup', () => database.validateStartup());
   ipcMain.handle('data:save-state', (_event, state) => database.saveState(state));
   ipcMain.handle('data:reset-state', (_event, state) => database.saveState(state, { allowDestructiveReset: true }));
   ipcMain.handle('data:get-status', () => database.getStatus());
@@ -122,6 +129,7 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-market-decision-history', (_event, payload) => database.getMarketDecisionHistory(payload));
   ipcMain.handle('data:get-market-overview', (_event, payload) => database.getMarketOverview(payload));
   ipcMain.handle('data:get-snapshot-dates', (_event, payload) => database.getSnapshotDates(payload));
+  ipcMain.handle('data:get-cardmarket-cache-seed', (_event, payload) => database.getCardmarketCacheSeed(payload));
   ipcMain.handle('data:clear-market-data', () => database.clearMarketData());
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
   ipcMain.handle('collection-photo:store', (_event, payload = {}) => {

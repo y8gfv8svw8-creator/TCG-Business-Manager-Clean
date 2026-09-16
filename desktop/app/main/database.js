@@ -212,6 +212,9 @@ class TcgDatabase {
     this.photoStore = photoStore;
     this.db = null;
     this.cardNameRecognitionIndex = null;
+    this.databaseExistedBeforeOpen = false;
+    this.databaseExistenceChecked = false;
+    this.startupValidation = null;
   }
 
   open() {
@@ -219,6 +222,12 @@ class TcgDatabase {
 
     ensureDirectory(path.dirname(this.databasePath));
     ensureDirectory(this.backupRoot);
+
+    if (!this.databaseExistenceChecked) {
+      this.databaseExistedBeforeOpen = fs.existsSync(this.databasePath)
+        && Number(fs.statSync(this.databasePath).size || 0) > 0;
+      this.databaseExistenceChecked = true;
+    }
 
     this.db = new DatabaseSync(this.databasePath);
     this.db.exec('PRAGMA foreign_keys = ON;');
@@ -594,19 +603,104 @@ class TcgDatabase {
       businessEventCount: Number(eventRow?.count || 0),
       activeTradeLineCount: Number(tradeLineRow?.count || 0),
       snapshotCount: Number(snapshotRow?.count || 0),
-      latestSnapshotDate: lastSnapshot?.date || ''
+      latestSnapshotDate: lastSnapshot?.date || '',
+      startupValidation: this.startupValidation
     };
+  }
+
+  validateStartup() {
+    this.open();
+    const requiredTables = [
+      'schema_version', 'app_state', 'products', 'market_prices',
+      'trade_orders', 'trade_lines', 'inventory_assets'
+    ];
+    const presentTables = new Set(this.db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table'
+    `).all().map(row => String(row.name)));
+    const missingTables = requiredTables.filter(tableName => !presentTables.has(tableName));
+    if (missingTables.length) {
+      throw new Error(`SQLite-Startprüfung fehlgeschlagen: Tabellen fehlen (${missingTables.join(', ')}).`);
+    }
+
+    const schemaVersion = Number(this.db.prepare('SELECT MAX(version) AS version FROM schema_version').get()?.version || 0);
+    if (schemaVersion !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(`SQLite-Startprüfung fehlgeschlagen: Schema ${schemaVersion} statt ${CURRENT_SCHEMA_VERSION}.`);
+    }
+
+    const quickCheckRows = this.db.prepare('PRAGMA quick_check;').all();
+    const quickCheckMessages = quickCheckRows.map(row => String(row.quick_check ?? Object.values(row)[0] ?? '')).filter(Boolean);
+    if (quickCheckMessages.length !== 1 || quickCheckMessages[0].toLowerCase() !== 'ok') {
+      throw new Error(`SQLite-Integritätsprüfung fehlgeschlagen: ${quickCheckMessages.join('; ') || 'kein Ergebnis'}.`);
+    }
+
+    const foreignKeyErrors = this.db.prepare('PRAGMA foreign_key_check;').all();
+    if (foreignKeyErrors.length) {
+      throw new Error(`SQLite-Konsistenzprüfung fehlgeschlagen: ${foreignKeyErrors.length} ungültige Fremdschlüssel.`);
+    }
+
+    const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    let state = null;
+    if (row?.state_json) {
+      try {
+        state = JSON.parse(row.state_json);
+      } catch (error) {
+        throw new Error(`SQLite-Startprüfung fehlgeschlagen: Der gespeicherte Programmstand ist beschädigt (${error.message}).`);
+      }
+      if (!state || typeof state !== 'object' || Array.isArray(state)) {
+        throw new Error('SQLite-Startprüfung fehlgeschlagen: Der gespeicherte Programmstand ist kein gültiges Objekt.');
+      }
+      for (const key of ['inventory', 'privateCollection', 'purchases', 'sales']) {
+        if (state[key] !== undefined && !Array.isArray(state[key])) {
+          throw new Error(`SQLite-Startprüfung fehlgeschlagen: ${key} ist keine gültige Liste.`);
+        }
+      }
+    }
+
+    const expectedCounts = {
+      inventory: Array.isArray(state?.inventory) ? state.inventory.length : 0,
+      privateCollection: Array.isArray(state?.privateCollection) ? state.privateCollection.length : 0,
+      purchases: Array.isArray(state?.purchases) ? state.purchases.length : 0,
+      sales: Array.isArray(state?.sales) ? state.sales.length : 0
+    };
+    const materializedCounts = {
+      inventory: Number(this.db.prepare("SELECT COUNT(*) AS count FROM inventory_assets WHERE archived = 0 AND ownership = 'business'").get()?.count || 0),
+      privateCollection: Number(this.db.prepare("SELECT COUNT(*) AS count FROM inventory_assets WHERE archived = 0 AND ownership = 'private'").get()?.count || 0),
+      purchases: Number(this.db.prepare("SELECT COUNT(*) AS count FROM trade_orders WHERE archived = 0 AND trade_type = 'purchase'").get()?.count || 0),
+      sales: Number(this.db.prepare("SELECT COUNT(*) AS count FROM trade_orders WHERE archived = 0 AND trade_type = 'sale'").get()?.count || 0)
+    };
+    const countMismatches = Object.keys(expectedCounts)
+      .filter(key => expectedCounts[key] !== materializedCounts[key])
+      .map(key => `${key}: App-State ${expectedCounts[key]}, SQLite ${materializedCounts[key]}`);
+    if (countMismatches.length) {
+      throw new Error(`SQLite-Startprüfung fehlgeschlagen: App-State und Tabellen stimmen nicht überein (${countMismatches.join('; ')}).`);
+    }
+
+    const coreRecordCount = coreBusinessRecordCount(state);
+    this.startupValidation = Object.freeze({
+      valid: true,
+      checkedAt: isoNow(),
+      integrity: 'ok',
+      foreignKeys: 'ok',
+      schemaVersion,
+      hasStoredState: Boolean(row?.state_json),
+      isEmpty: coreRecordCount === 0,
+      coreRecordCount,
+      databaseExistedBeforeOpen: this.databaseExistedBeforeOpen,
+      counts: { ...expectedCounts }
+    });
+    return this.startupValidation;
   }
 
   loadState() {
     this.open();
     const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
-    if (!row?.state_json) return { state: null, updatedAt: '' };
+    if (!row?.state_json) return { state: null, updatedAt: '', validation: this.startupValidation };
 
     try {
       return {
         state: JSON.parse(row.state_json),
-        updatedAt: row.updated_at || ''
+        updatedAt: row.updated_at || '',
+        validation: this.startupValidation
       };
     } catch (error) {
       throw new Error(`Gespeicherter Programmstand ist beschädigt: ${error.message}`);
@@ -2750,6 +2844,59 @@ class TcgDatabase {
       ORDER BY captured_date DESC
       LIMIT ?
     `).all(safeLimit);
+  }
+
+  getCardmarketCacheSeed({ productOffset = 0, priceOffset = 0, limit = 2000 } = {}) {
+    this.open();
+    const safeLimit = boundedInteger(limit, 100, 5000, 2000);
+    const safeProductOffset = boundedInteger(productOffset, 0, 10000000, 0);
+    const safePriceOffset = boundedInteger(priceOffset, 0, 10000000, 0);
+    const latestDate = String(this.db.prepare('SELECT MAX(captured_date) AS date FROM market_prices').get()?.date || '');
+    const productCount = Number(this.db.prepare('SELECT COUNT(*) AS count FROM products WHERE archived = 0').get()?.count || 0);
+    const latestPriceCount = latestDate
+      ? Number(this.db.prepare('SELECT COUNT(*) AS count FROM market_prices WHERE captured_date = ?').get(latestDate)?.count || 0)
+      : 0;
+    const products = this.db.prepare(`
+      SELECT
+        product_id AS productId,
+        COALESCE(NULLIF(name_en, ''), NULLIF(official_name, ''), NULLIF(name_de, ''), 'CM Produkt ' || product_id) AS name,
+        COALESCE(NULLIF(name_de, ''), '') AS germanName,
+        COALESCE(NULLIF(official_name, ''), NULLIF(name_en, ''), NULLIF(name_de, '')) AS officialName,
+        COALESCE(NULLIF(name_en, ''), NULLIF(official_name, ''), NULLIF(name_de, '')) AS baseName,
+        COALESCE(NULLIF(name_en, ''), NULLIF(official_name, ''), NULLIF(name_de, '')) AS officialBaseName,
+        metacard_id AS metacardId, expansion_id AS expansionId, category_id AS categoryId,
+        set_name AS setName, set_code AS setCode, set_code AS "set",
+        rarity, variant, language, card_condition AS condition,
+        collector_number AS collectorNumber, product_url AS productUrl,
+        search_text AS searchText, updated_at AS updatedAt
+      FROM products
+      WHERE archived = 0
+      ORDER BY product_id
+      LIMIT ? OFFSET ?
+    `).all(safeLimit, safeProductOffset);
+    const latestPrices = latestDate ? this.db.prepare(`
+      SELECT
+        product_id AS productId, captured_date AS date, category_id AS categoryId,
+        avg_price AS avg, low_price AS low, trend_price AS trend,
+        avg_1 AS avg1, avg_7 AS avg7, avg_30 AS avg30,
+        avg_foil AS avgFoil, low_foil AS lowFoil, trend_foil AS trendFoil,
+        avg_1_foil AS avg1Foil, avg_7_foil AS avg7Foil, avg_30_foil AS avg30Foil,
+        source_id AS sourceId, source_type AS sourceType, data_quality AS dataQuality,
+        collected_at AS collectedAt, imported_at AS importedAt
+      FROM market_prices
+      WHERE captured_date = ?
+      ORDER BY product_id
+      LIMIT ? OFFSET ?
+    `).all(latestDate, safeLimit, safePriceOffset) : [];
+    return {
+      products: products.map(row => ({ ...row, archived: false })),
+      latestPrices,
+      productCount,
+      latestPriceCount,
+      latestDate,
+      productsDone: safeProductOffset + products.length >= productCount,
+      pricesDone: safePriceOffset + latestPrices.length >= latestPriceCount
+    };
   }
 
   getMarketOverview({ days = 30, limit = 12, minTrend = 0.05 } = {}) {

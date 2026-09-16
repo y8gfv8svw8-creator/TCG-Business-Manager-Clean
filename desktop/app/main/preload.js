@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
     return () => ipcRenderer.removeListener('scanner:submission', listener);
   },
   loadState: () => ipcRenderer.invoke('data:load-state'),
+  validateStartup: () => ipcRenderer.invoke('data:validate-startup'),
   saveState: state => ipcRenderer.invoke('data:save-state', state),
   resetState: state => ipcRenderer.invoke('data:reset-state', state),
   getDatabaseStatus: () => ipcRenderer.invoke('data:get-status'),
@@ -35,6 +36,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getMarketDecisionHistory: payload => ipcRenderer.invoke('data:get-market-decision-history', payload),
   getMarketOverview: payload => ipcRenderer.invoke('data:get-market-overview', payload),
   getSnapshotDates: payload => ipcRenderer.invoke('data:get-snapshot-dates', payload),
+  getCardmarketCacheSeed: payload => ipcRenderer.invoke('data:get-cardmarket-cache-seed', payload),
   clearMarketData: () => ipcRenderer.invoke('data:clear-market-data'),
   recordImportRun: run => ipcRenderer.invoke('data:record-import-run', run),
   storeCollectionPhoto: payload => ipcRenderer.invoke('collection-photo:store', payload),

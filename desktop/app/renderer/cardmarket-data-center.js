@@ -53,7 +53,7 @@
     autoDailyUpdate: true
   };
 
-  let cmDbPromise = null;
+  let cmCacheManager = null;
   let cmMergedCache = null;
   let cmProductByIdCache = null;
   let cmLatestByIdCache = null;
@@ -250,66 +250,61 @@
     return {original, baseName: baseName || original, variant, rarity};
   }
 
-  function cmOpenDb() {
-    if (cmDbPromise) return cmDbPromise;
-    cmDbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(CM_DB_NAME, CM_DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        let products;
-        if (!db.objectStoreNames.contains("products")) {
-          products = db.createObjectStore("products", {keyPath:"productId"});
-        } else {
-          products = request.transaction.objectStore("products");
-        }
-        if (!products.indexNames.contains("metacardId")) products.createIndex("metacardId", "metacardId", {unique:false});
-        if (!products.indexNames.contains("expansionId")) products.createIndex("expansionId", "expansionId", {unique:false});
-        if (!products.indexNames.contains("baseName")) products.createIndex("baseName", "baseName", {unique:false});
+  function cmUpgradeDb(db, transaction) {
+    let products;
+    if (!db.objectStoreNames.contains("products")) products = db.createObjectStore("products", {keyPath:"productId"});
+    else products = transaction.objectStore("products");
+    if (!products.indexNames.contains("metacardId")) products.createIndex("metacardId", "metacardId", {unique:false});
+    if (!products.indexNames.contains("expansionId")) products.createIndex("expansionId", "expansionId", {unique:false});
+    if (!products.indexNames.contains("baseName")) products.createIndex("baseName", "baseName", {unique:false});
 
-        let latest;
-        if (!db.objectStoreNames.contains("latestPrices")) {
-          latest = db.createObjectStore("latestPrices", {keyPath:"productId"});
-        } else {
-          latest = request.transaction.objectStore("latestPrices");
-        }
-        if (!latest.indexNames.contains("date")) latest.createIndex("date", "date", {unique:false});
-        if (!latest.indexNames.contains("dailyChange")) latest.createIndex("dailyChange", "dailyChange", {unique:false});
+    let latest;
+    if (!db.objectStoreNames.contains("latestPrices")) latest = db.createObjectStore("latestPrices", {keyPath:"productId"});
+    else latest = transaction.objectStore("latestPrices");
+    if (!latest.indexNames.contains("date")) latest.createIndex("date", "date", {unique:false});
+    if (!latest.indexNames.contains("dailyChange")) latest.createIndex("dailyChange", "dailyChange", {unique:false});
 
-        let history;
-        if (!db.objectStoreNames.contains("priceHistory")) {
-          history = db.createObjectStore("priceHistory", {keyPath:"key"});
-        } else {
-          history = request.transaction.objectStore("priceHistory");
-        }
-        if (!history.indexNames.contains("productId")) history.createIndex("productId", "productId", {unique:false});
-        if (!history.indexNames.contains("date")) history.createIndex("date", "date", {unique:false});
+    let history;
+    if (!db.objectStoreNames.contains("priceHistory")) history = db.createObjectStore("priceHistory", {keyPath:"key"});
+    else history = transaction.objectStore("priceHistory");
+    if (!history.indexNames.contains("productId")) history.createIndex("productId", "productId", {unique:false});
+    if (!history.indexNames.contains("date")) history.createIndex("date", "date", {unique:false});
 
-
-        if (!db.objectStoreNames.contains("collectionRuns")) {
-          const runs = db.createObjectStore("collectionRuns", {keyPath:"runId"});
-          runs.createIndex("startedAt", "startedAt", {unique:false});
-          runs.createIndex("status", "status", {unique:false});
-        }
-        if (!db.objectStoreNames.contains("dataSources")) {
-          db.createObjectStore("dataSources", {keyPath:"sourceId"});
-        }
-        if (!db.objectStoreNames.contains("analysisMetrics")) {
-          const metrics = db.createObjectStore("analysisMetrics", {keyPath:"key"});
-          metrics.createIndex("productId", "productId", {unique:false});
-          metrics.createIndex("date", "date", {unique:false});
-        }
-        if (!db.objectStoreNames.contains("germanAliases")) {
-          const aliases = db.createObjectStore("germanAliases", {keyPath:"key"});
-          aliases.createIndex("germanName", "germanName", {unique:false});
-          aliases.createIndex("cardId", "cardId", {unique:false});
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error("Cardmarket-Datenbank konnte nicht geöffnet werden."));
-      request.onblocked = () => reject(new Error("Cardmarket-Datenbank ist in einem anderen Tab blockiert."));
-    });
-    return cmDbPromise;
+    if (!db.objectStoreNames.contains("collectionRuns")) {
+      const runs = db.createObjectStore("collectionRuns", {keyPath:"runId"});
+      runs.createIndex("startedAt", "startedAt", {unique:false});
+      runs.createIndex("status", "status", {unique:false});
+    }
+    if (!db.objectStoreNames.contains("dataSources")) db.createObjectStore("dataSources", {keyPath:"sourceId"});
+    if (!db.objectStoreNames.contains("analysisMetrics")) {
+      const metrics = db.createObjectStore("analysisMetrics", {keyPath:"key"});
+      metrics.createIndex("productId", "productId", {unique:false});
+      metrics.createIndex("date", "date", {unique:false});
+    }
+    if (!db.objectStoreNames.contains("germanAliases")) {
+      const aliases = db.createObjectStore("germanAliases", {keyPath:"key"});
+      aliases.createIndex("germanName", "germanName", {unique:false});
+      aliases.createIndex("cardId", "cardId", {unique:false});
+    }
   }
+
+  function cmCache() {
+    if (cmCacheManager) return cmCacheManager;
+    cmCacheManager = window.TcgIndexedDbRecovery.createIndexedDbRecovery({
+      indexedDB,
+      name:CM_DB_NAME,
+      version:CM_DB_VERSION,
+      onUpgrade:(db,transaction)=>cmUpgradeDb(db,transaction),
+      onStatus:event=>{
+        if(event.status==="defect-detected") cmSetProgress("<strong>Defekter Cardmarket-Cache erkannt</strong><br>Der Oberflächen-Cache wird im Hintergrund sicher aus SQLite neu aufgebaut.",15,"warning");
+        if(event.status==="repair-complete") {cmInvalidateCache();cmSetProgress("<strong>Cardmarket-Cache repariert</strong><br>Die dauerhaften SQLite-Daten blieben unverändert.",100,"success");}
+        if(event.status==="repair-error") cmSetProgress(`<strong>Cache-Reparatur fehlgeschlagen</strong><br>${escapeHtml(event.error?.message||event.error||"Unbekannter Fehler")}`,100,"error");
+      }
+    });
+    return cmCacheManager;
+  }
+
+  function cmOpenDb() { return cmCache().open(); }
 
   function cmRequest(request) {
     return new Promise((resolve, reject) => {
@@ -318,43 +313,66 @@
     });
   }
 
+  async function cmRebuildCacheFromSqlite(db) {
+    if (!window.desktopApp?.getCardmarketCacheSeed) return {products:0,latestPrices:0};
+    let productOffset=0,priceOffset=0,productsDone=false,pricesDone=false,productCount=0,latestPriceCount=0;
+    while(!productsDone||!pricesDone){
+      const seed=await window.desktopApp.getCardmarketCacheSeed({productOffset,priceOffset,limit:2000});
+      if(seed.products?.length) await cmPutRowsIntoDb(db,"products",seed.products);
+      if(seed.latestPrices?.length) await cmPutRowsIntoDb(db,"latestPrices",seed.latestPrices);
+      productOffset+=seed.products?.length||0;
+      priceOffset+=seed.latestPrices?.length||0;
+      productsDone=Boolean(seed.productsDone);
+      pricesDone=Boolean(seed.pricesDone);
+      productCount=Number(seed.productCount||0);
+      latestPriceCount=Number(seed.latestPriceCount||0);
+      if((!seed.products?.length&&!productsDone)||(!seed.latestPrices?.length&&!pricesDone)) throw new Error("SQLite-Cacheaufbau hat keinen Fortschritt erzielt.");
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    return {products:productCount,latestPrices:latestPriceCount};
+  }
+
+  function cmPutRowsIntoDb(db,storeName,rows) {
+    if(!rows.length)return Promise.resolve();
+    return new Promise((resolve,reject)=>{
+      let tx;
+      try{tx=db.transaction(storeName,"readwrite");const store=tx.objectStore(storeName);rows.forEach(row=>store.put(row));}
+      catch(error){reject(error);return;}
+      tx.oncomplete=()=>resolve();
+      tx.onerror=()=>reject(tx.error||new Error("Daten konnten nicht gespeichert werden."));
+      tx.onabort=()=>reject(tx.error||new Error("Datenbankvorgang wurde abgebrochen."));
+    });
+  }
+
+  function cmWithCacheRecovery(operation) {
+    return cmCache().withRecovery(operation,{rebuild:cmRebuildCacheFromSqlite});
+  }
+
   async function cmGetAll(storeName) {
-    const db = await cmOpenDb();
-    return cmRequest(db.transaction(storeName, "readonly").objectStore(storeName).getAll());
+    return cmWithCacheRecovery(db=>cmRequest(db.transaction(storeName,"readonly").objectStore(storeName).getAll()));
   }
 
   async function cmGet(storeName, key) {
-    const db = await cmOpenDb();
-    return cmRequest(db.transaction(storeName, "readonly").objectStore(storeName).get(key));
+    return cmWithCacheRecovery(db=>cmRequest(db.transaction(storeName,"readonly").objectStore(storeName).get(key)));
   }
 
   async function cmCount(storeName) {
-    const db = await cmOpenDb();
-    return cmRequest(db.transaction(storeName, "readonly").objectStore(storeName).count());
+    return cmWithCacheRecovery(db=>cmRequest(db.transaction(storeName,"readonly").objectStore(storeName).count()));
   }
 
   async function cmClearStore(storeName) {
-    const db = await cmOpenDb();
-    return new Promise((resolve, reject) => {
+    return cmWithCacheRecovery(db=>new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, "readwrite");
       tx.objectStore(storeName).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error("Datenbank konnte nicht geleert werden."));
       tx.onabort = () => reject(tx.error || new Error("Datenbankvorgang wurde abgebrochen."));
-    });
+    }));
   }
 
   async function cmPutChunk(storeName, rows) {
     if (!rows.length) return;
-    const db = await cmOpenDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, "readwrite");
-      const store = tx.objectStore(storeName);
-      rows.forEach(row => store.put(row));
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error("Daten konnten nicht gespeichert werden."));
-      tx.onabort = () => reject(tx.error || new Error("Datenbankvorgang wurde abgebrochen."));
-    });
+    await cmWithCacheRecovery(db=>cmPutRowsIntoDb(db,storeName,rows));
   }
 
   async function cmWriteRows(storeName, rows, onProgress, chunkSize=2000) {
@@ -1236,10 +1254,11 @@
         console.error("SQLite-Preishistorie konnte nicht gelesen werden:", error);
       }
     }
-    const db = await cmOpenDb();
-    const tx = db.transaction("priceHistory", "readonly");
-    const index = tx.objectStore("priceHistory").index("productId");
-    const rows = await cmRequest(index.getAll(String(productId)));
+    const rows = await cmWithCacheRecovery(db=>{
+      const tx = db.transaction("priceHistory", "readonly");
+      const index = tx.objectStore("priceHistory").index("productId");
+      return cmRequest(index.getAll(String(productId)));
+    });
     return rows.sort((a,b) => String(a.date).localeCompare(String(b.date)));
   }
 
@@ -2182,7 +2201,8 @@
       let changed = false;
       if (products !== Number(state.cardmarket.productCount || 0)) { state.cardmarket.productCount=products; changed=true; }
       if (latest && !state.cardmarket.priceRowCount) { state.cardmarket.priceRowCount=latest; changed=true; }
-      if (history !== Number(state.cardmarket.historyRowCount || 0)) { state.cardmarket.historyRowCount=history; changed=true; }
+      const durableHistoryCount=sqliteStatus?.ready ? Number(sqliteStatus.marketPriceCount||0) : history;
+      if (durableHistoryCount !== Number(state.cardmarket.historyRowCount || 0)) { state.cardmarket.historyRowCount=durableHistoryCount; changed=true; }
       if (Array.isArray(snapshotRows) && snapshotRows.length) {
         const dates=snapshotRows.map(row=>String(row.date||"")).filter(Boolean);
         if (JSON.stringify(dates)!==JSON.stringify(state.cardmarket.snapshotDates||[])) { state.cardmarket.snapshotDates=dates; changed=true; }
@@ -2274,6 +2294,29 @@
     cmSetProgress("<strong>Cardmarket-Daten wurden gelöscht.</strong>",100,"success");
     return true;
   }
+
+  async function cmRepairCardmarketCache() {
+    const button=document.getElementById("cmRepairCacheBtn");
+    if(button){button.disabled=true;button.textContent="Cache wird repariert …";}
+    cmSetProgress("<strong>Cardmarket-Cache wird sicher neu aufgebaut …</strong><br>Bestand, Käufe, Verkäufe und die dauerhafte SQLite-Preishistorie werden nicht verändert.",10,"warning");
+    try{
+      const result=await cmCache().repair({rebuild:cmRebuildCacheFromSqlite,automatic:false});
+      await window.tcgRepairSyncHandleCache?.();
+      cmInvalidateCache();
+      await cmLoadMergedCache();
+      await cmRefreshMetadataFromDb();
+      renderAll();
+      const rebuilt=result?.rebuildResult||{};
+      cmSetProgress(`<strong>Cardmarket-Cache repariert</strong><br>${Number(rebuilt.products||0).toLocaleString("de-DE")} Produkte und ${Number(rebuilt.latestPrices||0).toLocaleString("de-DE")} aktuelle Preiszeilen wurden aus SQLite neu aufgebaut.`,100,"success");
+      return result;
+    }catch(error){
+      cmSetProgress(`<strong>Cache-Reparatur fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error");
+      throw error;
+    }finally{
+      if(button){button.disabled=false;button.textContent="Cache reparieren";}
+    }
+  }
+  window.tcgRepairCardmarketCache=cmRepairCardmarketCache;
 
   // Vollständige Import-Erkennung für Universalimport und überwachten Ordner.
   const legacyUniversalImportFile = universalImportFile;
@@ -2371,6 +2414,7 @@
   document.getElementById("cmLoadGermanNamesBtn")?.addEventListener("click",()=>cmLoadGermanNamesOnline({automatic:false,force:true}).catch(error=>cmSetProgress(`<strong>Deutsche Kartennamen konnten nicht geladen werden</strong><br>${escapeHtml(error.message)}<br><small>Internetverbindung prüfen und erneut versuchen.</small>`,100,"error")));
     document.getElementById("cmExportBackupBtn")?.addEventListener("click",()=>cmExportBackup().catch(error=>cmSetProgress(`<strong>Export fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error")));
   document.getElementById("cmClearDataBtn")?.addEventListener("click",()=>cmClearAll(true).catch(error=>alert(error.message)));
+  document.getElementById("cmRepairCacheBtn")?.addEventListener("click",()=>cmRepairCardmarketCache().catch(error=>alert(`Cache konnte nicht repariert werden: ${error.message}`)));
   document.getElementById("cmRefreshOpportunitiesBtn")?.addEventListener("click",()=>{cmOpportunityCache={key:"",rows:[]};cmRenderOpportunities();});
   document.getElementById("cmHistoryPeriod")?.addEventListener("change",()=>cmRenderSqliteHistoryOverview());
   document.getElementById("cmRefreshHistoryBtn")?.addEventListener("click",()=>cmRenderSqliteHistoryOverview());

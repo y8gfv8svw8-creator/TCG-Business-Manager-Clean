@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getCardmarketCacheSeed: payload => ipcRenderer.invoke('data:get-cardmarket-cache-seed', payload),
   clearMarketData: () => ipcRenderer.invoke('data:clear-market-data'),
   recordImportRun: run => ipcRenderer.invoke('data:record-import-run', run),
+  parsePurchasePriceFile: payload => ipcRenderer.invoke('import:parse-purchase-price-file', payload),
   storeCollectionPhoto: payload => ipcRenderer.invoke('collection-photo:store', payload),
   readCollectionPhoto: relativePath => ipcRenderer.invoke('collection-photo:read', { relativePath }),
   deleteCollectionPhoto: payload => ipcRenderer.invoke('collection-photo:delete', payload),

@@ -6,6 +6,7 @@ const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
+const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.1';
@@ -136,6 +137,7 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-cardmarket-cache-seed', (_event, payload) => database.getCardmarketCacheSeed(payload));
   ipcMain.handle('data:clear-market-data', () => database.clearMarketData());
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
+  ipcMain.handle('import:parse-purchase-price-file', (_event, payload) => parseSpreadsheetFile(payload));
   ipcMain.handle('collection-photo:store', (_event, payload = {}) => {
     const loaded = database.loadState();
     const state = loaded.state;

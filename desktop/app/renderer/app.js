@@ -73,6 +73,7 @@ let scannerSubmissionProcessing = false;
 let scannerDialogSuspended = false;
 let saleAllocationShowAll = false;
 let saleAllocationDraftSelections = new Map();
+let pendingPurchasePriceImport = null;
 
 const views = {
   private: ["Privatsammlung", "Private Karten getrennt vom Geschaeftsbestand verwalten."],
@@ -2278,6 +2279,112 @@ function renderInventory() {
       <td>${stats.total>0?`<div class="row-actions"><button class="icon-button" data-edit-inventory-group="${escapeHtml(group.key)}">Bearbeiten</button><button class="icon-button" data-delete-inventory-group="${escapeHtml(group.key)}">Löschen</button></div>`:'<span class="muted">Historie</span>'}</td>
     </tr>`;
   }).join("") : `<tr><td colspan="15" class="empty">Keine Karten gefunden</td></tr>`;
+}
+
+const importMoney = value => value === null || value === undefined
+  ? "–"
+  : `${new Intl.NumberFormat("de-DE", {minimumFractionDigits:2, maximumFractionDigits:8}).format(Number(value))} €`;
+
+function purchaseImportOldValues(summary) {
+  const values=(summary?.distinct||[]).map(value=>value==="unknown"?"unbekannt":importMoney(Number(value)));
+  return values.length?values.join(" / "):"unbekannt";
+}
+
+function purchaseImportIssueRows(rows=[]) {
+  return rows.map(row=>`<tr><td>${escapeHtml(row.collectorNumber||"–")}</td><td>${escapeHtml(row.name||"–")}</td><td>${Number(row.quantity||0)||"–"}</td><td>${Number(row.foundQuantity??0)}</td><td>${escapeHtml(row.reason||"Prüfung erforderlich")}</td><td>${escapeHtml([row.sheet,row.rowNumber?`Zeile ${row.rowNumber}`:""].filter(Boolean).join(" · "))}</td></tr>`).join("");
+}
+
+function renderPurchasePriceImportPreview(preview, fileNames=[]) {
+  const content=document.getElementById("purchasePriceImportContent");
+  const confirmButton=document.getElementById("purchasePriceImportConfirm");
+  if(!content||!confirmButton)return;
+  const difference=Number(preview.controlDifference||0);
+  const exact=Math.abs(difference)<0.0000001;
+  const controlText=exact
+    ? `Kontrollsumme stimmt exakt: ${importMoney(preview.sourceAllocatedCost)}.`
+    : `Tabellensumme ${importMoney(preview.sourceAllocatedCost)} · Kontrollwert ${importMoney(preview.controlTotal)} · Abweichung ${difference>0?"+":""}${importMoney(difference)}. Es wird nichts automatisch korrigiert.`;
+  const matchedRows=preview.matched.map(row=>`<tr>
+    <td><strong>${escapeHtml(row.collectorNumber)}</strong><br><small>${escapeHtml(row.sourceRows.map(source=>source.sheet).filter((value,index,array)=>array.indexOf(value)===index).join(" / "))}</small></td>
+    <td>${escapeHtml(row.name)}</td>
+    <td>${purchaseImportOldValues(row.oldCost)}</td>
+    <td><strong>${row.newCostPerItem===null?"unverändert":importMoney(row.newCostPerItem)}</strong>${row.allocatedCost!==null&&row.quantity>1?`<br><small>${importMoney(row.allocatedCost)} gesamt ÷ ${row.quantity}</small>`:""}</td>
+    <td>${purchaseImportOldValues(row.oldExpectedSell)}</td>
+    <td><strong>${row.expectedSell===null?"unverändert":importMoney(row.expectedSell)}</strong><br><small>Spalte „Erwarteter VK je Karte“</small></td>
+    <td>${row.foundQuantity}</td>
+  </tr>`).join("");
+  content.innerHTML=`
+    <div class="purchase-import-summary">
+      <div><small>Datei${fileNames.length===1?"":"en"}</small><strong>${escapeHtml(fileNames.join(", "))}</strong></div>
+      <div><small>Eindeutige Treffer</small><strong>${preview.matched.length} Positionen / ${preview.matchedQuantity} Karten</strong></div>
+      <div><small>Nicht gefunden</small><strong>${preview.missing.length}</strong></div>
+      <div><small>Mehrdeutig</small><strong>${preview.ambiguous.length}</strong></div>
+      <div><small>Fehler / leere Zeilen</small><strong>${preview.errors.length} / ${preview.skipped.length}</strong></div>
+      <div><small>EK-Summe der eindeutigen Treffer</small><strong>${importMoney(preview.sumImportedEk)}</strong></div>
+    </div>
+    <div class="purchase-import-control ${preview.controlWithinTolerance?"ok":"warning"}"><strong>${preview.controlWithinTolerance?"Kontrollsumme plausibel":"Kontrollsumme außerhalb der Toleranz"}</strong><br>${escapeHtml(controlText)}${preview.missingRequiredSheets.length?`<br><strong>Fehlende Blätter: ${escapeHtml(preview.missingRequiredSheets.join(", "))}</strong>`:""}</div>
+    <section class="purchase-import-section"><h3>Diese Werte werden übernommen</h3>
+      ${matchedRows?`<div class="table-wrap"><table class="purchase-import-table"><thead><tr><th>Kartennummer</th><th>Kartenname</th><th>Alter EK</th><th>Neuer EK je Exemplar</th><th>Alter erwarteter VK</th><th>Neuer erwarteter VK</th><th>Gefundene Menge</th></tr></thead><tbody>${matchedRows}</tbody></table></div>`:'<div class="warning">Keine eindeutigen Treffer vorhanden.</div>'}
+    </section>
+    ${preview.ambiguous.length?`<section class="purchase-import-section"><h3>Mehrdeutige Treffer – nicht verändern</h3><div class="table-wrap"><table><thead><tr><th>Kartennummer</th><th>Kartenname</th><th>Menge Tabelle</th><th>Gefunden</th><th>Grund</th><th>Quelle</th></tr></thead><tbody>${purchaseImportIssueRows(preview.ambiguous)}</tbody></table></div></section>`:""}
+    ${preview.missing.length?`<section class="purchase-import-section"><h3>Nicht gefundene Karten – nicht verändern</h3><div class="table-wrap"><table><thead><tr><th>Kartennummer</th><th>Kartenname</th><th>Menge Tabelle</th><th>Gefunden</th><th>Grund</th><th>Quelle</th></tr></thead><tbody>${purchaseImportIssueRows(preview.missing)}</tbody></table></div></section>`:""}
+    ${preview.errors.length?`<section class="purchase-import-section"><h3>Fehlerhafte Tabellenzeilen – nicht verändern</h3><div class="table-wrap"><table><thead><tr><th>Kartennummer</th><th>Kartenname</th><th>Menge Tabelle</th><th>Gefunden</th><th>Grund</th><th>Quelle</th></tr></thead><tbody>${purchaseImportIssueRows(preview.errors)}</tbody></table></div></section>`:""}
+    ${preview.skipped.length?`<section class="purchase-import-section"><h3>Übersprungen</h3><p class="muted">${preview.skipped.length} Zeile${preview.skipped.length===1?" wurde":"n wurden"} wegen leerer Menge oder Menge 0 nicht berücksichtigt.</p></section>`:""}`;
+  confirmButton.disabled=!preview.canApply;
+}
+
+async function openPurchasePriceImport(files) {
+  const dialog=document.getElementById("purchasePriceImportDialog");
+  const content=document.getElementById("purchasePriceImportContent");
+  const confirmButton=document.getElementById("purchasePriceImportConfirm");
+  if(!dialog||!content||!confirmButton)return;
+  dialog.showModal();
+  confirmButton.disabled=true;
+  content.innerHTML='<div class="info">Tabelle wird gelesen und sicher mit dem Geschäftsbestand abgeglichen …</div>';
+  try{
+    if(!window.desktopApp?.parsePurchasePriceFile)throw new Error("Der Tabellenimport ist nur in der installierten Desktop-App verfügbar.");
+    const parsedFiles=[];
+    for(const file of files){
+      const data=await file.arrayBuffer();
+      parsedFiles.push(await window.desktopApp.parsePurchasePriceFile({fileName:file.name,data}));
+    }
+    const preview=window.TcgPurchasePriceImport.buildPreview(parsedFiles,state.inventory);
+    pendingPurchasePriceImport={parsedFiles,fileNames:files.map(file=>file.name),preview};
+    renderPurchasePriceImportPreview(preview,pendingPurchasePriceImport.fileNames);
+  }catch(error){
+    console.error("EK-/Ziel-VK-Import konnte nicht vorbereitet werden:",error);
+    pendingPurchasePriceImport=null;
+    content.innerHTML=`<div class="warning"><strong>Die Tabelle konnte nicht geprüft werden.</strong><br>${escapeHtml(error?.message||String(error))}</div>`;
+  }
+}
+
+async function confirmPurchasePriceImport() {
+  if(!pendingPurchasePriceImport)return;
+  const content=document.getElementById("purchasePriceImportContent");
+  const confirmButton=document.getElementById("purchasePriceImportConfirm");
+  confirmButton.disabled=true;
+  try{
+    const currentPreview=window.TcgPurchasePriceImport.buildPreview(pendingPurchasePriceImport.parsedFiles,state.inventory);
+    pendingPurchasePriceImport.preview=currentPreview;
+    if(!currentPreview.canApply){renderPurchasePriceImportPreview(currentPreview,pendingPurchasePriceImport.fileNames);throw new Error("Die Zuordnung hat sich geändert. Bitte die aktuelle Vorschau prüfen.");}
+    const applied=window.TcgPurchasePriceImport.applyPreview(currentPreview,state.inventory,{makeId:uid});
+    const nextState={...state,inventory:applied.inventory};
+    if(window.desktopApp?.saveState){
+      const saved=await window.desktopApp.saveState(nextState);
+      localStorage.setItem(DESKTOP_UPDATED_KEY,saved?.updatedAt||new Date().toISOString());
+    }
+    state=nextState;
+    localStorage.setItem(DB_KEY,JSON.stringify(state));
+    tradeInsightsCache=null;
+    scheduleMarketDecisionHistoryRefresh();
+    renderAll();
+    const summary=applied.summary;
+    content.innerHTML=`<div class="purchase-import-result"><strong>Import abgeschlossen</strong><br>${summary.matched} eindeutige Positionen mit ${summary.matchedQuantity} Karten übernommen · ${summary.skipped} übersprungen · ${summary.errors} fehlerhaft.<br>Importierte EK-Summe: <strong>${importMoney(summary.importedCost)}</strong>.<br><small>Bestände, Mengen, Einkäufe und Verkäufe wurden nicht verändert.</small></div>`;
+    pendingPurchasePriceImport=null;
+  }catch(error){
+    console.error("EK-/Ziel-VK-Import fehlgeschlagen:",error);
+    if(pendingPurchasePriceImport)renderPurchasePriceImportPreview(pendingPurchasePriceImport.preview,pendingPurchasePriceImport.fileNames);
+    const warning=document.createElement("div");warning.className="warning";warning.innerHTML=`<strong>Nichts wurde übernommen.</strong><br>${escapeHtml(error?.message||String(error))}`;content.prepend(warning);
+  }
 }
 
 function renderSlowMovers(){
@@ -6434,6 +6541,15 @@ document.getElementById("wantlistFilterReset").onclick=()=>{["wantlistFilter","w
 document.getElementById("slowMoverFilterReset").onclick=()=>{["slowMoverSearch","slowMoverAgeFilter","slowMoverPriceGroup","slowMoverProfile","slowMoverCost","slowMoverLongTerm","slowMoverLanguage","slowMoverCondition","slowMoverTrend","slowMoverRecommendation","slowMoverProfitTarget","slowMoverPriceMin","slowMoverPriceMax"].forEach(id=>document.getElementById(id).value="");document.getElementById("slowMoverSort").value="age-desc";renderAll();};
 
 document.getElementById("addInventoryBtn").onclick=()=>addInventory();
+document.getElementById("purchasePriceImportBtn").onclick=()=>document.getElementById("purchasePriceImportFile").click();
+document.getElementById("purchasePriceImportFile").onchange=event=>{
+  const files=[...(event.target.files||[])];
+  event.target.value="";
+  if(files.length)openPurchasePriceImport(files);
+};
+document.getElementById("purchasePriceImportClose").onclick=()=>document.getElementById("purchasePriceImportDialog").close();
+document.getElementById("purchasePriceImportCancel").onclick=()=>document.getElementById("purchasePriceImportDialog").close();
+document.getElementById("purchasePriceImportConfirm").onclick=()=>confirmPurchasePriceImport();
 document.getElementById("addPrivateBtn").onclick=()=>addInventory({},"private");
 document.getElementById("scanInventoryBtn").onclick=()=>openIphoneScanner("business");
 document.getElementById("scanPrivateBtn").onclick=()=>openIphoneScanner("private");

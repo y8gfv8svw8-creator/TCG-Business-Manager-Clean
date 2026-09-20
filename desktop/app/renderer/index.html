@@ -224,6 +224,8 @@
             <option>Beschädigt</option>
           </select>
           <button id="scanInventoryBtn" class="secondary">Mit iPhone scannen</button>
+          <button id="purchasePriceImportBtn" class="secondary">EK/Ziel-VK importieren</button>
+          <input id="purchasePriceImportFile" type="file" accept=".ods,.csv,text/csv,application/vnd.oasis.opendocument.spreadsheet" multiple hidden />
           <button id="addInventoryBtn" class="primary">+ Karte hinzufügen</button>
         </div>
         <div class="filter-panel" aria-label="Bestand filtern">
@@ -1149,6 +1151,18 @@
     </div>
   </dialog>
 
+  <dialog id="purchasePriceImportDialog" class="order-detail-dialog purchase-price-import-dialog">
+    <div class="modal-head">
+      <div><h2>EK und erwarteten VK prüfen</h2><p class="muted">Nur eindeutige Bestandskarten werden geändert. Mengen, Einkäufe und Verkäufe bleiben unverändert.</p></div>
+      <button type="button" id="purchasePriceImportClose" class="icon-button" aria-label="Schließen">×</button>
+    </div>
+    <div id="purchasePriceImportContent"></div>
+    <div class="modal-actions">
+      <button type="button" id="purchasePriceImportCancel" class="secondary">Abbrechen</button>
+      <button type="button" id="purchasePriceImportConfirm" class="primary" disabled>Geprüfte Werte übernehmen</button>
+    </div>
+  </dialog>
+
   <dialog id="scannerDialog" class="scanner-dialog">
     <div class="modal-head"><div><h2>iPhone-Kartenscanner</h2><p class="muted" id="scannerSubtitle">Kamera sicher mit diesem Manager verbinden.</p></div><button type="button" id="scannerClose" class="icon-button">×</button></div>
     <div id="scannerContent" class="scanner-content">
@@ -1283,6 +1297,7 @@
         await loadScript("../shared/scanner-image-processing.js");
         await loadScript("../shared/price-engine.js");
         await loadScript("../shared/business-automation.js");
+        await loadScript("../shared/purchase-price-import.js");
         await loadScript("../shared/collection-photo-model.js");
         await loadScript("../shared/indexeddb-recovery.js");
         await loadScript("app.js");

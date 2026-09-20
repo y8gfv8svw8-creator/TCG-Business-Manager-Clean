@@ -50,6 +50,8 @@
     lastError: "",
     lastAutoAttemptDate: "",
     lastAutoSuccessDate: "",
+    lastSuccessfulImport: null,
+    recentImportRuns: [],
     autoDailyUpdate: true
   };
 
@@ -384,37 +386,77 @@
     }
   }
 
-  async function cmSyncProductsToSqlite(rows, onProgress) {
-    if (!window.desktopApp?.upsertProducts || !rows.length) return 0;
-    let written = 0;
-    const chunkSize = 2000;
-    for (let start=0; start<rows.length; start+=chunkSize) {
-      const chunk = rows.slice(start, start+chunkSize);
-      const result = await window.desktopApp.upsertProducts(chunk);
-      written += Number(result?.written || 0);
-      if (onProgress) onProgress(Math.min(rows.length, start+chunk.length), rows.length);
-      await new Promise(resolve => setTimeout(resolve, 0));
+  async function cmSyncProductsToSqlite(rows, onProgress, options={}) {
+    if (!rows.length) return 0;
+    if (!window.desktopApp?.beginCardmarketImport) throw new Error("Die atomare SQLite-Importschnittstelle ist nicht verfügbar. Bitte den Manager neu starten.");
+    const runId=String(options.runId||`catalog-${Date.now()}`);
+    await window.desktopApp.beginCardmarketImport({
+      runId,type:"products",source:"cardmarket_product_catalog",sourceId:"cardmarket_product_catalog",
+      importedAt:String(options.importedAt||new Date().toISOString()),startedAt:String(options.startedAt||options.importedAt||new Date().toISOString()),
+      fileName:String(options.source||"")
+    });
+    try{
+      const chunkSize=2000;
+      for(let start=0;start<rows.length;start+=chunkSize){
+        const chunk=rows.slice(start,start+chunkSize);
+        await window.desktopApp.appendCardmarketImport({runId,rows:chunk});
+        if(onProgress)onProgress(Math.min(rows.length,start+chunk.length),rows.length);
+        await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      const result=await window.desktopApp.commitCardmarketImport({
+        runId,rowsRead:Number(options.rowsRead??rows.length),skippedRows:Number(options.skippedRows||0)
+      });
+      return Number(result?.written||0);
+    }catch(error){
+      await window.desktopApp.rollbackCardmarketImport?.({runId,errorMessage:String(error?.message||error)}).catch(()=>{});
+      throw error;
     }
-    return written;
   }
 
-  async function cmSyncPricesToSqlite(rows, snapshotDate, importedAt, onProgress) {
-    if (!window.desktopApp?.upsertMarketPrices || !rows.length) return 0;
-    let written = 0;
-    const chunkSize = 2000;
-    for (let start=0; start<rows.length; start+=chunkSize) {
-      const chunk = rows.slice(start, start+chunkSize);
-      const result = await window.desktopApp.upsertMarketPrices({
-        rows: chunk,
-        snapshotDate,
-        sourceId: "cardmarket_price_guide",
-        importedAt
+  async function cmSyncPricesToSqlite(rows, snapshotDate, importedAt, onProgress, options={}) {
+    if (!rows.length) return 0;
+    if (!window.desktopApp?.beginCardmarketImport) throw new Error("Die atomare SQLite-Importschnittstelle ist nicht verfügbar. Bitte den Manager neu starten.");
+    const runId=String(options.runId||`price-${snapshotDate}-${Date.now()}`);
+    await window.desktopApp.beginCardmarketImport({
+      runId,type:"prices",source:"cardmarket_price_guide",sourceId:"cardmarket_price_guide",
+      snapshotDate,importedAt,startedAt:String(options.startedAt||importedAt),fileName:String(options.source||"")
+    });
+    try{
+      const chunkSize=2000;
+      for(let start=0;start<rows.length;start+=chunkSize){
+        const chunk=rows.slice(start,start+chunkSize);
+        await window.desktopApp.appendCardmarketImport({runId,rows:chunk});
+        if(onProgress)onProgress(Math.min(rows.length,start+chunk.length),rows.length);
+        await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      const result=await window.desktopApp.commitCardmarketImport({
+        runId,rowsRead:Number(options.rowsRead??rows.length),skippedRows:Number(options.skippedRows||0)
       });
-      written += Number(result?.written || 0);
-      if (onProgress) onProgress(Math.min(rows.length, start+chunk.length), rows.length);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      return Number(result?.written||0);
+    }catch(error){
+      await window.desktopApp.rollbackCardmarketImport?.({runId,errorMessage:String(error?.message||error)}).catch(()=>{});
+      throw error;
     }
-    return written;
+  }
+
+  function cmFriendlyImportError(error,label="Cardmarket-Import"){
+    const raw=String(error?.message||error||"Unbekannter Fehler");
+    const text=`${error?.name||""} ${error?.code||""} ${raw}`.toLowerCase();
+    let reason="Der Import konnte nicht abgeschlossen werden.";
+    const invalidFile=/json|unexpected token|unexpected end|syntaxerror/.test(text);
+    if(invalidFile) reason="Die Datei ist unvollständig oder kein gültiges Cardmarket-JSON.";
+    else if(/busy|locked/.test(text)) reason="Die Datenbank ist gerade beschäftigt. Bitte den Vorgang nach wenigen Sekunden erneut starten.";
+    else if(/disk.*full|sqlite_full|enospc|quota/.test(text)) reason="Auf dem Datenträger ist nicht genügend freier Speicherplatz vorhanden.";
+    else if(/constraint|malformed|corrupt/.test(text)) reason="Die Importdatei oder die Datenbank enthält widersprüchliche Daten. Vorhandene Daten wurden nicht verändert.";
+    else if(/out of memory|allocation|too large/.test(text)) reason="Die Datei ist für den verfügbaren Arbeitsspeicher zu groß. Bitte andere Programme schließen und erneut versuchen.";
+    else if(/unknownerror|internal error|indexeddb/.test(text)) reason="Der Oberflächen-Cache war beschädigt und wird automatisch aus SQLite neu aufgebaut.";
+    const safety=invalidFile
+      ? "Es wurden keine Daten verändert."
+      : "Der atomare Import wurde vollständig zurückgerollt; der vorherige Datenstand bleibt erhalten.";
+    const friendly=new Error(`${label} fehlgeschlagen. ${reason} ${safety}`);
+    friendly.cause=error;
+    friendly.originalMessage=raw;
+    return friendly;
   }
 
   function cmSetProgress(text, percent=null, kind="") {
@@ -474,6 +516,7 @@
     const rows = cmProductRows(payload);
     if (!rows.length) throw new Error("Kein Cardmarket-Produktkatalog erkannt.");
     const importedAt = new Date().toISOString();
+    const runId = `catalog-${Date.now()}`;
     const hasLocalEnrichment = Number(state.cardmarket?.germanNameCount || 0) > 0 || Number(state.cardmarket?.setDetailCount || 0) > 0;
     const existingProducts = hasLocalEnrichment ? await cmGetAll("products") : [];
     const existingById = new Map(existingProducts.map(row => [String(row.productId), row]));
@@ -524,20 +567,26 @@
       prepared.push(productRow);
     }
 
-    cmSetProgress(`<strong>Produktkatalog wird gespeichert …</strong><br>0 von ${prepared.length.toLocaleString("de-DE")} Produkten`, 0);
-    await cmWriteRows("products", prepared, (done,total) => {
-      const pctValue = total ? done/total*75 : 75;
-      cmSetProgress(`<strong>Produktkatalog wird gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`, pctValue);
-    });
-    let sqliteProducts = 0;
-    try {
-      sqliteProducts = await cmSyncProductsToSqlite(prepared, (done,total) => {
-        const pctValue = total ? 75 + done/total*25 : 100;
-        cmSetProgress(`<strong>SQLite-Kartenstammdaten werden aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`, pctValue);
+    cmSetProgress(`<strong>Produktkatalog wird atomar in SQLite gespeichert …</strong><br>0 von ${prepared.length.toLocaleString("de-DE")} Produkten`, 0);
+    let sqliteProducts=0;
+    try{
+      sqliteProducts=await cmSyncProductsToSqlite(prepared,(done,total)=>{
+        const pctValue=total?done/total*85:85;
+        cmSetProgress(`<strong>Produktkatalog wird atomar in SQLite gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,pctValue);
+      },{runId,importedAt,startedAt:importedAt,source,rowsRead:rows.length,skippedRows:skipped});
+    }catch(error){
+      throw cmFriendlyImportError(error,"Produktkatalog-Import");
+    }
+    let cacheNote="";
+    try{
+      await cmWriteRows("products",prepared,(done,total)=>{
+        const pctValue=total?85+done/total*15:100;
+        cmSetProgress(`<strong>Oberflächen-Cache wird aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,pctValue);
       });
-    } catch (error) {
-      console.error("SQLite-Produktabgleich fehlgeschlagen:", error);
-      state.cardmarket.lastError = `SQLite-Produktabgleich: ${error.message}`;
+    }catch(error){
+      console.error("Produktcache wird nach erfolgreichem SQLite-Import neu aufgebaut:",error);
+      await cmCache().repair({rebuild:cmRebuildCacheFromSqlite,automatic:true});
+      cacheNote=" · Cache automatisch neu aufgebaut";
     }
     if (typeof refreshCardNameLookup === "function") await refreshCardNameLookup(true);
     window.tcgApplyBusinessProductMetadata?.(prepared);
@@ -561,7 +610,8 @@
     cmInvalidateCache();
     saveState();
     renderAll();
-    cmSetProgress(`<strong>Produktkatalog importiert</strong><br>${prepared.length.toLocaleString("de-DE")} Produkte gespeichert${sqliteProducts ? ` · ${sqliteProducts.toLocaleString("de-DE")} in SQLite` : ""}${skipped ? ` · ${skipped} Zeilen übersprungen` : ""}. Deutsche Namen werden anschließend automatisch ergänzt.`, 100, "success");
+    await cmRefreshMetadataFromDb();
+    cmSetProgress(`<strong>Produktkatalog atomar importiert</strong><br>${prepared.length.toLocaleString("de-DE")} Produkte gespeichert${sqliteProducts ? ` · ${sqliteProducts.toLocaleString("de-DE")} in SQLite` : ""}${skipped ? ` · ${skipped} Zeilen übersprungen` : ""}${cacheNote}. Deutsche Namen werden anschließend automatisch ergänzt.`, 100, "success");
     if (state.cardmarket?.germanNamesAutoUpdate !== false) window.setTimeout(()=>cmRunGermanNamesAutoUpdate({force:true}),500);
     return {type:"catalog", rows:rows.length, cards:prepared.length, sqliteProducts, skipped};
   }
@@ -629,23 +679,6 @@
     const snapshotDate = cmDateFromPayload(payload);
     const importedAt = new Date().toISOString();
     const runId = `price-${snapshotDate}-${Date.now()}`;
-    await cmPutChunk("dataSources", [{
-      sourceId:"cardmarket_price_guide",
-      name:"Cardmarket Yu-Gi-Oh! Price Guide",
-      type:"official_download",
-      priority:90,
-      enabled:true,
-      updatedAt:importedAt
-    }]);
-    await cmPutChunk("collectionRuns", [{
-      runId,
-      sourceId:"cardmarket_price_guide",
-      startedAt:importedAt,
-      snapshotDate,
-      status:"running",
-      rowCount:0,
-      error:""
-    }]);
     const oldLatest = await cmGetAll("latestPrices");
     const oldMap = new Map(oldLatest.map(row => [String(row.productId), row]));
     const historyRows = [];
@@ -690,25 +723,35 @@
       }
     }
 
-    cmSetProgress(`<strong>Preishistorie wird gespeichert …</strong><br>0 von ${historyRows.length.toLocaleString("de-DE")} Preiszeilen`, 0);
-    await cmWriteRows("priceHistory", historyRows, (done,total) => {
-      const pctValue = total ? (done/total*70) : 70;
-      cmSetProgress(`<strong>Preishistorie wird gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Preiszeilen`, pctValue);
-    });
-    await cmWriteRows("latestPrices", latestRows, (done,total) => {
-      const pctValue = total ? 70 + done/total*15 : 85;
-      cmSetProgress(`<strong>Aktuelle Preise werden zusammengeführt …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`, pctValue);
-    });
-    let sqlitePrices = 0;
-    try {
-      sqlitePrices = await cmSyncPricesToSqlite(historyRows, snapshotDate, importedAt, (done,total) => {
-        const pctValue = total ? 85 + done/total*15 : 100;
-        cmSetProgress(`<strong>SQLite-Preishistorie wird gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Preiszeilen`, pctValue);
-      });
-    } catch (error) {
-      console.error("SQLite-Preisabgleich fehlgeschlagen:", error);
-      state.cardmarket.lastError = `SQLite-Preisabgleich: ${error.message}`;
+    cmSetProgress(`<strong>Preishistorie wird atomar in SQLite gespeichert …</strong><br>0 von ${historyRows.length.toLocaleString("de-DE")} Preiszeilen`,0);
+    let sqlitePrices=0;
+    try{
+      sqlitePrices=await cmSyncPricesToSqlite(historyRows,snapshotDate,importedAt,(done,total)=>{
+        const pctValue=total?done/total*85:85;
+        cmSetProgress(`<strong>Preishistorie wird atomar in SQLite gespeichert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Preiszeilen`,pctValue);
+      },{runId,startedAt:importedAt,source,rowsRead:rows.length,skippedRows:skipped});
+    }catch(error){
+      throw cmFriendlyImportError(error,"Price-Guide-Import");
     }
+    let cacheNote="";
+    try{
+      await cmWriteRows("priceHistory",historyRows,(done,total)=>{
+        const pctValue=total?85+done/total*10:95;
+        cmSetProgress(`<strong>Oberflächen-Cache wird aktualisiert …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Preiszeilen`,pctValue);
+      });
+      await cmWriteRows("latestPrices",latestRows,(done,total)=>{
+        const pctValue=total?95+done/total*5:100;
+        cmSetProgress(`<strong>Aktuelle Preisansicht wird zusammengeführt …</strong><br>${done.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} Produkten`,pctValue);
+      });
+    }catch(error){
+      console.error("Preiscache wird nach erfolgreichem SQLite-Import neu aufgebaut:",error);
+      await cmCache().repair({rebuild:cmRebuildCacheFromSqlite,automatic:true});
+      cacheNote=" · Cache automatisch neu aufgebaut";
+    }
+    await cmPutChunk("dataSources",[{
+      sourceId:"cardmarket_price_guide",name:"Cardmarket Yu-Gi-Oh! Price Guide",
+      type:"official_download",priority:90,enabled:true,updatedAt:importedAt
+    }]);
 
     const snapshotDates = [...new Set([...(state.cardmarket?.snapshotDates || []), snapshotDate])].sort().reverse();
     const effectiveLatestDate = snapshotDates[0] || snapshotDate;
@@ -759,14 +802,8 @@
       skipped,
       error:""
     }]);
-    if (window.desktopApp?.recordImportRun) {
-      await window.desktopApp.recordImportRun({
-        runId, source:"cardmarket_price_guide", snapshotDate, startedAt:importedAt,
-        finishedAt:new Date().toISOString(), status:"success", rowsRead:rows.length,
-        rowsWritten:sqlitePrices, skippedRows:skipped, errorMessage:""
-      }).catch(error => console.error("SQLite-Importprotokoll fehlgeschlagen:", error));
-    }
-    cmSetProgress(`<strong>Price Guide importiert</strong><br>${historyRows.length.toLocaleString("de-DE")} Preise für ${snapshotDate} gespeichert${sqlitePrices ? ` · ${sqlitePrices.toLocaleString("de-DE")} in SQLite` : ""} · ${updatedWatchlist} Watchlist-Einträge aktualisiert.`, 100, "success");
+    await cmRefreshMetadataFromDb();
+    cmSetProgress(`<strong>Price Guide atomar importiert</strong><br>${historyRows.length.toLocaleString("de-DE")} Preise für ${snapshotDate} gespeichert${sqlitePrices ? ` · ${sqlitePrices.toLocaleString("de-DE")} in SQLite` : ""} · ${updatedWatchlist} Watchlist-Einträge aktualisiert${cacheNote}.`, 100, "success");
     return {type:"prices", rows:rows.length, cards:historyRows.length, sqlitePrices, updated:updatedWatchlist, snapshotDate, skipped};
   }
 
@@ -898,30 +935,17 @@
   }
 
   function cmMarketCalculation(product, own={}, trendSignals={}) {
-    const low = cmNumber(product.low);
-    const trend = cmNumber(product.trend);
-    const avg1 = cmNumber(product.avg1);
-    const avg7 = cmNumber(product.avg7);
-    const avg30 = cmNumber(product.avg30);
-    const priceValues = [low,trend,avg1,avg7,avg30];
-    const pricePointCount = priceValues.filter(value => value !== null).length;
-    const hasPriceData = pricePointCount > 0;
-
-    const buyCandidates = [
-      [low,"Cardmarket Low"],
-      [trend,"Cardmarket Trend"],
-      [avg1,"Cardmarket Ø 1 Tag"],
-      [avg7,"Cardmarket Ø 7 Tage"],
-      [avg30,"Cardmarket Ø 30 Tage"]
-    ].filter(([value]) => value !== null && value >= 0);
-    const marketBuy = buyCandidates.length ? buyCandidates[0][0] : 0;
-    const marketBuySource = buyCandidates.length ? buyCandidates[0][1] : "Keine EK-Referenz";
-
     // Datencenter, Watchlist und Bestandserfassung verwenden exakt dieselbe
     // Preisformel. So werden automatisch gesetzte Grenzen nicht anschließend
     // von einer zweiten Berechnung mit leicht anderen Rundungen überschrieben.
     const automaticTargets=window.TcgBusinessAutomation.calculateAutomaticPriceTargets(product,cmPricingSettings());
     const {recommendedSell,safeSell,feeRate,packaging,feeAmount,netBeforeBuy,minProfit,minRoi,targetRoi,maxByProfit,maxByRoi,maxBuy,marketReferenceSource,historicalReference}=automaticTargets;
+    const {low,trend,avg1,avg7,avg30,pricePointCount}=automaticTargets;
+    const hasPriceData=pricePointCount>0;
+    const marketBuy=Number(automaticTargets.effectiveLow??automaticTargets.marketReference??0);
+    const marketBuySource=automaticTargets.lowOutlier
+      ? (automaticTargets.lowExUsed?"Cardmarket Low EX+ (Low-Ausreißer ausgeschlossen)":automaticTargets.marketReferenceSource)
+      : automaticTargets.low!==null?"Cardmarket Low":automaticTargets.marketReferenceSource||"Keine EK-Referenz";
     const isCostCovering = netBeforeBuy > 0;
     const costShortfall = isCostCovering ? 0 : Math.abs(netBeforeBuy);
     const profitAtMarket = marketBuy > 0 ? netBeforeBuy-marketBuy : 0;
@@ -1044,7 +1068,8 @@
       dailyPct, change7Pct, change30Pct,
       score, scoreConfidence, scoreReasons, recommendation, recommendationReason,
       quality, eligible, meetsProfit, meetsRoi, minProfit, minRoi, targetRoi, packaging,
-      low, trend, avg1, avg7, avg30, marketReferenceSource, historicalReference
+      low, trend, avg1, avg7, avg30, marketReferenceSource, historicalReference,
+      priceSources:automaticTargets.priceSources,priceExplanation:automaticTargets.priceExplanation
     };
   }
 
@@ -1327,7 +1352,7 @@
           <div><span>Eigener Ø VK</span><strong>${own.avgSell ? money(own.avgSell) : "-"}</strong></div>
           <div><span>Bestand / reserviert</span><strong>${Number(own.inventory||0)} / ${Number(own.reserved||0)}</strong></div>
         </div>
-        <div class="cm-decision-box"><div><span class="muted">Einkaufsempfehlung</span><br>${cmRecommendationBadge(calc.recommendation)}</div><div><span class="muted">Analysescore</span><br><strong>${escapeHtml(cmScoreLabel(calc))}</strong></div><p><strong>${escapeHtml(calc.recommendationReason)}</strong><br>Der Score verwendet nur echte gespeicherte Preisverläufe. Bei fehlender Historie oder unvollständiger Druckvariante wird er sichtbar begrenzt.</p></div>
+        <div class="cm-decision-box"><div><span class="muted">Einkaufsempfehlung</span><br>${cmRecommendationBadge(calc.recommendation)}</div><div><span class="muted">Analysescore</span><br><strong>${escapeHtml(cmScoreLabel(calc))}</strong></div><p><strong>${escapeHtml(calc.recommendationReason)}</strong><br>Der Score verwendet nur echte gespeicherte Preisverläufe. Bei fehlender Historie oder unvollständiger Druckvariante wird er sichtbar begrenzt.<br><small>${escapeHtml(calc.priceExplanation||"")}</small></p></div>
         ${cmHistorySvg(history)}
         <details class="cm-history-table"><summary>Gespeicherte Tagesstände (${history.length})</summary><div class="table-wrap"><table><thead><tr><th>Datum</th><th>Low</th><th>Trend</th><th>Ø 1 Tag</th><th>Ø 7 Tage</th><th>Ø 30 Tage</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Noch keine Preisstände</td></tr>'}</tbody></table></div></details>`;
     } catch (error) {
@@ -2175,6 +2200,20 @@
     setText("cmGermanNameStatus", meta.germanNamesImportedAt ? `Lokal gespeichert · ${new Date(meta.germanNamesImportedAt).toLocaleString("de-DE")} · ${Number(meta.germanUniqueCardCount||0).toLocaleString("de-DE")} eindeutige deutsche Karten · ${Number(meta.germanNameCount||0).toLocaleString("de-DE")} zugeordnete Druckvarianten · ${Number(meta.setCodeCount||0).toLocaleString("de-DE")} Setnummern · ${Number(meta.rarityCount||0).toLocaleString("de-DE")} Seltenheiten${Number(meta.germanNameUnmatchedMetacardCount||0)>0?` · ${Number(meta.germanNameUnmatchedMetacardCount).toLocaleString("de-DE")} Einträge ohne verfügbaren eindeutigen offiziellen DE-Namen`:""}${Number(meta.germanNameAmbiguousMetacardCount||0)>0?` · ${Number(meta.germanNameAmbiguousMetacardCount).toLocaleString("de-DE")} mehrdeutige Namenszuordnungen`:""}${Number(meta.ambiguousPrintCount||0)>0?` · ${Number(meta.ambiguousPrintCount).toLocaleString("de-DE")} mehrdeutige Druckvarianten`:""}` : "Noch nicht geladen · wird automatisch ergänzt");
     setText("cmCatalogStatus", meta.catalogImportedAt ? `Importiert am ${new Date(meta.catalogImportedAt).toLocaleString("de-DE")} · Quelle ${meta.catalogCreatedAt ? fmtDate(meta.catalogCreatedAt) : "ohne Datum"}` : "Noch kein Produktkatalog importiert");
     setText("cmPriceStatus", meta.priceImportedAt ? `Importiert am ${new Date(meta.priceImportedAt).toLocaleString("de-DE")} · Preisstand ${fmtDate(meta.priceDate)}` : "Noch kein Price Guide importiert");
+    const lastImport=meta.lastSuccessfulImport;
+    setText("cmLastSuccessfulImport",lastImport?.finishedAt
+      ? `Letzter erfolgreicher Import am: ${new Date(lastImport.finishedAt).toLocaleString("de-DE")}`
+      : "Letzter erfolgreicher Import am: noch keiner");
+    const protocol=document.getElementById("cmImportProtocol");
+    if(protocol){
+      const labels={cardmarket_price_guide:"Price Guide",cardmarket_product_catalog:"Produktkatalog"};
+      const runs=Array.isArray(meta.recentImportRuns)?meta.recentImportRuns:[];
+      protocol.innerHTML=runs.length?runs.map(run=>{
+        const when=run.finishedAt||run.startedAt;
+        const status=run.status==="success"?"Erfolgreich":"Fehlgeschlagen";
+        return `<div><strong>${escapeHtml(labels[run.source]||run.source||"Cardmarket-Import")}</strong> · ${escapeHtml(status)} · ${Number(run.rowsWritten||0).toLocaleString("de-DE")} Produkte/Preise geladen${when?` · ${escapeHtml(new Date(when).toLocaleString("de-DE"))}`:""}${run.errorMessage?`<br><small class="money-negative">${escapeHtml(run.errorMessage)}</small>`:""}</div>`;
+      }).join(""):'<span class="muted">Noch kein Importprotokoll vorhanden.</span>';
+    }
     const snapshots = document.getElementById("cmSnapshotDates");
     if (snapshots) snapshots.innerHTML = meta.snapshotDates?.length ? meta.snapshotDates.slice(0,20).map(date => `<span class="badge blue">${fmtDate(date)}</span>`).join(" ") : `<span class="muted">Noch keine Tagesstände</span>`;
     const view = document.getElementById("view-cardmarket");
@@ -2212,6 +2251,10 @@
       if (sqliteStatus?.ready) {
         state.cardmarket.sqlitePriceRowCount=Number(sqliteStatus.marketPriceCount||0);
         state.cardmarket.sqliteSnapshotCount=Number(sqliteStatus.snapshotCount||0);
+        const lastSuccessfulImport=sqliteStatus.lastSuccessfulImport||null;
+        const recentImportRuns=Array.isArray(sqliteStatus.recentCardmarketImports)?sqliteStatus.recentCardmarketImports:[];
+        if(JSON.stringify(lastSuccessfulImport)!==JSON.stringify(state.cardmarket.lastSuccessfulImport||null)){state.cardmarket.lastSuccessfulImport=lastSuccessfulImport;changed=true;}
+        if(JSON.stringify(recentImportRuns)!==JSON.stringify(state.cardmarket.recentImportRuns||[])){state.cardmarket.recentImportRuns=recentImportRuns;changed=true;}
       }
       if (cardNameStatus?.importedAt) {
         const nameFields={
@@ -2398,12 +2441,12 @@
   const productInput=document.getElementById("cmProductCatalogInput");
   if(productInput) productInput.addEventListener("change",async event=>{
     const file=event.target.files?.[0];event.target.value="";if(!file)return;
-    try{await importCardmarketProductCatalogPayload(JSON.parse(await file.text()),file.name);}catch(error){state.cardmarket.lastError=error.message;saveState();cmSetProgress(`<strong>Produktkatalog-Import fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error");}
+    try{await importCardmarketProductCatalogPayload(JSON.parse(await file.text()),file.name);}catch(error){const friendly=error?.originalMessage?error:cmFriendlyImportError(error,"Produktkatalog-Import");state.cardmarket.lastError=friendly.message;saveState();cmSetProgress(`<strong>Produktkatalog-Import fehlgeschlagen</strong><br>${escapeHtml(friendly.message)}`,100,"error");}
   });
   const priceInput=document.getElementById("cmPriceGuideInput");
   if(priceInput) priceInput.addEventListener("change",async event=>{
     const file=event.target.files?.[0];event.target.value="";if(!file)return;
-    try{await importCardmarketPriceGuidePayload(JSON.parse(await file.text()),file.name);}catch(error){state.cardmarket.lastError=error.message;saveState();cmSetProgress(`<strong>Price-Guide-Import fehlgeschlagen</strong><br>${escapeHtml(error.message)}`,100,"error");}
+    try{await importCardmarketPriceGuidePayload(JSON.parse(await file.text()),file.name);}catch(error){const friendly=error?.originalMessage?error:cmFriendlyImportError(error,"Price-Guide-Import");state.cardmarket.lastError=friendly.message;saveState();cmSetProgress(`<strong>Price-Guide-Import fehlgeschlagen</strong><br>${escapeHtml(friendly.message)}`,100,"error");}
   });
   const backupInput=document.getElementById("cmBackupInput");
   if(backupInput) backupInput.addEventListener("change",async event=>{
@@ -2632,7 +2675,7 @@
           <div class="cm-result-section"><h4>Echte Preisentwicklung aus Importhistorie</h4><div class="cm-result-metrics cm-result-metrics-3">${deltaMetric("Δ 1 Tag",delta1)}${deltaMetric("Δ 7 Tage",delta7)}${deltaMetric("Δ 30 Tage",delta30)}</div></div>
           <div class="cm-result-section"><h4>Einkaufs- und Verkaufsrechnung</h4><div class="cm-result-metrics cm-result-metrics-3">
             <div class="cm-result-metric"><span>Berechnungs-EK</span><strong>${calc.marketBuy>0?money(calc.marketBuy):"–"}</strong><small>Quelle: ${escapeHtml(calc.marketBuySource)}</small></div>
-            <div class="cm-result-metric"><span>Gespeicherte Preisreferenz</span><strong>${cmAnalysisMoney(calc.recommendedSell)}</strong><small>${escapeHtml(calc.marketReferenceSource||"vorsichtige Price-Guide-Referenz")}</small></div>
+            <div class="cm-result-metric"><span>Gespeicherte Preisreferenz</span><strong>${cmAnalysisMoney(calc.recommendedSell)}</strong><small>${escapeHtml(calc.marketReferenceSource||"vorsichtige Price-Guide-Referenz")}</small><small>${escapeHtml(calc.priceExplanation||"")}</small></div>
             <div class="cm-result-metric"><span>Sicherheits-VK</span><strong>${cmAnalysisMoney(calc.safeSell)}</strong><small>${Number(state.settings.safetyPercent||0)} % Sicherheitsabschlag</small></div>
             <div class="cm-result-metric"><span>Gebühren + Verpackung</span><strong>${cmAnalysisMoney(calc.feeAmount+calc.packaging)}</strong><small>${Number(state.settings.feePercent||0)} % Gebühr · ${money(calc.packaging)} anteilige Verpackung</small></div>
             <div class="cm-result-metric ${calc.isCostCovering?"":"cm-metric-critical"}"><span>Break-even-EK</span><strong class="${calc.isCostCovering?"":"money-negative"}">${calc.isCostCovering?cmAnalysisMoney(cmFloorMoney(calc.netBeforeBuy)):"Nicht kostendeckend"}</strong><small>${calc.isCostCovering?"Maximaler EK ohne Gewinn":"Fehlbetrag vor Karteneinkauf: "+money(calc.costShortfall)}</small></div>

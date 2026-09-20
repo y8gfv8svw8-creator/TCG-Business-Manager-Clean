@@ -343,6 +343,7 @@ html[data-theme="dark"] ::selection{background:#5c5c5c;color:#fff}
 .cm-progress{height:8px;background:var(--surface-2,#e8edf4);border-radius:999px;overflow:hidden;margin-top:14px}
 .cm-progress>div{height:100%;width:0;background:linear-gradient(90deg,#2459d3,#38a169);transition:width .18s ease}
 .cm-import-status{margin-top:10px;padding:12px 14px;border:1px solid var(--border,#d7deea);border-radius:10px;background:var(--surface-2,#f7f9fc);line-height:1.45}
+.cm-import-summary{margin-top:10px;padding:12px 14px;border:1px solid var(--border,#d7deea);border-radius:10px;line-height:1.5}.cm-import-summary>strong{display:block;margin-bottom:5px}.cm-import-summary #cmImportProtocol{display:grid;gap:4px}
 .cm-import-status.success{border-color:#9bd6b2;background:#eefaf2}.cm-import-status.error{border-color:#efb2b2;background:#fff1f1;color:#9b1c1c}
 .cm-search{min-width:min(620px,100%);flex:1}
 .cm-results-wrap{max-height:720px}

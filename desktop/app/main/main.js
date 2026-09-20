@@ -118,6 +118,10 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-own-sales-experience', (_event, payload) => database.getOwnSalesExperience(payload));
   ipcMain.handle('data:get-trade-recommendations', (_event, payload) => database.getTradeRecommendations(payload));
   ipcMain.handle('data:get-data-sources', () => database.getDataSources());
+  ipcMain.handle('data:begin-cardmarket-import', (_event, payload) => database.beginCardmarketImport(payload));
+  ipcMain.handle('data:append-cardmarket-import', (_event, payload) => database.appendCardmarketImport(payload));
+  ipcMain.handle('data:commit-cardmarket-import', (_event, payload) => database.commitCardmarketImport(payload));
+  ipcMain.handle('data:rollback-cardmarket-import', (_event, payload) => database.rollbackCardmarketImport(payload));
   ipcMain.handle('data:upsert-products', (_event, rows) => database.upsertProducts(rows));
   ipcMain.handle('data:upsert-card-names', (_event, payload) => database.upsertCardNames(payload));
   ipcMain.handle('data:get-card-name-status', () => database.getCardNameStatus());

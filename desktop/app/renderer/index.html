@@ -710,6 +710,10 @@
           <p class="muted">Erwartete Dateien: <strong>products_singles_3.json</strong> und <strong>price_guide_3.json</strong>. Der vollständige verfügbare deutsche Namenskatalog sowie Setname, Setnummer und Seltenheit werden beim ersten Start und danach höchstens einmal pro Woche abgeglichen und lokal gespeichert. Über „Deutsche Kartendaten jetzt aktualisieren“ kann der Abgleich jederzeit manuell erzwungen werden. Exakte Druckdaten werden nur bei einer eindeutigen Zuordnung übernommen; wenn mehrere Seltenheiten zu derselben Cardmarket-Variante passen, zeigt die App dies ausdrücklich an und rät nicht.</p>
           <div class="cm-progress"><div id="cmImportProgressBar"></div></div>
           <div id="cmImportStatus" class="cm-import-status">Bereit für den ersten Import.</div>
+          <div class="cm-import-summary">
+            <strong id="cmLastSuccessfulImport">Letzter erfolgreicher Import am: noch keiner</strong>
+            <div id="cmImportProtocol" class="muted">Noch kein Importprotokoll vorhanden.</div>
+          </div>
         </article>
 
 
@@ -1277,6 +1281,7 @@
         await loadScript("../shared/card-search.js");
         await loadScript("../shared/scanner-recognition.js");
         await loadScript("../shared/scanner-image-processing.js");
+        await loadScript("../shared/price-engine.js");
         await loadScript("../shared/business-automation.js");
         await loadScript("../shared/collection-photo-model.js");
         await loadScript("../shared/indexeddb-recovery.js");

@@ -215,6 +215,7 @@ class TcgDatabase {
     this.databaseExistedBeforeOpen = false;
     this.databaseExistenceChecked = false;
     this.startupValidation = null;
+    this.cardmarketImportSession = null;
   }
 
   open() {
@@ -522,6 +523,10 @@ class TcgDatabase {
 
   close() {
     if (!this.db) return;
+    if (this.cardmarketImportSession) {
+      try { this.db.exec('ROLLBACK;'); } catch (_error) { /* Verbindung wird unmittelbar geschlossen. */ }
+      this.cardmarketImportSession = null;
+    }
     this.db.close();
     this.db = null;
     this.cardNameRecognitionIndex = null;
@@ -591,6 +596,28 @@ class TcgDatabase {
     const eventRow = this.db.prepare('SELECT COUNT(*) AS count FROM business_events').get();
     const tradeLineRow = this.db.prepare('SELECT COUNT(*) AS count FROM trade_lines WHERE archived = 0').get();
     const observationRow = this.db.prepare('SELECT COUNT(*) AS count FROM market_observations').get();
+    const recentCardmarketImports = this.db.prepare(`
+      SELECT run_id AS runId, source, snapshot_date AS snapshotDate,
+             started_at AS startedAt, finished_at AS finishedAt, status,
+             rows_read AS rowsRead, rows_written AS rowsWritten,
+             skipped_rows AS skippedRows, error_message AS errorMessage
+      FROM import_runs
+      WHERE source IN ('cardmarket_price_guide', 'cardmarket_product_catalog')
+         OR source LIKE 'cardmarket_%'
+      ORDER BY COALESCE(NULLIF(finished_at, ''), started_at) DESC
+      LIMIT 5
+    `).all();
+    const lastSuccessfulImport = this.db.prepare(`
+      SELECT run_id AS runId, source, snapshot_date AS snapshotDate,
+             started_at AS startedAt, finished_at AS finishedAt, status,
+             rows_read AS rowsRead, rows_written AS rowsWritten,
+             skipped_rows AS skippedRows, error_message AS errorMessage
+      FROM import_runs
+      WHERE status = 'success'
+        AND (source IN ('cardmarket_price_guide', 'cardmarket_product_catalog') OR source LIKE 'cardmarket_%')
+      ORDER BY COALESCE(NULLIF(finished_at, ''), started_at) DESC
+      LIMIT 1
+    `).get() || null;
 
     return {
       ready: true,
@@ -604,6 +631,8 @@ class TcgDatabase {
       activeTradeLineCount: Number(tradeLineRow?.count || 0),
       snapshotCount: Number(snapshotRow?.count || 0),
       latestSnapshotDate: lastSnapshot?.date || '',
+      lastSuccessfulImport,
+      recentCardmarketImports,
       startupValidation: this.startupValidation
     };
   }
@@ -1955,6 +1984,329 @@ class TcgDatabase {
     }
   }
 
+  beginCardmarketImport(options = {}) {
+    this.open();
+    if (this.cardmarketImportSession) throw new Error('Ein Cardmarket-Import läuft bereits.');
+    const type = String(options.type || '').trim();
+    if (!['products', 'prices'].includes(type)) throw new TypeError('Unbekannter Cardmarket-Importtyp.');
+    const runId = String(options.runId || `cardmarket-${type}-${Date.now()}`);
+    const source = String(options.source || (type === 'prices' ? 'cardmarket_price_guide' : 'cardmarket_product_catalog'));
+    const sourceId = String(options.sourceId || source);
+    const snapshotDate = String(options.snapshotDate || '');
+    const importedAt = String(options.importedAt || isoNow());
+    const table = type === 'prices' ? 'cm_price_import_stage' : 'cm_product_import_stage';
+
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      this.db.exec(`DROP TABLE IF EXISTS temp.${table};`);
+      if (type === 'products') {
+        this.db.exec(`
+          CREATE TEMP TABLE ${table} (
+            product_id TEXT PRIMARY KEY, metacard_id TEXT, expansion_id TEXT, category_id INTEGER,
+            name_de TEXT, name_en TEXT, official_name TEXT, set_name TEXT, set_code TEXT,
+            rarity TEXT, variant TEXT, language TEXT, card_condition TEXT, collector_number TEXT,
+            product_url TEXT, search_text TEXT, search_compact TEXT, archived INTEGER, updated_at TEXT
+          ) WITHOUT ROWID;
+        `);
+      } else {
+        this.db.exec(`
+          CREATE TEMP TABLE ${table} (
+            product_id TEXT NOT NULL, captured_date TEXT NOT NULL, category_id INTEGER,
+            avg_price REAL, low_price REAL, trend_price REAL, avg_1 REAL, avg_7 REAL, avg_30 REAL,
+            avg_foil REAL, low_foil REAL, trend_foil REAL, avg_1_foil REAL, avg_7_foil REAL, avg_30_foil REAL,
+            source_id TEXT NOT NULL, source_type TEXT, data_quality TEXT,
+            collected_at TEXT, imported_at TEXT, source_record_key TEXT, raw_json TEXT,
+            PRIMARY KEY (product_id, captured_date, source_id)
+          ) WITHOUT ROWID;
+        `);
+      }
+      this.cardmarketImportSession = {
+        runId, type, source, sourceId, snapshotDate, importedAt, table,
+        startedAt: String(options.startedAt || importedAt), rowsRead: 0, rowsWritten: 0, skippedRows: 0
+      };
+      return { ok: true, runId, type };
+    } catch (error) {
+      try { this.db.exec('ROLLBACK;'); } catch (_rollbackError) { /* Ursprungsfehler bleibt maßgeblich. */ }
+      this.cardmarketImportSession = null;
+      throw error;
+    }
+  }
+
+  appendCardmarketImport({ runId = '', rows = [] } = {}) {
+    this.open();
+    const session = this.cardmarketImportSession;
+    if (!session || String(runId) !== session.runId) throw new Error('Der atomare Cardmarket-Import ist nicht aktiv.');
+    if (!Array.isArray(rows) || rows.length === 0) return { written: 0, totalWritten: session.rowsWritten };
+    if (rows.length > 5000) throw new Error('Zu viele Zeilen in einem Cardmarket-Importblock.');
+
+    try {
+      let written = 0;
+      if (session.type === 'products') {
+        const statement = this.db.prepare(`
+          INSERT INTO ${session.table} (
+            product_id, metacard_id, expansion_id, category_id,
+            name_de, name_en, official_name, set_name, set_code,
+            rarity, variant, language, card_condition, collector_number,
+            product_url, search_text, search_compact, archived, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(product_id) DO UPDATE SET
+            metacard_id = excluded.metacard_id, expansion_id = excluded.expansion_id,
+            category_id = excluded.category_id, name_de = excluded.name_de, name_en = excluded.name_en,
+            official_name = excluded.official_name, set_name = excluded.set_name, set_code = excluded.set_code,
+            rarity = excluded.rarity, variant = excluded.variant, language = excluded.language,
+            card_condition = excluded.card_condition, collector_number = excluded.collector_number,
+            product_url = excluded.product_url, search_text = excluded.search_text,
+            search_compact = excluded.search_compact, archived = excluded.archived, updated_at = excluded.updated_at
+        `);
+        for (const row of rows) {
+          const productId = String(row?.productId ?? '').trim();
+          if (!/^\d+$/.test(productId)) { session.skippedRows += 1; continue; }
+          const metacardId = String(row?.metacardId ?? '').trim();
+          const nameDe = String(row?.germanName || '').trim();
+          const nameEn = String(row?.officialBaseName || row?.officialName || row?.baseName || row?.name || '').trim();
+          const officialName = String(row?.officialName || row?.baseName || row?.name || '').trim();
+          const searchDocument = cardSearch.buildSearchDocument([
+            productId, metacardId, nameDe, nameEn, officialName,
+            row?.setName, row?.setCode || row?.set, row?.rarity, row?.variant,
+            row?.collectorNumber, row?.expansionId ? `expansion ${row.expansionId}` : ''
+          ]);
+          statement.run(
+            productId, metacardId || null, String(row?.expansionId ?? '').trim() || null,
+            Number(row?.categoryId || 0) || null, nameDe, nameEn, officialName,
+            String(row?.setName || '').trim(), String(row?.setCode || row?.set || '').trim(),
+            String(row?.rarity || '').trim(), String(row?.variant || '').trim(),
+            String(row?.language || '').trim(), String(row?.condition || '').trim(),
+            String(row?.collectorNumber || '').trim(), String(row?.productUrl || '').trim(),
+            searchDocument.spaced, searchDocument.compact, row?.archived ? 1 : 0,
+            String(row?.updatedAt || session.importedAt)
+          );
+          written += 1;
+        }
+      } else {
+        const numberOrNull = value => {
+          if (value === null || value === undefined || value === '') return null;
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : null;
+        };
+        const statement = this.db.prepare(`
+          INSERT INTO ${session.table} (
+            product_id, captured_date, category_id,
+            avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+            avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+            source_id, source_type, data_quality, collected_at, imported_at,
+            source_record_key, raw_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(product_id, captured_date, source_id) DO UPDATE SET
+            category_id = excluded.category_id, avg_price = excluded.avg_price,
+            low_price = excluded.low_price, trend_price = excluded.trend_price,
+            avg_1 = excluded.avg_1, avg_7 = excluded.avg_7, avg_30 = excluded.avg_30,
+            avg_foil = excluded.avg_foil, low_foil = excluded.low_foil,
+            trend_foil = excluded.trend_foil, avg_1_foil = excluded.avg_1_foil,
+            avg_7_foil = excluded.avg_7_foil, avg_30_foil = excluded.avg_30_foil,
+            source_type = excluded.source_type, data_quality = excluded.data_quality,
+            collected_at = excluded.collected_at, imported_at = excluded.imported_at,
+            source_record_key = excluded.source_record_key, raw_json = excluded.raw_json
+        `);
+        for (const row of rows) {
+          const productId = String(row?.productId ?? '').trim();
+          if (!/^\d+$/.test(productId)) { session.skippedRows += 1; continue; }
+          const rowDate = /^\d{4}-\d{2}-\d{2}$/.test(String(row?.date || ''))
+            ? String(row.date) : (session.snapshotDate || dateStamp());
+          const rowSourceId = String(row?.sourceId || session.sourceId || 'cardmarket_price_guide');
+          const collectedAt = String(row?.collectedAt || `${rowDate}T12:00:00.000Z`);
+          statement.run(
+            productId, rowDate, Number(row?.categoryId || 0) || null,
+            numberOrNull(row?.avg), numberOrNull(row?.low), numberOrNull(row?.trend),
+            numberOrNull(row?.avg1), numberOrNull(row?.avg7), numberOrNull(row?.avg30),
+            numberOrNull(row?.avgFoil), numberOrNull(row?.lowFoil), numberOrNull(row?.trendFoil),
+            numberOrNull(row?.avg1Foil), numberOrNull(row?.avg7Foil), numberOrNull(row?.avg30Foil),
+            rowSourceId, String(row?.sourceType || 'official_download'),
+            String(row?.dataQuality || 'official_reference'), collectedAt, session.importedAt,
+            String(row?.sourceRecordKey || `${rowDate}|${productId}`), JSON.stringify(row || {})
+          );
+          written += 1;
+        }
+      }
+      session.rowsRead += rows.length;
+      session.rowsWritten += written;
+      return { written, totalWritten: session.rowsWritten, skippedRows: session.skippedRows };
+    } catch (error) {
+      this.rollbackCardmarketImport({ runId: session.runId, errorMessage: error.message });
+      throw error;
+    }
+  }
+
+  commitCardmarketImport({ runId = '', rowsRead = null, skippedRows = null } = {}) {
+    this.open();
+    const session = this.cardmarketImportSession;
+    if (!session || String(runId) !== session.runId) throw new Error('Der atomare Cardmarket-Import ist nicht aktiv.');
+    const finishedAt = isoNow();
+    try {
+      if (session.type === 'products') {
+        this.db.exec(`
+          INSERT INTO products (
+            product_id, metacard_id, expansion_id, category_id,
+            name_de, name_en, official_name, set_name, set_code,
+            rarity, variant, language, card_condition, collector_number,
+            product_url, search_text, search_compact, archived, updated_at
+          )
+          SELECT product_id, metacard_id, expansion_id, category_id,
+                 name_de, name_en, official_name, set_name, set_code,
+                 rarity, variant, language, card_condition, collector_number,
+                 product_url, search_text, search_compact, archived, updated_at
+          FROM ${session.table} WHERE 1
+          ON CONFLICT(product_id) DO UPDATE SET
+            metacard_id = COALESCE(NULLIF(excluded.metacard_id, ''), products.metacard_id),
+            expansion_id = COALESCE(NULLIF(excluded.expansion_id, ''), products.expansion_id),
+            category_id = COALESCE(excluded.category_id, products.category_id),
+            name_de = COALESCE(NULLIF(excluded.name_de, ''), products.name_de),
+            name_en = COALESCE(NULLIF(excluded.name_en, ''), products.name_en),
+            official_name = COALESCE(NULLIF(excluded.official_name, ''), products.official_name),
+            set_name = COALESCE(NULLIF(excluded.set_name, ''), products.set_name),
+            set_code = COALESCE(NULLIF(excluded.set_code, ''), products.set_code),
+            rarity = COALESCE(NULLIF(excluded.rarity, ''), products.rarity),
+            variant = COALESCE(NULLIF(excluded.variant, ''), products.variant),
+            language = COALESCE(NULLIF(excluded.language, ''), products.language),
+            card_condition = COALESCE(NULLIF(excluded.card_condition, ''), products.card_condition),
+            collector_number = COALESCE(NULLIF(excluded.collector_number, ''), products.collector_number),
+            product_url = COALESCE(NULLIF(excluded.product_url, ''), products.product_url),
+            search_text = COALESCE(NULLIF(excluded.search_text, ''), products.search_text),
+            search_compact = COALESCE(NULLIF(excluded.search_compact, ''), products.search_compact),
+            archived = excluded.archived, updated_at = excluded.updated_at;
+
+          INSERT INTO card_name_mappings (
+            metacard_id, external_card_id, name_de, name_en, name_source,
+            source_revision, match_method, match_status, updated_at
+          )
+          SELECT metacard_id, NULL, MAX(name_de), MAX(name_en), 'product_catalog_cache', '',
+                 'cardmarket_metacard', CASE WHEN MAX(NULLIF(name_de, '')) IS NOT NULL THEN 'mapped' ELSE 'english_only' END,
+                 MAX(updated_at)
+          FROM ${session.table}
+          WHERE NULLIF(metacard_id, '') IS NOT NULL
+          GROUP BY metacard_id
+          ON CONFLICT(metacard_id) DO UPDATE SET
+            name_de = COALESCE(NULLIF(excluded.name_de, ''), card_name_mappings.name_de),
+            name_en = COALESCE(NULLIF(excluded.name_en, ''), card_name_mappings.name_en),
+            name_source = CASE WHEN NULLIF(card_name_mappings.name_source, '') IS NULL THEN excluded.name_source ELSE card_name_mappings.name_source END,
+            match_method = CASE WHEN NULLIF(card_name_mappings.match_method, '') IS NULL THEN excluded.match_method ELSE card_name_mappings.match_method END,
+            match_status = CASE WHEN NULLIF(excluded.name_de, '') IS NOT NULL THEN 'mapped' ELSE card_name_mappings.match_status END,
+            updated_at = excluded.updated_at;
+        `);
+        const metacardIds = this.db.prepare(`SELECT DISTINCT metacard_id FROM ${session.table} WHERE NULLIF(metacard_id, '') IS NOT NULL`).all().map(row => row.metacard_id);
+        this.rebuildCardSearchIndexes(metacardIds, false);
+        this.cardNameRecognitionIndex = null;
+      } else {
+        this.db.exec(`
+          INSERT OR IGNORE INTO data_sources (
+            source_id, source_type, display_name, enabled, read_only, priority,
+            base_url, config_json, created_at, updated_at
+          )
+          SELECT DISTINCT source_id, 'market_import', source_id, 1, 1, 70, '', '{}', imported_at, imported_at
+          FROM ${session.table};
+
+          INSERT INTO market_prices (
+            product_id, captured_date, category_id,
+            avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+            avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+            source_id, source_type, data_quality, collected_at, imported_at
+          )
+          SELECT product_id, captured_date, category_id,
+                 avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+                 avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+                 source_id, source_type, data_quality, collected_at, imported_at
+          FROM ${session.table} WHERE 1
+          ON CONFLICT(product_id, captured_date) DO UPDATE SET
+            category_id = excluded.category_id, avg_price = excluded.avg_price,
+            low_price = excluded.low_price, trend_price = excluded.trend_price,
+            avg_1 = excluded.avg_1, avg_7 = excluded.avg_7, avg_30 = excluded.avg_30,
+            avg_foil = excluded.avg_foil, low_foil = excluded.low_foil,
+            trend_foil = excluded.trend_foil, avg_1_foil = excluded.avg_1_foil,
+            avg_7_foil = excluded.avg_7_foil, avg_30_foil = excluded.avg_30_foil,
+            source_id = excluded.source_id, source_type = excluded.source_type,
+            data_quality = excluded.data_quality, collected_at = excluded.collected_at,
+            imported_at = excluded.imported_at;
+
+          INSERT INTO market_observations (
+            product_id, observed_at, observed_date, source_id, source_record_key,
+            category_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+            avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+            data_quality, imported_at, raw_json
+          )
+          SELECT product_id, collected_at, captured_date, source_id, source_record_key,
+                 category_id, avg_price, low_price, trend_price, avg_1, avg_7, avg_30,
+                 avg_foil, low_foil, trend_foil, avg_1_foil, avg_7_foil, avg_30_foil,
+                 data_quality, imported_at, raw_json
+          FROM ${session.table} WHERE 1
+          ON CONFLICT(source_id, source_record_key) DO UPDATE SET
+            observed_at = excluded.observed_at, category_id = excluded.category_id,
+            avg_price = excluded.avg_price, low_price = excluded.low_price,
+            trend_price = excluded.trend_price, avg_1 = excluded.avg_1,
+            avg_7 = excluded.avg_7, avg_30 = excluded.avg_30,
+            avg_foil = excluded.avg_foil, low_foil = excluded.low_foil,
+            trend_foil = excluded.trend_foil, avg_1_foil = excluded.avg_1_foil,
+            avg_7_foil = excluded.avg_7_foil, avg_30_foil = excluded.avg_30_foil,
+            data_quality = excluded.data_quality, imported_at = excluded.imported_at,
+            raw_json = excluded.raw_json;
+        `);
+        const snapshotDates = this.db.prepare(`SELECT DISTINCT captured_date AS date FROM ${session.table}`).all().map(row => row.date);
+        const sourceIds = this.db.prepare(`SELECT DISTINCT source_id AS id FROM ${session.table}`).all().map(row => row.id);
+        this.updateSnapshotSummaries(snapshotDates, session.sourceId, session.importedAt);
+        this.updateObservationSummaries(snapshotDates, sourceIds, session.importedAt);
+      }
+
+      session.rowsRead = rowsRead === null ? session.rowsRead : Number(rowsRead || 0);
+      session.skippedRows = skippedRows === null ? session.skippedRows : Number(skippedRows || 0);
+      this.recordImportRun({
+        runId: session.runId, source: session.source, sourceId: session.sourceId,
+        snapshotDate: session.snapshotDate, startedAt: session.startedAt, finishedAt,
+        status: 'success', rowsRead: session.rowsRead, rowsWritten: session.rowsWritten,
+        skippedRows: session.skippedRows, metadata: { atomic: true, type: session.type }
+      });
+      this.db.exec('COMMIT;');
+      const result = {
+        ok: true, runId: session.runId, type: session.type, written: session.rowsWritten,
+        rowsRead: session.rowsRead, skippedRows: session.skippedRows, finishedAt
+      };
+      this.cardmarketImportSession = null;
+      try { this.db.exec(`DROP TABLE IF EXISTS temp.${session.table};`); } catch (_dropError) { /* TEMP-Rest ist folgenlos. */ }
+      return result;
+    } catch (error) {
+      try { this.db.exec('ROLLBACK;'); } catch (_rollbackError) { /* Ursprungsfehler bleibt maßgeblich. */ }
+      this.cardmarketImportSession = null;
+      try { this.db.exec(`DROP TABLE IF EXISTS temp.${session.table};`); } catch (_dropError) { /* TEMP-Rest ist folgenlos. */ }
+      try {
+        this.recordImportRun({
+          runId: session.runId, source: session.source, sourceId: session.sourceId,
+          snapshotDate: session.snapshotDate, startedAt: session.startedAt, finishedAt,
+          status: 'failed', rowsRead: session.rowsRead, rowsWritten: 0,
+          skippedRows: session.skippedRows, errorMessage: error.message,
+          metadata: { atomic: true, type: session.type, rolledBack: true }
+        });
+      } catch (_logError) { /* Das Scheitern des Fehlerprotokolls verdeckt nicht den Importfehler. */ }
+      throw error;
+    }
+  }
+
+  rollbackCardmarketImport({ runId = '', errorMessage = 'Import wurde abgebrochen.' } = {}) {
+    this.open();
+    const session = this.cardmarketImportSession;
+    if (!session || (runId && String(runId) !== session.runId)) return { ok: true, rolledBack: false };
+    try { this.db.exec('ROLLBACK;'); } catch (_rollbackError) { /* Verbindung bleibt benutzbar. */ }
+    this.cardmarketImportSession = null;
+    try { this.db.exec(`DROP TABLE IF EXISTS temp.${session.table};`); } catch (_dropError) { /* TEMP-Rest ist folgenlos. */ }
+    const finishedAt = isoNow();
+    try {
+      this.recordImportRun({
+        runId: session.runId, source: session.source, sourceId: session.sourceId,
+        snapshotDate: session.snapshotDate, startedAt: session.startedAt, finishedAt,
+        status: 'failed', rowsRead: session.rowsRead, rowsWritten: 0,
+        skippedRows: session.skippedRows, errorMessage,
+        metadata: { atomic: true, type: session.type, rolledBack: true }
+      });
+    } catch (_logError) { /* Der Rollback selbst war erfolgreich. */ }
+    return { ok: true, rolledBack: true, runId: session.runId };
+  }
+
   upsertProducts(rows = []) {
     this.open();
     if (!Array.isArray(rows) || rows.length === 0) return { written: 0 };
@@ -2654,6 +3006,9 @@ class TcgDatabase {
     };
 
     let written = 0;
+    const snapshotDates = [...new Set(rows
+      .map(row => String(row?.date || normalizedDate))
+      .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))];
     this.db.exec('BEGIN IMMEDIATE;');
     try {
       for (const row of rows) {
@@ -2696,17 +3051,13 @@ class TcgDatabase {
         );
         written += 1;
       }
+      this.updateSnapshotSummaries(snapshotDates, sourceId, importTime);
+      this.updateObservationSummaries(snapshotDates, sourceIds, importTime);
       this.db.exec('COMMIT;');
     } catch (error) {
       this.db.exec('ROLLBACK;');
       throw error;
     }
-
-    const snapshotDates = [...new Set(rows
-      .map(row => String(row?.date || normalizedDate))
-      .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))];
-    this.updateSnapshotSummaries(snapshotDates, sourceId, importTime);
-    this.updateObservationSummaries(snapshotDates, sourceIds, importTime);
 
     return { written, snapshotDate: normalizedDate, snapshotDates };
   }

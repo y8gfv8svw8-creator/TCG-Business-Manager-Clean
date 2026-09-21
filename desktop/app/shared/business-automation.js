@@ -587,6 +587,220 @@
     return `variant-v2:${productId}|${language}|${condition}|${edition}`;
   }
 
+  function normalizeStockEdition(value) {
+    const normalized = normalizeField(value);
+    if (!normalized || ['unbekannt', 'unknown', 'na', 'none'].includes(normalized)) return 'UNKNOWN';
+    if (['1', '1st', '1stedition', 'first', 'firstedition', 'ersteauflage'].includes(normalized)) return '1ST';
+    if (['0', 'unlimited', 'unlimitededition', 'unlimitiert'].includes(normalized)) return 'UNLIMITED';
+    if (['limited', 'limitededition', 'limitiert'].includes(normalized)) return 'LIMITED';
+    return String(value || '').trim().toUpperCase();
+  }
+
+  function stockAcquisitionVariantKey(item = {}) {
+    const productId = String(item.productId || item.idProduct || '').replace(/\D/g, '');
+    const language = normalizeCardLanguage(item.language) || String(item.language || '').trim().toUpperCase();
+    const condition = String(item.condition || '').trim().toUpperCase();
+    if (!productId || !language || !condition) return '';
+    return [productId, language, condition, normalizeStockEdition(item.edition)].join('|');
+  }
+
+  function medianPositive(values = []) {
+    const sorted = values.map(asNumber).filter(value => value > 0).sort((a, b) => a - b);
+    if (!sorted.length) return 0;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  function buildStockAcquisitionPreview(snapshotRows = [], inventory = [], totalCost = 0, options = {}) {
+    const totalNumber = asNumber(totalCost);
+    const previousPurchaseCost = Math.max(0, asNumber(options.previousPurchaseCost));
+    const totalCents = Math.round(totalNumber * 100);
+    const previousCents = Math.round(previousPurchaseCost * 100);
+    const allocationCents = totalCents - previousCents;
+    const errors = [];
+    const ambiguous = [];
+    if (totalNumber < 0) errors.push('Der Gesamt-EK darf nicht negativ sein.');
+    if (allocationCents < 0) errors.push('Der Gesamt-EK liegt unter dem bereits gespeicherten Karten-EK dieses Ankaufs.');
+
+    const groups = new Map();
+    for (const source of snapshotRows || []) {
+      const quantity = wholeQuantity(source.quantity);
+      if (!quantity) continue;
+      const key = stockAcquisitionVariantKey(source);
+      if (!key) {
+        ambiguous.push({
+          ...source,
+          quantity,
+          reason: 'Produkt-ID, Sprache oder Zustand fehlen; keine sichere Print-Zuordnung möglich.'
+        });
+        continue;
+      }
+      const current = groups.get(key) || {
+        key,
+        productId: String(source.productId || source.idProduct || '').replace(/\D/g, ''),
+        name: source.name || source.germanName || source.englishName || 'Unbekannte Karte',
+        set: source.set || '', setName: source.setName || '', collectorNumber: source.collectorNumber || '',
+        rarity: source.rarity || '', language: source.language || '', condition: source.condition || '',
+        edition: source.edition || '', quantity: 0, listingValue: 0, expectedSells: [], metadata: { ...source }
+      };
+      const listingPrice = Math.max(0, asNumber(source.listingPrice ?? source.offerPrice));
+      current.quantity += quantity;
+      current.listingValue += listingPrice * quantity;
+      if (asNumber(source.expectedSell) > 0) current.expectedSells.push(asNumber(source.expectedSell));
+      groups.set(key, current);
+    }
+
+    const unavailableStatuses = new Set(['Verkauft', 'Storniert', 'Reserviert', 'Beschädigt', 'Rückgabe unterwegs']);
+    const availableByKey = new Map();
+    for (const item of inventory || []) {
+      if (item?.archived || item?.saleId || unavailableStatuses.has(String(item?.status || ''))) continue;
+      const key = stockAcquisitionVariantKey(item);
+      if (!key) continue;
+      if (!availableByKey.has(key)) availableByKey.set(key, []);
+      availableByKey.get(key).push(item);
+    }
+
+    const rows = [...groups.values()].map(group => {
+      const existing = availableByKey.get(group.key) || [];
+      const oldQuantity = existing.length;
+      const newQuantity = Math.max(0, group.quantity - oldQuantity);
+      const expectedSell = medianPositive([
+        ...group.expectedSells,
+        ...existing.map(item => item.targetSell ?? item.originalTargetSell ?? item.expectedSell)
+      ]);
+      const listingPrice = group.quantity ? group.listingValue / group.quantity : 0;
+      const usedSell = expectedSell > 0 ? expectedSell : listingPrice;
+      return {
+        ...group,
+        oldQuantity,
+        csvQuantity: group.quantity,
+        newQuantity,
+        expectedSell: roundMoney(expectedSell),
+        listingPrice: roundMoney(listingPrice),
+        usedSell: roundMoney(usedSell),
+        weightSource: expectedSell > 0 ? 'Erwarteter VK' : 'CSV-Inseratspreis',
+        unitCosts: [],
+        allocatedCost: 0
+      };
+    }).sort((left, right) => left.name.localeCompare(right.name, 'de'));
+
+    const changedRows = rows.filter(row => row.newQuantity > 0);
+    const units = changedRows.flatMap((row, rowIndex) => Array.from({ length: row.newQuantity }, (_, unitIndex) => ({
+      row, rowIndex, unitIndex, weight: Math.max(0, asNumber(row.usedSell))
+    })));
+    const totalWeight = units.reduce((sum, unit) => sum + unit.weight, 0);
+    if (!units.length) errors.push('Gegenüber dem vorhandenen Bestand wurden keine neuen Exemplare erkannt.');
+    if (allocationCents > 0 && totalWeight <= 0) errors.push('Für die neuen Exemplare fehlt sowohl ein erwarteter VK als auch ein positiver CSV-Inseratspreis.');
+
+    if (!errors.length && !ambiguous.length) {
+      const assigned = units.map((unit, index) => {
+        const exact = allocationCents <= 0 ? 0 : allocationCents * unit.weight / totalWeight;
+        const cents = Math.floor(exact);
+        return { ...unit, index, cents, remainder: exact - cents };
+      });
+      let remaining = allocationCents - assigned.reduce((sum, unit) => sum + unit.cents, 0);
+      assigned.sort((left, right) => right.remainder - left.remainder || left.rowIndex - right.rowIndex || left.unitIndex - right.unitIndex);
+      for (let index = 0; index < remaining; index += 1) assigned[index % assigned.length].cents += 1;
+      assigned.sort((left, right) => left.rowIndex - right.rowIndex || left.unitIndex - right.unitIndex);
+      for (const unit of assigned) unit.row.unitCosts.push(unit.cents / 100);
+      changedRows.forEach(row => { row.allocatedCost = roundMoney(row.unitCosts.reduce((sum, value) => sum + value, 0)); });
+    }
+
+    const allocatedNewCost = roundMoney(changedRows.reduce((sum, row) => sum + row.allocatedCost, 0));
+    const assignedTotal = roundMoney(previousPurchaseCost + allocatedNewCost);
+    const deltaQuantity = changedRows.reduce((sum, row) => sum + row.newQuantity, 0);
+    const canApply = !errors.length && !ambiguous.length && deltaQuantity > 0 && Math.round(assignedTotal * 100) === totalCents;
+    return {
+      rows,
+      changedRows,
+      ambiguous,
+      errors,
+      totalCost: roundMoney(totalNumber),
+      previousPurchaseCost: roundMoney(previousPurchaseCost),
+      allocationCost: roundMoney(Math.max(0, allocationCents) / 100),
+      allocatedNewCost,
+      assignedTotal,
+      deltaQuantity,
+      canApply,
+      fingerprint: changedRows.map(row => `${row.key}:${row.oldQuantity}:${row.csvQuantity}:${row.newQuantity}`).join('|')
+    };
+  }
+
+  function applyStockAcquisitionPreview(preview = {}, inventory = [], purchase = null, options = {}) {
+    if (!preview?.canApply) throw new Error('Die Ankauf-Zuordnung ist nicht zur Übernahme freigegeben.');
+    const createdIds = new Set((options.createdIds || []).map(String));
+    const items = (inventory || []).map(item => ({ ...item, listingHistory: Array.isArray(item.listingHistory) ? item.listingHistory.map(entry => ({ ...entry })) : [] }));
+    const nextPurchase = purchase ? { ...purchase, pendingItems: (purchase.pendingItems || []).map(item => ({ ...item })) } : {
+      id: String(options.purchaseId || ''),
+      orderNo: String(options.orderNo || ''),
+      title: String(options.title || ''),
+      seller: String(options.title || 'Cardmarket-Bestandsimport'),
+      country: '', shipping: 0, extra: 0, refund: 0,
+      date: String(options.date || '').slice(0, 10),
+      status: 'Eingetroffen', paymentStatus: 'Bezahlt',
+      pendingItems: [], inventoryCreated: true, costAllocationMethod: 'value',
+      note: 'Aus neuen Exemplaren eines bestätigten Cardmarket-Bestandsimports erstellt.'
+    };
+    if (!nextPurchase.id) throw new Error('Für die Ankauf-Zuordnung fehlt eine Einkaufs-ID.');
+    if (String(nextPurchase.status || '') === 'Storniert') throw new Error('Ein stornierter Ankauf kann keine neuen Karten erhalten.');
+
+    const newLines = [];
+    const assignedIds = [];
+    for (const row of preview.changedRows || []) {
+      const candidates = items.filter(item => createdIds.has(String(item.id)) && stockAcquisitionVariantKey(item) === row.key && !item.purchaseId);
+      if (candidates.length < row.newQuantity) throw new Error(`${row.name}: Die Zahl der wirklich neu angelegten Exemplare stimmt nicht mehr mit der Vorschau überein.`);
+      const chosen = candidates.slice(0, row.newQuantity);
+      const costs = new Map();
+      row.unitCosts.forEach((cost, index) => {
+        const cents = Math.round(asNumber(cost) * 100);
+        if (!costs.has(cents)) costs.set(cents, []);
+        costs.get(cents).push(chosen[index]);
+      });
+      for (const [cents, assets] of costs) {
+        const lineKey = `STOCK-ANKAUF:${String(options.importKey || '')}:${row.key}:${cents}`;
+        const unitPrice = cents / 100;
+        const line = {
+          receiptLineKey: lineKey,
+          productId: row.productId,
+          name: row.name,
+          set: row.set,
+          setName: row.setName,
+          collectorNumber: row.collectorNumber,
+          rarity: row.rarity,
+          language: row.language,
+          condition: row.condition,
+          edition: row.edition,
+          quantity: assets.length,
+          unitPrice,
+          receivedBusiness: assets.length,
+          receivedPrivate: 0,
+          receivedDamaged: 0,
+          cancelledQuantity: 0,
+          materializedBusiness: assets.length,
+          materializedPrivate: 0,
+          materializedDamaged: 0,
+          source: 'Cardmarket-Bestandsimport'
+        };
+        nextPurchase.pendingItems.push(line);
+        newLines.push(line);
+        assets.forEach(asset => {
+          asset.cost = unitPrice;
+          asset.costStatus = unitPrice === 0 ? 'confirmed_zero' : 'known';
+          asset.purchaseId = nextPurchase.id;
+          asset.purchaseLineKey = `${nextPurchase.id}:${lineKey}`;
+          asset.purchaseDate = nextPurchase.date || asset.purchaseDate;
+          assignedIds.push(asset.id);
+        });
+      }
+    }
+    nextPurchase.items = (nextPurchase.pendingItems || []).reduce((sum, item) => sum + wholeQuantity(item.quantity || 1), 0);
+    nextPurchase.cardValue = preview.totalCost;
+    nextPurchase.status = 'Eingetroffen';
+    nextPurchase.inventoryCreated = true;
+    nextPurchase.stockDeltaImports = [...(nextPurchase.stockDeltaImports || []), String(options.importKey || '')].filter(Boolean);
+    return { inventory: items, purchase: nextPurchase, newLines, assignedIds };
+  }
+
   const wholeQuantity = value => Math.max(0, Math.round(asNumber(value)));
 
   function purchaseLineKey(item = {}, index = 0) {
@@ -2519,6 +2733,9 @@
     deduplicatePurchaseDraftRows,
     estimatePackagingPerCard,
     stockSnapshotIdentity,
+    stockAcquisitionVariantKey,
+    buildStockAcquisitionPreview,
+    applyStockAcquisitionPreview,
     purchaseLineKey,
     normalizePurchaseReceiptLine,
     allocatePurchaseCosts,

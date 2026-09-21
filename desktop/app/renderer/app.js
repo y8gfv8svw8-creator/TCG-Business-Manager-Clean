@@ -5677,10 +5677,11 @@ async function importStock(file,options={}) {
     const title=String(stockPurchaseOptions.title||stockPurchase?.title||stockPurchase?.seller||"").trim();
     if(!stockPurchase&& !title)throw new Error("Bitte eine Bezeichnung für den neuen Ankauf eingeben.");
     stockPurchasePreview=TcgBusinessAutomation.buildStockAcquisitionPreview(
-      prepared.acquisitionRows,state.inventory,stockPurchaseOptions.totalCost,
+      (stockPurchaseOptions.includeStockRows!==false?prepared.acquisitionRows:[]),state.inventory,stockPurchaseOptions.totalCost,
       {
         previousPurchaseCost:stockPurchaseExistingCost(stockPurchase?.id),
         reservedRows:stockPurchaseOptions.includeUnassignedSales?stockAcquisitionMissingSaleRows():[],
+        includeStockRows:stockPurchaseOptions.includeStockRows!==false,
         excludedSourceKeys:stockPurchaseOptions.excludedSourceKeys||[]
       }
     );
@@ -6424,6 +6425,7 @@ function stockPurchaseControlsHtml(item){
       <label>Kaufdatum<input type="date" data-stock-purchase-date="${item.id}" value="${todayISO()}" disabled></label>
       <label>Gesamt-EK der Karten (€)<input type="number" min="0" step="0.01" data-stock-purchase-total="${item.id}" placeholder="0,00" disabled></label>
     </div>
+    <label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-csv="${item.id}" checked disabled> Neue CSV-Bestandskarten ebenfalls diesem Ankauf zuordnen</label>
     ${missingSaleCount?`<label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-sales="${item.id}" checked disabled> ${missingSaleCount} noch nicht zugeordnete Bestellkarte${missingSaleCount===1?"":"n"} in diesen Ankauf aufnehmen und mit EK anlegen</label>`:""}
     <div class="import-stock-purchase-preview" data-stock-purchase-preview="${item.id}"></div>
   </section>`;
@@ -6444,8 +6446,9 @@ function refreshStockPurchasePreview(itemId){
   const title=document.querySelector(`[data-stock-purchase-title="${item.id}"]`);
   const date=document.querySelector(`[data-stock-purchase-date="${item.id}"]`);
   const total=document.querySelector(`[data-stock-purchase-total="${item.id}"]`);
+  const includeCsv=document.querySelector(`[data-stock-purchase-csv="${item.id}"]`);
   const includeSales=document.querySelector(`[data-stock-purchase-sales="${item.id}"]`);
-  [select,title,date,total,includeSales].filter(Boolean).forEach(field=>field.disabled=!enabled);
+  [select,title,date,total,includeCsv,includeSales].filter(Boolean).forEach(field=>field.disabled=!enabled);
   if(title)title.disabled=!enabled||(select?.value!=="new");
   const purchaseId=select&&select.value!=="new"?select.value:"";
   const purchase=state.purchases.find(row=>String(row.id)===String(purchaseId));
@@ -6455,7 +6458,7 @@ function refreshStockPurchasePreview(itemId){
   const reservedRows=includeSales?.checked?stockAcquisitionMissingSaleRows():[];
   item.stockPurchaseExcludedKeys=item.stockPurchaseExcludedKeys||[];
   const preview=TcgBusinessAutomation.buildStockAcquisitionPreview(
-    item.stockAcquisitionRows||[],state.inventory,rawTotal===""?0:rawTotal,
+    includeCsv?.checked?(item.stockAcquisitionRows||[]):[],state.inventory,rawTotal===""?0:rawTotal,
     {
       previousPurchaseCost:Number(purchase?.cardValue||0),
       reservedRows,
@@ -6533,6 +6536,7 @@ async function confirmImportPreview() {
         title:document.querySelector(`[data-stock-purchase-title="${item.id}"]`)?.value||"",
         date:document.querySelector(`[data-stock-purchase-date="${item.id}"]`)?.value||todayISO(),
         totalCost:document.querySelector(`[data-stock-purchase-total="${item.id}"]`)?.value||0,
+        includeStockRows:Boolean(document.querySelector(`[data-stock-purchase-csv="${item.id}"]`)?.checked),
         includeUnassignedSales:Boolean(document.querySelector(`[data-stock-purchase-sales="${item.id}"]`)?.checked),
         excludedSourceKeys:[...(item.stockPurchaseExcludedKeys||[])],
         previewFingerprint:item.stockPurchasePreview?.fingerprint||""
@@ -7036,9 +7040,9 @@ document.getElementById("importPreviewContent").addEventListener("input",event=>
 document.getElementById("importPreviewContent").addEventListener("change",event=>{
   const select=event.target.closest("[data-import-type]");
   if(select){const item=pendingImportBatch.find(row=>row.id===select.dataset.importType);if(!item)return;item.type=select.value;item.blocked=item.duplicate||item.type==="unknown";renderImportPreviewDialog();return;}
-  const stockField=event.target.closest("[data-stock-purchase-enabled],[data-stock-purchase-select],[data-stock-purchase-date],[data-stock-purchase-sales]");
+  const stockField=event.target.closest("[data-stock-purchase-enabled],[data-stock-purchase-select],[data-stock-purchase-date],[data-stock-purchase-csv],[data-stock-purchase-sales]");
   if(stockField){
-    const itemId=stockField.dataset.stockPurchaseEnabled||stockField.dataset.stockPurchaseSelect||stockField.dataset.stockPurchaseDate||stockField.dataset.stockPurchaseSales;
+    const itemId=stockField.dataset.stockPurchaseEnabled||stockField.dataset.stockPurchaseSelect||stockField.dataset.stockPurchaseDate||stockField.dataset.stockPurchaseCsv||stockField.dataset.stockPurchaseSales;
     refreshStockPurchasePreview(itemId);return;
   }
   if(event.target.closest("[data-import-approved]"))refreshImportConfirmState();

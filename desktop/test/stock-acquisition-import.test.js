@@ -205,6 +205,33 @@ test('fehlende eindeutige Printdaten werden markiert und nicht automatisch verte
   assert.match(preview.ambiguous[0].reason, /keine sichere Print-Zuordnung/);
 });
 
+test('vorhandener Artikel ohne Produkt-ID blockiert einen anderen sicheren Ankauf nicht', () => {
+  const preview = automation.buildStockAcquisitionPreview([
+    row({ productId:'', name:'Alter Bestand ohne Produkt-ID', articleId:'2126678783', quantity:2 }),
+    row({ productId:'200', name:'Neue Ankaufskarte', articleId:'2200000000', quantity:1 })
+  ], [
+    asset('legacy-1',{productId:'',articleId:'2126678783'}),
+    asset('legacy-2',{productId:'',articleId:'2126678783'})
+  ], 45);
+  assert.equal(preview.ambiguous.length,0);
+  assert.equal(preview.rows.length,1);
+  assert.equal(preview.rows[0].name,'Neue Ankaufskarte');
+  assert.equal(preview.deltaQuantity,1);
+  assert.equal(preview.allocatedNewCost,45);
+  assert.equal(preview.assignedTotal,45);
+  assert.equal(preview.canApply,true);
+});
+
+test('nur die zusätzliche Menge eines Artikels ohne Produkt-ID bleibt ungeklärt', () => {
+  const preview = automation.buildStockAcquisitionPreview([
+    row({ productId:'', articleId:'2126678783', quantity:2 })
+  ], [asset('legacy-1',{productId:'',articleId:'2126678783'})], 5);
+  assert.equal(preview.ambiguous.length,1);
+  assert.equal(preview.ambiguous[0].quantity,1);
+  assert.match(preview.ambiguous[0].reason,/Altbestand erkannt/);
+  assert.equal(preview.canApply,false);
+});
+
 test('Sprache Zustand und Edition gehören zur exakten Delta-Identität', () => {
   const preview = automation.buildStockAcquisitionPreview([
     row({ language: 'DE', condition: 'NM', edition: '1st Edition' }),

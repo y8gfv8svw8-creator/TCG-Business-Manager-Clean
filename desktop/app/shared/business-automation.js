@@ -640,16 +640,32 @@
     if (totalNumber < 0) errors.push('Der Gesamt-EK darf nicht negativ sein.');
     if (allocationCents < 0) errors.push('Der Gesamt-EK liegt unter dem bereits gespeicherten Karten-EK dieses Ankaufs.');
 
+    const unavailableStatuses = new Set(['Verkauft', 'Storniert', 'Reserviert', 'Beschädigt', 'Rückgabe unterwegs']);
+    const existingArticleQuantities = new Map();
+    for (const item of inventory || []) {
+      if (item?.archived || item?.saleId || unavailableStatuses.has(String(item?.status || ''))) continue;
+      const articleId = String(item.articleId || item.idArticle || '').replace(/\D/g, '');
+      if (articleId) existingArticleQuantities.set(articleId, (existingArticleQuantities.get(articleId) || 0) + 1);
+    }
+    const claimedUnkeyedArticles = new Map();
     const groups = new Map();
     for (const source of snapshotRows || []) {
       const quantity = wholeQuantity(source.quantity);
       if (!quantity) continue;
       const key = stockAcquisitionVariantKey(source);
       if (!key) {
+        const articleId = String(source.articleId || source.idArticle || '').replace(/\D/g, '');
+        const alreadyClaimed = claimedUnkeyedArticles.get(articleId) || 0;
+        const availableExisting = Math.max(0, (existingArticleQuantities.get(articleId) || 0) - alreadyClaimed);
+        const matchedExisting = articleId ? Math.min(quantity, availableExisting) : 0;
+        if (matchedExisting) claimedUnkeyedArticles.set(articleId, alreadyClaimed + matchedExisting);
+        if (matchedExisting >= quantity) continue;
         ambiguous.push({
           ...source,
-          quantity,
-          reason: 'Produkt-ID, Sprache oder Zustand fehlen; keine sichere Print-Zuordnung möglich.'
+          quantity: quantity - matchedExisting,
+          reason: matchedExisting
+            ? `${matchedExisting} Exemplar(e) wurden über die Cardmarket-Artikel-ID als Altbestand erkannt; nur die zusätzliche Menge ist wegen fehlender Produkt-ID, Sprache oder Zustand unklar.`
+            : 'Produkt-ID, Sprache oder Zustand fehlen; keine sichere Print-Zuordnung möglich.'
         });
         continue;
       }
@@ -674,7 +690,6 @@
       groups.set(key, current);
     }
 
-    const unavailableStatuses = new Set(['Verkauft', 'Storniert', 'Reserviert', 'Beschädigt', 'Rückgabe unterwegs']);
     const availableByKey = new Map();
     const availableByBaseKey = new Map();
     const availableByArticleId = new Map();

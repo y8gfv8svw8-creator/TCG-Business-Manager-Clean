@@ -1,0 +1,7 @@
+TCG Business Manager 6.13.4 – EK-Verteilung trotz vorhandenem Altartikel ohne Produkt-ID
+
+- Bereits vorhandene Cardmarket-Artikel ohne Produkt-ID werden über ihre eindeutige Artikel-ID als Altbestand erkannt.
+- Solche unveränderten Altartikel erscheinen nicht als neue Ankaufskarten und blockieren die EK-Verteilung nicht mehr.
+- Nur eine Menge oberhalb des vorhandenen Artikels bleibt zur sicheren Prüfung ungeklärt.
+- Die 45-Euro-Verteilung wird ausschließlich auf die eindeutig neuen und ausgewählten Ankaufskarten angewendet.
+- Keine Datenbankmigration und keine Schemaänderung; Schema bleibt 12.

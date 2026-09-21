@@ -74,6 +74,41 @@ test('eine fehlende Bestands-Edition erzeugt bei gleicher Druckvariante kein Dup
   assert.match(preview.errors[0], /keine neuen Exemplare/i);
 });
 
+test('gleiche Cardmarket-Artikel-ID bleibt bei korrigiertem Zustand ein vorhandenes Exemplar', () => {
+  const preview = automation.buildStockAcquisitionPreview(
+    [row({ articleId: '2161005878', condition: 'NM', quantity: 2 })],
+    [asset('old', { articleId: '2161005878', language: 'Deutsch', condition: 'GD', edition: undefined })],
+    5
+  );
+  assert.equal(preview.changedRows.length, 1);
+  assert.equal(preview.changedRows[0].oldQuantity, 1);
+  assert.equal(preview.changedRows[0].newQuantity, 1);
+  assert.equal(preview.deltaQuantity, 1);
+  assert.equal(preview.canApply, true);
+
+  const merged = automation.mergeInventorySnapshot(
+    asset('old', { articleId: '2161005878', condition: 'GD', cost: 0.42, purchaseId: 'purchase-345' }),
+    row({ articleId: '2161005878', condition: 'NM', listingPrice: 1 })
+  );
+  assert.equal(merged.condition, 'NM');
+  assert.equal(merged.cost, 0.42);
+  assert.equal(merged.purchaseId, 'purchase-345');
+});
+
+test('gleiche Karte mit verschiedenen Artikel-IDs und Zuständen bleibt getrennt', () => {
+  const preview = automation.buildStockAcquisitionPreview([
+    row({ articleId: '10001', condition: 'NM' }),
+    row({ articleId: '10002', condition: 'GD' })
+  ], [asset('old-nm', { articleId: '10001', condition: 'NM' })], 5);
+  const byCondition = new Map(preview.rows.map(item => [item.condition, item]));
+  assert.equal(byCondition.get('NM').oldQuantity, 1);
+  assert.equal(byCondition.get('NM').newQuantity, 0);
+  assert.equal(byCondition.get('GD').oldQuantity, 0);
+  assert.equal(byCondition.get('GD').newQuantity, 1);
+  assert.equal(preview.deltaQuantity, 1);
+  assert.equal(preview.canApply, true);
+});
+
 test('vorhandener EK wird beim Anwenden niemals überschrieben', () => {
   const preview = automation.buildStockAcquisitionPreview([row({ quantity: 2 })], [asset('old', { cost: 7.35 })], 5);
   const applied = automation.applyStockAcquisitionPreview(preview, [asset('old', { cost: 7.35 }), asset('new', { cost: 0, costStatus: 'unknown' })], null, {

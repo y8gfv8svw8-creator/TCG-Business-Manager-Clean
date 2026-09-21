@@ -650,9 +650,15 @@
         name: source.name || source.germanName || source.englishName || 'Unbekannte Karte',
         set: source.set || '', setName: source.setName || '', collectorNumber: source.collectorNumber || '',
         rarity: source.rarity || '', language: source.language || '', condition: source.condition || '',
-        edition: source.edition || '', quantity: 0, listingValue: 0, expectedSells: [], metadata: { ...source }
+        edition: source.edition || '', quantity: 0, listingValue: 0, expectedSells: [], articleQuantities: [], metadata: { ...source }
       };
       const listingPrice = Math.max(0, asNumber(source.listingPrice ?? source.offerPrice));
+      const articleId = String(source.articleId || source.idArticle || '').replace(/\D/g, '');
+      if (articleId) {
+        const article = current.articleQuantities.find(entry => entry.articleId === articleId);
+        if (article) article.quantity += quantity;
+        else current.articleQuantities.push({ articleId, quantity });
+      }
       current.quantity += quantity;
       current.listingValue += listingPrice * quantity;
       if (asNumber(source.expectedSell) > 0) current.expectedSells.push(asNumber(source.expectedSell));
@@ -662,6 +668,7 @@
     const unavailableStatuses = new Set(['Verkauft', 'Storniert', 'Reserviert', 'Beschädigt', 'Rückgabe unterwegs']);
     const availableByKey = new Map();
     const availableByBaseKey = new Map();
+    const availableByArticleId = new Map();
     for (const item of inventory || []) {
       if (item?.archived || item?.saleId || unavailableStatuses.has(String(item?.status || ''))) continue;
       const key = stockAcquisitionVariantKey(item);
@@ -671,16 +678,33 @@
       const baseKey = stockAcquisitionBaseKey(item);
       if (!availableByBaseKey.has(baseKey)) availableByBaseKey.set(baseKey, []);
       availableByBaseKey.get(baseKey).push(item);
+      const articleId = String(item.articleId || item.idArticle || '').replace(/\D/g, '');
+      if (articleId) {
+        if (!availableByArticleId.has(articleId)) availableByArticleId.set(articleId, []);
+        availableByArticleId.get(articleId).push(item);
+      }
     }
 
+    const claimedArticleMatchIds = new Set();
     const stockRows = [...groups.values()].map(group => {
-      const exactExisting = availableByKey.get(group.key) || [];
-      const baseExisting = availableByBaseKey.get(stockAcquisitionBaseKey(group)) || [];
+      const articleExisting = [];
+      for (const article of group.articleQuantities || []) {
+        const matches = (availableByArticleId.get(article.articleId) || [])
+          .filter(item => !claimedArticleMatchIds.has(String(item.id)))
+          .slice(0, article.quantity);
+        matches.forEach(item => claimedArticleMatchIds.add(String(item.id)));
+        articleExisting.push(...matches);
+      }
+      const articleIds = new Set(articleExisting.map(item => String(item.id)));
+      const exactExisting = (availableByKey.get(group.key) || []).filter(item => !articleIds.has(String(item.id)));
+      const baseExisting = (availableByBaseKey.get(stockAcquisitionBaseKey(group)) || []).filter(item => !articleIds.has(String(item.id)));
       const requestedEdition = normalizeStockEdition(group.edition);
-      let existing = exactExisting;
-      if (requestedEdition === 'UNKNOWN' && baseExisting.length) {
+      let variantExisting = exactExisting;
+      if (articleExisting.length >= group.quantity) {
+        variantExisting = [];
+      } else if (requestedEdition === 'UNKNOWN' && baseExisting.length) {
         const editions = new Set(baseExisting.map(item => normalizeStockEdition(item.edition)));
-        if (editions.size <= 1) existing = baseExisting;
+        if (editions.size <= 1) variantExisting = baseExisting;
         else {
           ambiguous.push({
             ...group,
@@ -690,8 +714,9 @@
         }
       } else if (!exactExisting.length && baseExisting.length) {
         const unknownExisting = baseExisting.filter(item => normalizeStockEdition(item.edition) === 'UNKNOWN');
-        if (unknownExisting.length) existing = unknownExisting;
+        if (unknownExisting.length) variantExisting = unknownExisting;
       }
+      const existing = [...articleExisting, ...variantExisting];
       const oldQuantity = existing.length;
       const newQuantity = Math.max(0, group.quantity - oldQuantity);
       const expectedSell = medianPositive([

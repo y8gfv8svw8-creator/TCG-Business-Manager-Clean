@@ -132,3 +132,71 @@ test('ein bestehender Ankauf erhält nur den verbleibenden EK ohne alte Karten z
   assert.equal(applied.purchase.pendingItems[0].unitPrice, 30);
   assert.equal(applied.inventory[0].cost, 15);
 });
+
+test('fehlende Bestellkarten werden gemeinsam mit dem CSV-Delta wertgewichtet', () => {
+  const preview = automation.buildStockAcquisitionPreview(
+    [row({ productId: '100', name: 'Verfügbar', listingPrice: 30 })],
+    [],
+    100,
+    { reservedRows: [{
+      productId: '200', name: 'Bereits bestellt', language: 'DE', condition: 'NM', edition: '1st Edition',
+      quantity: 1, unitPrice: 20, saleId: 'sale-1', saleOrderNo: '123456', saleLineIndex: 0
+    }] }
+  );
+  assert.equal(preview.stockDeltaQuantity, 1);
+  assert.equal(preview.reservedQuantity, 1);
+  assert.equal(preview.deltaQuantity, 2);
+  const byName = new Map(preview.changedRows.map(item => [item.name, item]));
+  assert.equal(byName.get('Verfügbar').allocatedCost, 60);
+  assert.equal(byName.get('Bereits bestellt').allocatedCost, 40);
+  assert.equal(preview.assignedTotal, 100);
+  assert.equal(preview.canApply, true);
+});
+
+test('Anwenden legt eine fehlende Bestellkarte mit EK und Verkaufsverknüpfung an', () => {
+  const preview = automation.buildStockAcquisitionPreview([], [], 7.35, { reservedRows: [{
+    productId: '200', name: 'Bereits bestellt', set: 'TEST', collectorNumber: 'TEST-DE002', rarity: 'Rare',
+    language: 'DE', condition: 'NM', edition: '1st Edition', quantity: 1, unitPrice: 10,
+    saleId: 'sale-1', saleOrderNo: '123456', saleLineIndex: 0
+  }] });
+  let sequence = 0;
+  const applied = automation.applyStockAcquisitionPreview(preview, [], null, {
+    purchaseId: 'purchase-1', orderNo: 'ANKAUF-1', title: 'Neuer Ankauf', date: '2026-09-21',
+    importKey: 'stock-1', makeId: () => `reserved-${++sequence}`
+  });
+  assert.equal(applied.inventory.length, 1);
+  assert.equal(applied.inventory[0].id, 'reserved-1');
+  assert.equal(applied.inventory[0].cost, 7.35);
+  assert.equal(applied.inventory[0].purchaseId, 'purchase-1');
+  assert.equal(applied.inventory[0].source, 'Cardmarket-Verkaufsimport');
+  assert.equal(applied.inventory[0].status, 'Im Bestand');
+  assert.deepEqual(applied.saleAssignments, [{ saleId: 'sale-1', saleOrderNo: '123456', saleLineIndex: 0, assetIds: ['reserved-1'] }]);
+  assert.deepEqual(applied.saleCreatedIds, ['reserved-1']);
+});
+
+test('Bestellkarte ohne sichere Printdaten blockiert die automatische Übernahme', () => {
+  const preview = automation.buildStockAcquisitionPreview([], [], 5, { reservedRows: [{
+    productId: '', name: 'Unklar', language: 'DE', condition: 'NM', quantity: 1, unitPrice: 5,
+    saleId: 'sale-1', saleOrderNo: '123456', saleLineIndex: 0
+  }] });
+  assert.equal(preview.ambiguous.length, 1);
+  assert.equal(preview.canApply, false);
+  assert.match(preview.ambiguous[0].reason, /nicht sicher angelegt/);
+});
+
+test('Positionen können vor dem Import aus dem Ankauf entfernt und wiedererkannt werden', () => {
+  const reserved = {
+    productId: '200', name: 'Nicht dieser Ankauf', language: 'DE', condition: 'NM', edition: '1st Edition',
+    quantity: 1, unitPrice: 20, saleId: 'sale-1', saleOrderNo: '123456', saleLineIndex: 0,
+    sourceKey: 'sale:sale-1:0'
+  };
+  const preview = automation.buildStockAcquisitionPreview([row({ listingPrice: 10 })], [], 10, {
+    reservedRows: [reserved], excludedSourceKeys: ['sale:sale-1:0']
+  });
+  assert.equal(preview.stockDeltaQuantity, 1);
+  assert.equal(preview.reservedQuantity, 0);
+  assert.equal(preview.excludedQuantity, 1);
+  assert.equal(preview.rows.find(item => item.sourceKey === 'sale:sale-1:0').excluded, true);
+  assert.equal(preview.canApply, true);
+  assert.equal(preview.assignedTotal, 10);
+});

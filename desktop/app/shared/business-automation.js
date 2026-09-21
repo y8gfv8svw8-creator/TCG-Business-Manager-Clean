@@ -619,6 +619,7 @@
     const allocationCents = totalCents - previousCents;
     const errors = [];
     const ambiguous = [];
+    const excludedSourceKeys = new Set((options.excludedSourceKeys || []).map(String));
     if (totalNumber < 0) errors.push('Der Gesamt-EK darf nicht negativ sein.');
     if (allocationCents < 0) errors.push('Der Gesamt-EK liegt unter dem bereits gespeicherten Karten-EK dieses Ankaufs.');
 
@@ -660,7 +661,7 @@
       availableByKey.get(key).push(item);
     }
 
-    const rows = [...groups.values()].map(group => {
+    const stockRows = [...groups.values()].map(group => {
       const existing = availableByKey.get(group.key) || [];
       const oldQuantity = existing.length;
       const newQuantity = Math.max(0, group.quantity - oldQuantity);
@@ -670,19 +671,79 @@
       ]);
       const listingPrice = group.quantity ? group.listingValue / group.quantity : 0;
       const usedSell = expectedSell > 0 ? expectedSell : listingPrice;
+      const sourceKey = `stock:${group.key}`;
+      const excluded = excludedSourceKeys.has(sourceKey);
       return {
         ...group,
         oldQuantity,
         csvQuantity: group.quantity,
-        newQuantity,
+        detectedNewQuantity: newQuantity,
+        newQuantity: excluded ? 0 : newQuantity,
         expectedSell: roundMoney(expectedSell),
         listingPrice: roundMoney(listingPrice),
         usedSell: roundMoney(usedSell),
         weightSource: expectedSell > 0 ? 'Erwarteter VK' : 'CSV-Inseratspreis',
+        sourceType: 'stock-delta',
+        sourceKey,
+        excluded,
+        reservedQuantity: 0,
         unitCosts: [],
         allocatedCost: 0
       };
-    }).sort((left, right) => left.name.localeCompare(right.name, 'de'));
+    });
+
+    const reservedRows = [];
+    for (const source of options.reservedRows || []) {
+      const quantity = wholeQuantity(source.quantity);
+      if (!quantity) continue;
+      const key = stockAcquisitionVariantKey(source);
+      const saleId = String(source.saleId || '').trim();
+      const lineIndex = Number(source.saleLineIndex);
+      if (!key || !saleId || !Number.isInteger(lineIndex) || lineIndex < 0) {
+        ambiguous.push({
+          ...source,
+          quantity,
+          reason: !key
+            ? 'Produkt-ID, Sprache oder Zustand fehlen; die Bestellkarte kann nicht sicher angelegt werden.'
+            : 'Die Verkaufsposition ist nicht eindeutig mit einer Bestellung verknüpft.'
+        });
+        continue;
+      }
+      const expectedSell = Math.max(0, asNumber(source.expectedSell));
+      const salePrice = Math.max(0, asNumber(source.unitPrice ?? source.salePrice));
+      const usedSell = expectedSell > 0 ? expectedSell : salePrice;
+      const sourceKey = String(source.sourceKey || `sale:${saleId}:${lineIndex}`);
+      const excluded = excludedSourceKeys.has(sourceKey);
+      reservedRows.push({
+        key,
+        productId: String(source.productId || source.idProduct || '').replace(/\D/g, ''),
+        name: source.name || source.germanName || source.englishName || 'Unbekannte Karte',
+        set: source.set || '', setName: source.setName || '', collectorNumber: source.collectorNumber || '',
+        rarity: source.rarity || '', language: source.language || '', condition: source.condition || '',
+        edition: source.edition || '', metadata: { ...source },
+        oldQuantity: 0,
+        csvQuantity: 0,
+        detectedNewQuantity: quantity,
+        newQuantity: excluded ? 0 : quantity,
+        reservedQuantity: quantity,
+        expectedSell: roundMoney(expectedSell),
+        listingPrice: roundMoney(salePrice),
+        usedSell: roundMoney(usedSell),
+        weightSource: expectedSell > 0 ? 'Erwarteter VK' : 'Verkaufspreis der Bestellung',
+        sourceType: 'sale-reservation',
+        sourceKey,
+        excluded,
+        saleId,
+        saleOrderNo: String(source.saleOrderNo || ''),
+        saleLineIndex: lineIndex,
+        saleStatus: String(source.saleStatus || 'Offen'),
+        unitCosts: [],
+        allocatedCost: 0
+      });
+    }
+
+    const rows = [...stockRows, ...reservedRows]
+      .sort((left, right) => left.name.localeCompare(right.name, 'de') || left.sourceType.localeCompare(right.sourceType));
 
     const changedRows = rows.filter(row => row.newQuantity > 0);
     const units = changedRows.flatMap((row, rowIndex) => Array.from({ length: row.newQuantity }, (_, unitIndex) => ({
@@ -709,6 +770,9 @@
     const allocatedNewCost = roundMoney(changedRows.reduce((sum, row) => sum + row.allocatedCost, 0));
     const assignedTotal = roundMoney(previousPurchaseCost + allocatedNewCost);
     const deltaQuantity = changedRows.reduce((sum, row) => sum + row.newQuantity, 0);
+    const reservedQuantity = reservedRows.reduce((sum, row) => sum + row.newQuantity, 0);
+    const stockDeltaQuantity = stockRows.reduce((sum, row) => sum + row.newQuantity, 0);
+    const excludedQuantity = rows.reduce((sum, row) => sum + (row.excluded ? row.detectedNewQuantity : 0), 0);
     const canApply = !errors.length && !ambiguous.length && deltaQuantity > 0 && Math.round(assignedTotal * 100) === totalCents;
     return {
       rows,
@@ -721,8 +785,11 @@
       allocatedNewCost,
       assignedTotal,
       deltaQuantity,
+      stockDeltaQuantity,
+      reservedQuantity,
+      excludedQuantity,
       canApply,
-      fingerprint: changedRows.map(row => `${row.key}:${row.oldQuantity}:${row.csvQuantity}:${row.newQuantity}`).join('|')
+      fingerprint: changedRows.map(row => `${row.sourceType}:${row.sourceKey}:${row.key}:${row.oldQuantity}:${row.csvQuantity}:${row.newQuantity}`).join('|')
     };
   }
 
@@ -746,10 +813,64 @@
 
     const newLines = [];
     const assignedIds = [];
+    const saleAssignments = [];
+    const saleCreatedIds = [];
+    const makeId = typeof options.makeId === 'function'
+      ? options.makeId
+      : (() => `sale-stock-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     for (const row of preview.changedRows || []) {
-      const candidates = items.filter(item => createdIds.has(String(item.id)) && stockAcquisitionVariantKey(item) === row.key && !item.purchaseId);
-      if (candidates.length < row.newQuantity) throw new Error(`${row.name}: Die Zahl der wirklich neu angelegten Exemplare stimmt nicht mehr mit der Vorschau überein.`);
-      const chosen = candidates.slice(0, row.newQuantity);
+      let chosen;
+      if (row.sourceType === 'sale-reservation') {
+        chosen = Array.from({ length: row.newQuantity }, (_, index) => {
+          const metadata = row.metadata || {};
+          const asset = {
+            id: String(makeId()),
+            productId: row.productId,
+            name: row.name,
+            germanName: metadata.germanName || '',
+            englishName: metadata.englishName || '',
+            set: row.set,
+            setName: row.setName,
+            collectorNumber: row.collectorNumber,
+            rarity: row.rarity,
+            variant: metadata.variant || '',
+            language: row.language,
+            condition: row.condition,
+            edition: row.edition || 'Unbekannt',
+            productUrl: metadata.productUrl || '',
+            articleId: metadata.articleId || '',
+            listed: false,
+            listingPrice: 0,
+            cost: 0,
+            costStatus: 'unknown',
+            purchaseDate: nextPurchase.date || String(options.date || '').slice(0, 10),
+            status: 'Im Bestand',
+            location: '',
+            source: 'Cardmarket-Verkaufsimport',
+            importKey: String(options.importKey || ''),
+            lotId: String(options.importKey || ''),
+            sourceRow: metadata.sourceRow || row.saleLineIndex + 1,
+            movementRecorded: true,
+            holdingProfile: 'UNKLASSIFIZIERT',
+            longTermHold: false,
+            originalTargetSell: null,
+            listingHistory: []
+          };
+          items.push(asset);
+          saleCreatedIds.push(asset.id);
+          return asset;
+        });
+        saleAssignments.push({
+          saleId: row.saleId,
+          saleOrderNo: row.saleOrderNo,
+          saleLineIndex: row.saleLineIndex,
+          assetIds: chosen.map(asset => asset.id)
+        });
+      } else {
+        const candidates = items.filter(item => createdIds.has(String(item.id)) && stockAcquisitionVariantKey(item) === row.key && !item.purchaseId && !item.saleId);
+        if (candidates.length < row.newQuantity) throw new Error(`${row.name}: Die Zahl der wirklich neu angelegten Exemplare stimmt nicht mehr mit der Vorschau überein.`);
+        chosen = candidates.slice(0, row.newQuantity);
+      }
       const costs = new Map();
       row.unitCosts.forEach((cost, index) => {
         const cents = Math.round(asNumber(cost) * 100);
@@ -779,7 +900,7 @@
           materializedBusiness: assets.length,
           materializedPrivate: 0,
           materializedDamaged: 0,
-          source: 'Cardmarket-Bestandsimport'
+          source: row.sourceType === 'sale-reservation' ? 'Cardmarket-Verkaufsimport' : 'Cardmarket-Bestandsimport'
         };
         nextPurchase.pendingItems.push(line);
         newLines.push(line);
@@ -798,7 +919,7 @@
     nextPurchase.status = 'Eingetroffen';
     nextPurchase.inventoryCreated = true;
     nextPurchase.stockDeltaImports = [...(nextPurchase.stockDeltaImports || []), String(options.importKey || '')].filter(Boolean);
-    return { inventory: items, purchase: nextPurchase, newLines, assignedIds };
+    return { inventory: items, purchase: nextPurchase, newLines, assignedIds, saleAssignments, saleCreatedIds };
   }
 
   const wholeQuantity = value => Math.max(0, Math.round(asNumber(value)));

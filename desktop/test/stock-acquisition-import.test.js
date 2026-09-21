@@ -95,6 +95,54 @@ test('gleiche Cardmarket-Artikel-ID bleibt bei korrigiertem Zustand ein vorhande
   assert.equal(merged.purchaseId, 'purchase-345');
 });
 
+test('durch die alte Startbereinigung entfernte Exemplare werden nicht erneut einem Ankauf zugeordnet', () => {
+  const restorationCredits = automation.buildStockAcquisitionRestorationCredits([
+    {
+      timestamp: '2026-09-20T16:51:06.509Z',
+      type: 'Automatische Korrektur doppelter Bestandssnapshots',
+      quantity: -1,
+      productId: '100',
+      inventoryGroupKey: 'article:2150263623',
+      systemRepair: true
+    },
+    {
+      timestamp: '2026-09-18T10:00:00.000Z',
+      type: 'Automatische Korrektur doppelter Bestandssnapshots',
+      quantity: -9,
+      productId: '100',
+      inventoryGroupKey: 'article:2150263623',
+      systemRepair: true
+    }
+  ], '2026-09-19T13:33:26.097Z');
+  assert.deepEqual(restorationCredits,[{productId:'100',articleId:'2150263623',quantity:1}]);
+
+  const preview = automation.buildStockAcquisitionPreview(
+    [row({ articleId: '2150263623', quantity: 2 })],
+    [asset('still-present', { articleId: '2150263623' })],
+    0,
+    { restorationCredits }
+  );
+  assert.equal(preview.rows[0].oldQuantity,2);
+  assert.equal(preview.rows[0].restorationQuantity,1);
+  assert.equal(preview.rows[0].newQuantity,0);
+  assert.equal(preview.restorationQuantity,1);
+  assert.equal(preview.deltaQuantity,0);
+});
+
+test('nur der Anteil oberhalb des wiederherstellbaren Altbestands gilt als echter Neuzugang', () => {
+  const preview = automation.buildStockAcquisitionPreview(
+    [row({ articleId: '2138332444', quantity: 6 })],
+    [asset('old-1', { articleId: '2138332444' }), asset('old-2', { articleId: '2138332444' })],
+    12,
+    { restorationCredits: [{ productId: '100', articleId: '2138332444', quantity: 3 }] }
+  );
+  assert.equal(preview.rows[0].oldQuantity,5);
+  assert.equal(preview.rows[0].restorationQuantity,3);
+  assert.equal(preview.rows[0].newQuantity,1);
+  assert.equal(preview.allocatedNewCost,12);
+  assert.equal(preview.canApply,true);
+});
+
 test('gleiche Karte mit verschiedenen Artikel-IDs und Zuständen bleibt getrennt', () => {
   const preview = automation.buildStockAcquisitionPreview([
     row({ articleId: '10001', condition: 'NM' }),

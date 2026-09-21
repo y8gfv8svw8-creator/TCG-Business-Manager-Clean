@@ -411,7 +411,8 @@ test('bereinigt addierte alte Cardmarket-Vollsnapshots, ohne geschützte oder ma
     { id:'unknown-old', productId:'', name:'Unbekannt A', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-16.csv' },
     { id:'unknown-new', productId:'', name:'Unbekannt B', language:'DE', condition:'NM', status:'Im Bestand', lotId:'STOCK-cardmarket-stock-2026-07-20.csv' }
   ];
-  const plan = automation.planLegacyStockSnapshotCleanup(rows);
+  assert.equal(automation.planLegacyStockSnapshotCleanup(rows).removedCount,0,'beim normalen App-Start darf diese Altbereinigung nichts mehr löschen');
+  const plan = automation.planLegacyStockSnapshotCleanup(rows,{allowDestructiveCleanup:true});
   assert.deepEqual(new Set(plan.removeIds), new Set(['old','old-with-purchase','new-with-purchase','free-new']));
   assert.equal(plan.removedCount, 4);
   assert.ok(!plan.removeIds.includes('manual'));

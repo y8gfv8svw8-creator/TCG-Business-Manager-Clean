@@ -628,6 +628,15 @@
     const errors = [];
     const ambiguous = [];
     const excludedSourceKeys = new Set((options.excludedSourceKeys || []).map(String));
+    const restorationCredits = new Map();
+    for (const credit of options.restorationCredits || []) {
+      const productId = String(credit?.productId || '').replace(/\D/g, '');
+      const articleId = String(credit?.articleId || '').replace(/\D/g, '');
+      const quantity = wholeQuantity(credit?.quantity);
+      if (!productId || !articleId || !quantity) continue;
+      const key = `${productId}|${articleId}`;
+      restorationCredits.set(key, (restorationCredits.get(key) || 0) + quantity);
+    }
     if (totalNumber < 0) errors.push('Der Gesamt-EK darf nicht negativ sein.');
     if (allocationCents < 0) errors.push('Der Gesamt-EK liegt unter dem bereits gespeicherten Karten-EK dieses Ankaufs.');
 
@@ -717,7 +726,22 @@
         if (unknownExisting.length) variantExisting = unknownExisting;
       }
       const existing = [...articleExisting, ...variantExisting];
-      const oldQuantity = existing.length;
+      let restorationQuantity = 0;
+      const restorationArticles = [];
+      let restorationNeeded = Math.max(0, group.quantity - existing.length);
+      for (const article of group.articleQuantities || []) {
+        if (!restorationNeeded) break;
+        const creditKey = `${group.productId}|${article.articleId}`;
+        const availableCredit = restorationCredits.get(creditKey) || 0;
+        if (!availableCredit) continue;
+        const used = Math.min(availableCredit, article.quantity, restorationNeeded);
+        if (!used) continue;
+        restorationCredits.set(creditKey, availableCredit - used);
+        restorationQuantity += used;
+        restorationNeeded -= used;
+        restorationArticles.push({ articleId: article.articleId, quantity: used });
+      }
+      const oldQuantity = existing.length + restorationQuantity;
       const newQuantity = Math.max(0, group.quantity - oldQuantity);
       const expectedSell = medianPositive([
         ...group.expectedSells,
@@ -730,6 +754,8 @@
       return {
         ...group,
         oldQuantity,
+        restorationQuantity,
+        restorationArticles,
         csvQuantity: group.quantity,
         detectedNewQuantity: newQuantity,
         newQuantity: excluded ? 0 : newQuantity,
@@ -826,6 +852,7 @@
     const deltaQuantity = changedRows.reduce((sum, row) => sum + row.newQuantity, 0);
     const reservedQuantity = reservedRows.reduce((sum, row) => sum + row.newQuantity, 0);
     const stockDeltaQuantity = stockRows.reduce((sum, row) => sum + row.newQuantity, 0);
+    const restorationQuantity = stockRows.reduce((sum, row) => sum + row.restorationQuantity, 0);
     const excludedQuantity = rows.reduce((sum, row) => sum + (row.excluded ? row.detectedNewQuantity : 0), 0);
     const canApply = !errors.length && !ambiguous.length && deltaQuantity > 0 && Math.round(assignedTotal * 100) === totalCents;
     return {
@@ -840,6 +867,7 @@
       assignedTotal,
       deltaQuantity,
       stockDeltaQuantity,
+      restorationQuantity,
       reservedQuantity,
       excludedQuantity,
       canApply,
@@ -1598,7 +1626,14 @@
   // Aeltere Programmstaende haben komplette Cardmarket-Bestandsexporte addiert.
   // Diese Planung fasst nur eindeutig erkennbare STOCK-Snapshots zusammen. Manuelle,
   // gekaufte, reservierte oder verkaufte Exemplare werden niemals als Altduplikat entfernt.
-  function planLegacyStockSnapshotCleanup(items = []) {
+  function planLegacyStockSnapshotCleanup(items = [], options = {}) {
+    // Diese Reparatur war nur fuer alte, additiv importierte Vollsnapshots
+    // gedacht. Bei aktuellen Daten kann aus verschiedenen Import-IDs allein
+    // nicht sicher auf doppelte physische Karten geschlossen werden. Deshalb
+    // darf sie niemals mehr automatisch beim Programmstart loeschen.
+    if (options.allowDestructiveCleanup !== true) {
+      return { groups: [], removeIds: [], removedCount: 0 };
+    }
     const current = (items || []).filter(item => !['Verkauft', 'Storniert'].includes(String(item?.status || '')));
     const byVariant = new Map();
     const currentByVariant = new Map();
@@ -1651,6 +1686,25 @@
       removeIds: groups.flatMap(group => group.removeIds),
       removedCount: groups.reduce((sum, group) => sum + group.removeIds.length, 0)
     };
+  }
+
+  function buildStockAcquisitionRestorationCredits(movements = [], latestInventoryImportAt = '') {
+    const cutoff = Date.parse(String(latestInventoryImportAt || '')) || 0;
+    const credits = new Map();
+    for (const movement of movements || []) {
+      if (!movement?.systemRepair || movement.type !== 'Automatische Korrektur doppelter Bestandssnapshots') continue;
+      const timestamp = Date.parse(String(movement.timestamp || '')) || 0;
+      if (cutoff && timestamp < cutoff) continue;
+      const quantity = Math.max(0, Math.abs(Math.round(asNumber(movement.quantity))));
+      const articleId = String(movement.inventoryGroupKey || '').match(/^article:(\d+)$/i)?.[1] || '';
+      const productId = String(movement.productId || '').replace(/\D/g, '');
+      if (!quantity || !articleId || !productId) continue;
+      const key = `${productId}|${articleId}`;
+      const current = credits.get(key) || { productId, articleId, quantity: 0 };
+      current.quantity += quantity;
+      credits.set(key, current);
+    }
+    return [...credits.values()];
   }
 
   // Ein Cardmarket-Bestandssnapshot beschreibt Inserate, nicht neue physische
@@ -2929,6 +2983,7 @@
     planInventoryTotalCorrection,
     planAvailableInventorySnapshot,
     planLegacyStockSnapshotCleanup,
+    buildStockAcquisitionRestorationCredits,
     planStockPurchaseDuplicateReconciliation,
     mergeInventorySnapshot,
     HOLDING_PROFILES,

@@ -1,0 +1,8 @@
+TCG Business Manager 6.13.3 – Sicherer Altbestand beim Cardmarket-Import
+
+- Die frühere automatische Alt-Snapshot-Bereinigung darf beim App-Start keine Bestandskarten mehr löschen.
+- Bereits protokolliert entfernte Altbestände werden in der Ankaufsvorschau wieder als vorhandene Karten berücksichtigt.
+- Wiederhergestellte Altbestände werden beim Cardmarket-Abgleich ergänzt, aber keinem neuen Ankauf zugeordnet und erhalten keinen neuen EK.
+- Nur Exemplare oberhalb des vorhandenen und sicher wiederherstellbaren Altbestands gelten als neue Ankaufskarten.
+- Die Vorschau kennzeichnet die aus der fehlerhaften Altbereinigung wiederhergestellte Menge ausdrücklich.
+- Keine Datenbankmigration und keine Schemaänderung; Schema bleibt 12.

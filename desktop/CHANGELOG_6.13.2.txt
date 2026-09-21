@@ -1,0 +1,8 @@
+TCG Business Manager 6.13.2 – Sicherer Cardmarket-Zustandsabgleich
+
+- Bereits vorhandene Cardmarket-Inserate werden bei einer Zustandskorrektur über ihre eindeutige Artikel-ID wiedererkannt.
+- Eine Zustandsänderung wie GD zu NM erzeugt in der Ankaufsvorschau kein falsches neues Exemplar mehr.
+- Vorhandener EK und bestehende Ankauf-Zuordnung bleiben bei einer Zustandskorrektur erhalten.
+- Gleiche Karten mit unterschiedlichen Cardmarket-Artikel-IDs und Zuständen bleiben als getrennte physische Exemplare erhalten.
+- Unterschiedliche Prints, Sprachen, Editionen und echte Mengensteigerungen werden weiterhin getrennt behandelt.
+- Keine Datenbankmigration und keine Schemaänderung; Schema bleibt 12.

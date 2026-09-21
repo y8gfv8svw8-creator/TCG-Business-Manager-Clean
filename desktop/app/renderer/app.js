@@ -525,10 +525,9 @@ function migrateState(data) {
 
   // Karten aus noch nicht eingetroffenen Einkäufen dürfen nicht im Bestand stehen.
   // Ältere Backups werden dabei automatisch in offene Wareneingangspositionen umgewandelt.
-  // Bis Patch 9 wurden vollstaendige Cardmarket-Bestandsexporte teilweise wie
-  // einzelne Zugaenge addiert. Eindeutig erkennbare, noch freie Alt-Snapshots
-  // werden einmalig auf den neuesten Stand zusammengefuehrt. Reservierte,
-  // verkaufte, manuell erfasste und einkaufsbezogene Exemplare bleiben erhalten.
+  // Die fruehere automatische Alt-Snapshot-Bereinigung bleibt bewusst
+  // deaktiviert: verschiedene Import-IDs beweisen keine doppelte physische
+  // Karte. Eine solche Bereinigung darf beim Start niemals Bestand entfernen.
   const legacyCleanup=window.TcgBusinessAutomation?.planLegacyStockSnapshotCleanup?.(migrated.inventory);
   if(legacyCleanup?.removedCount){
     const removeIds=new Set(legacyCleanup.removeIds);
@@ -5608,6 +5607,15 @@ function stockPurchaseExistingCost(purchaseId=""){
   return Math.max(0,Number(purchase?.cardValue||0));
 }
 
+function stockAcquisitionRestorationCredits(){
+  const latestImport=(state.imports||[])
+    .filter(row=>row.type==="inventory"&&row.snapshotSync)
+    .sort((left,right)=>new Date(right.date||0)-new Date(left.date||0))[0];
+  return TcgBusinessAutomation.buildStockAcquisitionRestorationCredits(
+    state.movements||[],latestImport?.date||""
+  );
+}
+
 function stockPurchaseHasOpenLines(purchaseId=""){
   const purchase=state.purchases.find(row=>String(row.id)===String(purchaseId));
   return Boolean(purchase&&(purchase.pendingItems||[]).some((item,index)=>TcgBusinessAutomation.normalizePurchaseReceiptLine(item,index).open>0));
@@ -5710,6 +5718,7 @@ async function importStock(file,options={}) {
           allowedGames:stockAcquisitionGameKeys(prepared.acquisitionRows)
         }):[],
         includeStockRows:stockPurchaseOptions.includeStockRows!==false,
+        restorationCredits:stockAcquisitionRestorationCredits(),
         excludedSourceKeys:stockPurchaseOptions.excludedSourceKeys||[]
       }
     );
@@ -6497,6 +6506,7 @@ function refreshStockPurchasePreview(itemId){
     {
       previousPurchaseCost:Number(purchase?.cardValue||0),
       reservedRows,
+      restorationCredits:stockAcquisitionRestorationCredits(),
       excludedSourceKeys:item.stockPurchaseExcludedKeys
     }
   );
@@ -6504,9 +6514,9 @@ function refreshStockPurchasePreview(itemId){
   item.stockPurchaseInputComplete=rawTotal!==""&&Boolean(purchase||String(title?.value||"").trim());
   const target=document.querySelector(`[data-stock-purchase-preview="${item.id}"]`);
   if(target){
-    const rows=preview.rows.map(row=>`<tr class="${row.newQuantity?"stock-delta-new":""} ${row.excluded?"stock-delta-excluded":""}"><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml([row.collectorNumber,row.rarity,row.language,row.condition,row.edition].filter(Boolean).join(" · "))}</small></td><td>${row.sourceType==="sale-reservation"?`Bestellung #${escapeHtml(row.saleOrderNo||"-")}`:"Bestandsliste"}</td><td>${row.sourceType==="sale-reservation"?"–":row.oldQuantity}</td><td>${row.sourceType==="sale-reservation"?"–":row.csvQuantity}</td><td><strong>${row.excluded?`entfernt (${row.detectedNewQuantity})`:row.newQuantity}</strong></td><td>${row.usedSell?money(row.usedSell):"–"}<br><small>${escapeHtml(row.weightSource)}</small></td><td>${row.newQuantity?money(row.allocatedCost):"–"}</td><td>${stockPurchaseUnitCostText(row)}</td><td>${row.detectedNewQuantity?`<button type="button" class="secondary" data-stock-purchase-exclude="${item.id}" data-stock-source-key="${escapeHtml(row.sourceKey)}">${row.excluded?"Wieder aufnehmen":"Aus Ankauf entfernen"}</button>`:"–"}</td></tr>`).join("");
+    const rows=preview.rows.map(row=>`<tr class="${row.newQuantity?"stock-delta-new":""} ${row.excluded?"stock-delta-excluded":""}"><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml([row.collectorNumber,row.rarity,row.language,row.condition,row.edition].filter(Boolean).join(" · "))}</small></td><td>${row.sourceType==="sale-reservation"?`Bestellung #${escapeHtml(row.saleOrderNo||"-")}`:"Bestandsliste"}</td><td>${row.sourceType==="sale-reservation"?"–":`${row.oldQuantity}${row.restorationQuantity?`<br><small>${row.restorationQuantity} aus fehlerhafter Altbereinigung</small>`:""}`}</td><td>${row.sourceType==="sale-reservation"?"–":row.csvQuantity}</td><td><strong>${row.excluded?`entfernt (${row.detectedNewQuantity})`:row.newQuantity}</strong></td><td>${row.usedSell?money(row.usedSell):"–"}<br><small>${escapeHtml(row.weightSource)}</small></td><td>${row.newQuantity?money(row.allocatedCost):"–"}</td><td>${stockPurchaseUnitCostText(row)}</td><td>${row.detectedNewQuantity?`<button type="button" class="secondary" data-stock-purchase-exclude="${item.id}" data-stock-source-key="${escapeHtml(row.sourceKey)}">${row.excluded?"Wieder aufnehmen":"Aus Ankauf entfernen"}</button>`:"–"}</td></tr>`).join("");
     const issues=[...preview.errors,...preview.ambiguous.map(row=>`${row.name||"Karte"}: ${row.reason}`)];
-    target.innerHTML=`<div class="import-stock-delta-summary"><strong>${preview.deltaQuantity} Exemplare für diesen Ankauf</strong><span>${preview.stockDeltaQuantity||0} aus der Bestandsliste · ${preview.reservedQuantity||0} aus offenen Bestellungen${preview.excludedQuantity?` · ${preview.excludedQuantity} entfernt`:""}</span><span>Bestehende Exemplare und ihre EK bleiben unverändert.</span>${filteredSaleCount?`<span>${filteredSaleCount} Karten aus anderen oder nicht eindeutig erkannten TCGs wurden nicht übernommen.</span>`:""}</div>
+    target.innerHTML=`<div class="import-stock-delta-summary"><strong>${preview.deltaQuantity} Exemplare für diesen Ankauf</strong><span>${preview.stockDeltaQuantity||0} aus der Bestandsliste · ${preview.reservedQuantity||0} aus offenen Bestellungen${preview.excludedQuantity?` · ${preview.excludedQuantity} entfernt`:""}</span>${preview.restorationQuantity?`<span>${preview.restorationQuantity} zuvor durch die fehlerhafte Altbereinigung entfernte Exemplare werden als vorhandener Altbestand wiederhergestellt und erhalten keinen neuen EK.</span>`:""}<span>Bestehende Exemplare und ihre EK bleiben unverändert.</span>${filteredSaleCount?`<span>${filteredSaleCount} Karten aus anderen oder nicht eindeutig erkannten TCGs wurden nicht übernommen.</span>`:""}</div>
       ${enabled?`<div class="table-wrap import-stock-delta-table"><table><thead><tr><th>Karte / Print</th><th>Quelle</th><th>Alt</th><th>CSV</th><th>Neu</th><th>Verwendeter VK</th><th>EK-Anteil</th><th>EK je Exemplar</th><th>Auswahl</th></tr></thead><tbody>${rows||'<tr><td colspan="9">Keine auswertbaren Positionen.</td></tr>'}</tbody></table></div>
       <div class="info">„Aus Ankauf entfernen“ löscht keine Cardmarket-Bestandskarte: CSV-Karten bleiben im normalen Bestandsabgleich, erhalten aber keinen EK und keine Ankauf-Zuordnung. Entfernte Bestellkarten werden nicht automatisch angelegt.</div>
       <div class="import-stock-control ${preview.canApply&&item.stockPurchaseInputComplete?"ok":"warning"}"><strong>Ankauf-Gesamt-EK: ${rawTotal===""?"noch eingeben":money(preview.totalCost)}</strong><span>Bereits im gewählten Ankauf: ${money(preview.previousPurchaseCost)} · Neu zugeordnet: ${money(preview.allocatedNewCost)} · Kontrollsumme: ${money(preview.assignedTotal)}</span>${issues.length?`<span>${issues.map(escapeHtml).join("<br>")}</span>`:""}</div>`:""}`;

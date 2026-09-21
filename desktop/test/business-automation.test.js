@@ -27,6 +27,35 @@ test('behandelt deutsche und englische Setnummern als dieselbe Drucknummer', () 
   assert.equal(result.issues.some(issue => issue.code === 'rarity-conflict'), false);
 });
 
+test('normalisiert moderne und historische europäische Sprachcodes drucknummerngleich', () => {
+  const pairs = [
+    ['RA01-DE008', 'RA01-EN008'],
+    ['LON-G000', 'LON-E000'],
+    ['LON-F001', 'LON-EN001'],
+    ['LON-I002', 'LON-EN002'],
+    ['LON-S003', 'LON-EN003'],
+    ['LON-P004', 'LON-EN004'],
+    ['SET-SP005', 'SET-EN005'],
+    ['SET-NL006', 'SET-EN006'],
+    ['SET-PL007', 'SET-EN007'],
+    ['SET-RU008', 'SET-EN008'],
+    ['YGLD-DEB28', 'YGLD-ENB28']
+  ];
+  for (const [localized, english] of pairs) {
+    assert.equal(automation.normalizeCollectorNumber(localized), automation.normalizeCollectorNumber(english), localized);
+  }
+});
+
+test('erkennt Kartensprachen und hält asiatische Ausgaben bewusst getrennt', () => {
+  assert.equal(automation.normalizeCardLanguage('Französisch'), 'FR');
+  assert.equal(automation.normalizeCardLanguage('Italian'), 'IT');
+  assert.equal(automation.normalizeCardLanguage('DE/EN'), '');
+  assert.equal(automation.collectorNumberLanguage('LON-G000'), 'DE');
+  assert.equal(automation.collectorNumberLanguage('YGLD-ENB28'), 'EN');
+  assert.equal(automation.collectorNumberLanguage('EOJ-KR033'), 'KR');
+  assert.notEqual(automation.normalizeCollectorNumber('EOJ-JP033'), automation.normalizeCollectorNumber('EOJ-KR033'));
+});
+
 test('markiert eine vorhandene aber widersprüchliche Cardmarket-ID zur Prüfung', () => {
   const result = automation.inspectCardAssignment({
     productId: '999', name: 'Kashtira Fenrir', set: 'DABL', collectorNumber: 'DABL-DE012', rarity: 'Ultra Rare'

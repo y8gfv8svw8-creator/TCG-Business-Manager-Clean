@@ -8,7 +8,8 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (automation) {
   'use strict';
 
-  if (!automation?.normalizeCollectorNumber || !automation?.planTargetSellChange) {
+  if (!automation?.normalizeCollectorNumber || !automation?.normalizeCardLanguage
+    || !automation?.collectorNumberLanguage || !automation?.planTargetSellChange) {
     throw new Error('Die bestehende Karten- und Ziel-VK-Logik konnte nicht geladen werden.');
   }
 
@@ -18,7 +19,11 @@
 
   const normalizeHeader = value => automation.normalizeField(value);
   const normalizeCollectorNumber = value => automation.normalizeCollectorNumber(value);
-  const normalizeName = value => automation.normalizeField(String(value || '').replace(/\(\s*V\.?\s*\d+[^)]*\)\s*$/i, ''));
+  const normalizeLanguage = value => automation.normalizeCardLanguage(value);
+  const collectorNumberLanguage = value => automation.collectorNumberLanguage(value);
+  const normalizeName = value => automation.normalizeField(String(value || '')
+    .replace(/\s*\(\s*Ge(?:ä|ae)ndert\s+von\s*:[^)]*\)\s*$/i, '')
+    .replace(/\(\s*V\.?\s*\d+[^)]*\)\s*$/i, ''));
   const round = (value, digits = 2) => {
     const factor = 10 ** digits;
     return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
@@ -173,8 +178,11 @@
       const names = [...new Set(sourceRows.map(row => row.normalizedName).filter(Boolean))];
       const costPresence = sourceRows.map(row => row.allocatedCost !== null);
       const expectedValues = [...new Set(sourceRows.map(row => row.expectedSell).filter(value => value !== null))];
+      const statuses = [...new Set(sourceRows.map(row => normalizeHeader(row.status)).filter(Boolean))];
+      const languages = [...new Set(sourceRows.map(row => collectorNumberLanguage(row.collectorNumber)).filter(Boolean))];
       const mixedCostPresence = costPresence.some(Boolean) && !costPresence.every(Boolean);
-      const conflict = names.length !== 1 || mixedCostPresence || expectedValues.length > 1;
+      const conflict = names.length !== 1 || mixedCostPresence || expectedValues.length > 1
+        || statuses.length > 1 || languages.length > 1;
       const allocatedCost = costPresence.every(Boolean)
         ? sourceRows.reduce((sum, row) => sum + row.allocatedCost, 0)
         : null;
@@ -183,6 +191,10 @@
         collectorNumber: sourceRows[0].collectorNumber,
         name: sourceRows[0].name,
         normalizedName: sourceRows[0].normalizedName,
+        status: sourceRows[0].status,
+        normalizedStatus: statuses[0] || '',
+        ownership: statuses.some(status => status.includes('privat')) ? 'private' : 'business',
+        language: languages[0] || '',
         quantity,
         allocatedCost: allocatedCost === null ? null : round(allocatedCost, 8),
         newCostPerItem: allocatedCost === null ? null : round(allocatedCost / quantity, 8),
@@ -191,7 +203,9 @@
         conflict,
         conflictReason: names.length !== 1 ? 'Mehrere Kartennamen zur gleichen Nummer'
           : mixedCostPresence ? 'EK ist nur in einem Teil der gleichen Kartennummer befüllt'
-            : expectedValues.length > 1 ? 'Mehrere erwartete VKs zur gleichen Kartennummer' : ''
+            : expectedValues.length > 1 ? 'Mehrere erwartete VKs zur gleichen Kartennummer'
+              : statuses.length > 1 ? 'Mehrere unterschiedliche Status zur gleichen Kartennummer'
+                : languages.length > 1 ? 'Mehrere Kartensprachen zur gleichen Kartennummer' : ''
       };
     });
   }
@@ -211,6 +225,90 @@
     return { values, distinct: [...new Set(values.map(value => value === null ? 'unknown' : String(value)))] };
   }
 
+  function cohortKey(item = {}) {
+    const lotId = String(item.lotId || '').trim();
+    if (lotId) return `lot:${lotId}`;
+    const importKey = String(item.importKey || '').trim();
+    return importKey ? `import:${importKey}` : '';
+  }
+
+  function belongsToSheet(item = {}, sheetName = '') {
+    const wanted = String(sheetName || '').trim().toUpperCase();
+    if (!wanted) return false;
+    return [item.setCode, item.set, item.collectorNumber].some(value => {
+      const clean = String(value || '').trim().toUpperCase();
+      return clean === wanted || clean.startsWith(`${wanted}-`);
+    });
+  }
+
+  function matchingNames(item = {}, group = {}) {
+    return candidateNames(item).includes(group.normalizedName);
+  }
+
+  function candidateLanguage(item = {}) {
+    return normalizeLanguage(item.language)
+      || collectorNumberLanguage(item.collectorNumber || item.setCode);
+  }
+
+  function matchingLanguage(item = {}, group = {}) {
+    return !group.language || candidateLanguage(item) === group.language;
+  }
+
+  function candidatesInsideCohort(group, items = []) {
+    const numbered = items.filter(item => {
+      const number = normalizeCollectorNumber(item.collectorNumber || item.setCode);
+      return number && number === group.key;
+    });
+    const numberedAndNamed = numbered.filter(item => matchingNames(item, group));
+    const numberedAndNamedInLanguage = numberedAndNamed.filter(item => matchingLanguage(item, group));
+    if (numberedAndNamedInLanguage.length === group.quantity) {
+      return { candidates: numberedAndNamedInLanguage, matchBasis: group.language
+        ? 'Kartennummer + Sprache + Kartenname'
+        : 'Kartennummer + Kartenname' };
+    }
+    const named = items.filter(item => belongsToSheet(item, group.sourceRows[0]?.sheet) && matchingNames(item, group));
+    const namedInLanguage = named.filter(item => matchingLanguage(item, group));
+    if (namedInLanguage.length === group.quantity) {
+      return { candidates: namedInLanguage, matchBasis: group.language
+        ? 'Einkaufslos + Set + Sprache + exakter Kartenname'
+        : 'Einkaufslos + Set + exakter Kartenname' };
+    }
+    const candidates = namedInLanguage.length ? namedInLanguage : numberedAndNamedInLanguage;
+    return {
+      candidates,
+      matchBasis: '',
+      languageRejectedCount: Math.max(named.length - namedInLanguage.length, numberedAndNamed.length - numberedAndNamedInLanguage.length),
+      namedCount: namedInLanguage.length,
+      numberedCount: numberedAndNamedInLanguage.length
+    };
+  }
+
+  function detectDominantCohort(sourceGroups = [], inventory = []) {
+    const businessGroups = sourceGroups.filter(group => !group.conflict && group.ownership === 'business');
+    if (businessGroups.length < 3) return null;
+    const cohorts = new Map();
+    for (const item of inventory) {
+      const key = cohortKey(item);
+      if (!key) continue;
+      if (!cohorts.has(key)) cohorts.set(key, []);
+      cohorts.get(key).push(item);
+    }
+    const ranked = [...cohorts.entries()].map(([key, items]) => {
+      const score = businessGroups.reduce((count, group) => {
+        const result = candidatesInsideCohort(group, items);
+        return count + (result.candidates.length === group.quantity && Boolean(result.matchBasis) ? 1 : 0);
+      }, 0);
+      const dates = [...new Set(items.map(item => String(item.purchaseDate || '').trim()).filter(Boolean))];
+      return { key, items, score, total: businessGroups.length, date: dates.length === 1 ? dates[0] : '' };
+    }).sort((a, b) => b.score - a.score);
+    const best = ranked[0];
+    const secondScore = ranked[1]?.score || 0;
+    const requiredScore = Math.max(3, Math.ceil(businessGroups.length * 0.8));
+    const requiredLead = Math.max(2, Math.ceil(businessGroups.length * 0.1));
+    if (!best || best.score < requiredScore || best.score - secondScore < requiredLead) return null;
+    return best;
+  }
+
   function buildPreview(parsedFiles = [], inventory = [], options = {}) {
     const extracted = extractSourceRows(parsedFiles, options);
     const sourceGroups = groupSourceRows(extracted.rows);
@@ -222,18 +320,46 @@
       if (!byCollectorNumber.has(key)) byCollectorNumber.set(key, []);
       byCollectorNumber.get(key).push(item);
     }
+    const dominantCohort = detectDominantCohort(sourceGroups, inventory || []);
 
     const matched = [];
     const missing = [];
     const ambiguous = [];
     for (const group of sourceGroups) {
-      const candidates = byCollectorNumber.get(group.key) || [];
       if (group.conflict) {
+        const candidates = byCollectorNumber.get(group.key) || [];
         ambiguous.push({ ...group, foundQuantity: candidates.length, reason: group.conflictReason });
         continue;
       }
+      if (group.ownership === 'private') {
+        missing.push({ ...group, foundQuantity: 0, reason: 'Als Privatentnahme markiert; der Geschäftsbestand wird dafür nicht verändert' });
+        continue;
+      }
+      let candidates;
+      let matchBasis = '';
+      if (dominantCohort) {
+        const cohortMatch = candidatesInsideCohort(group, dominantCohort.items);
+        candidates = cohortMatch.candidates;
+        matchBasis = cohortMatch.matchBasis;
+      } else {
+        const numbered = byCollectorNumber.get(group.key) || [];
+        candidates = numbered.filter(item => matchingLanguage(item, group));
+        matchBasis = candidates.length ? (group.language
+          ? 'Kartennummer + Sprache + Kartenname'
+          : 'Kartennummer + Kartenname') : '';
+        if (!candidates.length && numbered.length && group.language) {
+          ambiguous.push({
+            ...group,
+            foundQuantity: numbered.length,
+            reason: `Kartennummer gefunden, aber nicht eindeutig in der Sprache ${group.language}`
+          });
+          continue;
+        }
+      }
       if (!candidates.length) {
-        missing.push({ ...group, foundQuantity: 0, reason: 'Kartennummer nicht im Geschäftsbestand gefunden' });
+        missing.push({ ...group, foundQuantity: 0, reason: dominantCohort
+          ? 'Nicht eindeutig im erkannten Einkaufslos gefunden'
+          : 'Kartennummer nicht im Geschäftsbestand gefunden' });
         continue;
       }
       const nameMatches = candidates.filter(item => candidateNames(item).includes(group.normalizedName));
@@ -249,6 +375,7 @@
       const oldExpectedSell = summarizeExisting(candidates, 'targetSell');
       matched.push({
         ...group,
+        matchBasis,
         foundQuantity: candidates.length,
         assetIds: candidates.map(item => item.id),
         assetSnapshot: candidates.map(item => ({ id: item.id, cost: item.cost, costStatus: item.costStatus, targetSell: item.targetSell, originalTargetSell: item.originalTargetSell })),
@@ -279,6 +406,11 @@
       sumImportedEk,
       sourceQuantity: extracted.rows.reduce((sum, row) => sum + row.quantity, 0),
       matchedQuantity: matched.reduce((sum, row) => sum + row.foundQuantity, 0),
+      detectedCohort: dominantCohort ? {
+        date: dominantCohort.date,
+        matchedGroups: dominantCohort.score,
+        businessGroups: dominantCohort.total
+      } : null,
       missingRequiredSheets,
       canApply: matched.length > 0 && !missingRequiredSheets.length && !duplicateRequiredSheets && controlWithinTolerance
     };

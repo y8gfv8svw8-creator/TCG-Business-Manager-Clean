@@ -36,6 +36,7 @@ function asset(id, overrides = {}) {
     collectorNumber: 'EOJ-EN033',
     name: 'Testkarte',
     germanName: 'Testkarte',
+    language: 'Deutsch',
     quantity: 1,
     status: 'Im Bestand',
     cost: 1,
@@ -71,6 +72,59 @@ test('doppelter Manager-Treffer bei Tabellenmenge eins bleibt mehrdeutig', () =>
   assert.equal(result.matched.length, 0);
   assert.equal(result.ambiguous.length, 1);
   assert.equal(result.ambiguous[0].foundQuantity, 2);
+});
+
+test('altes LON-G-Format und fehlende Setnummern werden nur innerhalb eines eindeutigen Importloses zugeordnet', () => {
+  const rows = [
+    ['LON-G000', 'Karte Null', 1, 'Offen', 1, 2, 0.9, 1.5],
+    ['LON-G001', 'Karte Eins', 1, 'Offen', 1, 2, 0.9, 1.5],
+    ['LON-G002', 'Karte Zwei', 1, 'Offen', 1, 2, 0.9, 1.5],
+    ['LON-G003', 'Finsterlord Maria (Geändert von: Maria, die Gefallene)', 1, 'Offen', 1, 2, 0.9, 1.5]
+  ];
+  const currentLot = 'stock-import-2026-09-19';
+  const inventory = [
+    asset('old-card', { collectorNumber: 'LON-EN000', set: 'LON', name: 'Karte Null', germanName: 'Karte Null', lotId: 'older-stock-import' }),
+    asset('new-0', { collectorNumber: 'LON-EN000', set: 'LON', name: 'Karte Null', germanName: 'Karte Null', lotId: currentLot, purchaseDate: '2026-09-19' }),
+    asset('new-1', { collectorNumber: '', set: 'LON', name: 'Karte Eins', germanName: 'Karte Eins', lotId: currentLot, purchaseDate: '2026-09-19' }),
+    asset('new-2', { collectorNumber: '', set: 'LON', name: 'Karte Zwei', germanName: 'Karte Zwei', lotId: currentLot, purchaseDate: '2026-09-19' }),
+    asset('new-3', { collectorNumber: '', set: 'LON', name: 'Finsterlord Maria (V.1 - Rare)', germanName: 'Finsterlord Maria', lotId: currentLot, purchaseDate: '2026-09-19' })
+  ];
+  const total = rows.reduce((sum, row) => sum + row[4], 0);
+  const result = purchaseImport.buildPreview(parsedSheet(rows, 'LON'), inventory, {
+    requiredSheets: ['LON'],
+    controlTotal: total
+  });
+  assert.equal(result.matched.length, 4);
+  assert.equal(result.ambiguous.length, 0);
+  assert.deepEqual(result.detectedCohort, { date: '2026-09-19', matchedGroups: 4, businessGroups: 4 });
+  assert.equal(result.matched.some(row => row.assetIds.includes('old-card')), false);
+  assert.equal(result.matched.filter(row => row.matchBasis === 'Einkaufslos + Set + Sprache + exakter Kartenname').length, 3);
+});
+
+test('sprachneutrale Kartennummer wählt trotzdem nur die richtige Kartensprache', () => {
+  const result = preview([['EOJ-FR033', 'Testkarte', 1, 'Offen', 2, 20, 0.9, 4]], [
+    asset('english', { collectorNumber: 'EOJ-EN033', language: 'Englisch' }),
+    asset('french', { collectorNumber: 'EOJ-FR033', language: 'Französisch' })
+  ]);
+  assert.equal(result.matched.length, 1);
+  assert.deepEqual(result.matched[0].assetIds, ['french']);
+  assert.equal(result.matched[0].matchBasis, 'Kartennummer + Sprache + Kartenname');
+});
+
+test('eine unbekannte oder abweichende Kartensprache wird nicht still zugeordnet', () => {
+  const result = preview([['EOJ-FR033', 'Testkarte', 1, 'Offen', 2, 20, 0.9, 4]], [
+    asset('english', { collectorNumber: 'EOJ-EN033', language: 'Englisch' })
+  ]);
+  assert.equal(result.matched.length, 0);
+  assert.equal(result.ambiguous.length, 1);
+  assert.match(result.ambiguous[0].reason, /Sprache FR/);
+});
+
+test('Privatentnahme wird nicht versehentlich einer gleichnamigen Geschäftskarte zugeordnet', () => {
+  const result = preview([['EOJ-DE033', 'Testkarte', 1, 'Privatentnahme', 2, 20, 0.9, 4]], [asset('business-card')]);
+  assert.equal(result.matched.length, 0);
+  assert.equal(result.missing.length, 1);
+  assert.match(result.missing[0].reason, /Privatentnahme/);
 });
 
 test('Menge größer eins teilt den Gesamt-EK genau einmal und ändert keine Menge', () => {

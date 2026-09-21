@@ -28,14 +28,59 @@
     .replace(/[^a-zA-Z0-9]+/g, '')
     .toLowerCase();
 
-  const normalizeCollectorNumber = value => String(value ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    // Die Sprachkennung einer Setnummer ist keine eigene Druckvariante.
-    // RA01-DE008 und RA01-EN008 beschreiben deshalb dieselbe Kartennummer.
-    .replace(/(DE|EN|FR|IT|ES|PT)(?=\d{2,4}$)/, '');
+  const LOCALIZED_TCG_LANGUAGE_CODES = Object.freeze(['EN', 'DE', 'FR', 'IT', 'ES', 'SP', 'PT', 'NL', 'PL', 'RU']);
+  const LEGACY_TCG_LANGUAGE_CODES = Object.freeze(['E', 'G', 'F', 'I', 'S', 'P']);
+  const LANGUAGE_ALIASES = Object.freeze({
+    en: 'EN', e: 'EN', englisch: 'EN', english: 'EN',
+    de: 'DE', g: 'DE', deutsch: 'DE', german: 'DE',
+    fr: 'FR', f: 'FR', franzosisch: 'FR', francais: 'FR', french: 'FR',
+    it: 'IT', i: 'IT', italienisch: 'IT', italian: 'IT',
+    es: 'ES', sp: 'ES', s: 'ES', spanisch: 'ES', spanish: 'ES',
+    pt: 'PT', p: 'PT', portugiesisch: 'PT', portuguese: 'PT',
+    nl: 'NL', niederlandisch: 'NL', dutch: 'NL',
+    pl: 'PL', polnisch: 'PL', polish: 'PL',
+    ru: 'RU', russisch: 'RU', russian: 'RU',
+    jp: 'JP', ja: 'JP', japanisch: 'JP', japanese: 'JP',
+    kr: 'KR', ko: 'KR', koreanisch: 'KR', korean: 'KR',
+    sc: 'SC', vereinfachteschinesisch: 'SC', simplifiedchinese: 'SC',
+    tc: 'TC', traditionelleschinesisch: 'TC', traditionalchinese: 'TC'
+  });
+
+  const normalizeCardLanguage = value => {
+    const raw = String(value ?? '').trim();
+    if (!raw || /[\/,]/.test(raw)) return '';
+    return LANGUAGE_ALIASES[normalizeField(raw)] || '';
+  };
+
+  const collectorNumberLanguage = value => {
+    const raw = String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .trim();
+    const delimited = raw.match(/^[A-Z0-9]+-(EN|DE|FR|IT|ES|SP|PT|NL|PL|RU|JP|KR|SC|TC|E|G|F|I|S|P)(?=[A-Z]?\d{1,5}[A-Z]?$)/);
+    if (delimited) return normalizeCardLanguage(delimited[1]);
+    const compact = raw.replace(/[^A-Z0-9]/g, '');
+    const modern = compact.match(/(EN|DE|FR|IT|ES|SP|PT|NL|PL|RU|JP|KR|SC|TC)(?=[A-Z]?\d{1,5}[A-Z]?$)/);
+    return modern ? normalizeCardLanguage(modern[1]) : '';
+  };
+
+  const normalizeCollectorNumber = value => {
+    const raw = String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .trim();
+    const languagePattern = LOCALIZED_TCG_LANGUAGE_CODES.join('|');
+    const legacyPattern = LEGACY_TCG_LANGUAGE_CODES.join('|');
+    const delimited = raw.match(new RegExp(`^([A-Z0-9]+)-(${languagePattern}|${legacyPattern})([A-Z]?\\d{1,5}[A-Z]?)$`));
+    const languageNeutral = delimited ? `${delimited[1]}-${delimited[3]}` : raw;
+    return languageNeutral
+      .replace(/[^A-Z0-9]/g, '')
+      // Zweistellige europäische Sprachcodes werden auch in kompakten Altdaten erkannt.
+      // OCG-/asiatische Kennungen wie JP, KR, SC oder TC bleiben absichtlich erhalten.
+      .replace(new RegExp(`(${languagePattern})(?=[A-Z]?\\d{1,5}[A-Z]?$)`), '');
+  };
 
   const comparableNames = record => {
     const names = [record?.name, record?.germanName, record?.englishName,
@@ -2458,6 +2503,8 @@
   return {
     asNumber,
     normalizeField,
+    normalizeCardLanguage,
+    collectorNumberLanguage,
     normalizeCollectorNumber,
     inspectCardAssignment,
     detectCsvImportType,

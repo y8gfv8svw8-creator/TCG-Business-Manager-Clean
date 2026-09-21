@@ -2310,7 +2310,7 @@ function renderPurchasePriceImportPreview(preview, fileNames=[]) {
     <td><strong>${row.newCostPerItem===null?"unverändert":importMoney(row.newCostPerItem)}</strong>${row.allocatedCost!==null&&row.quantity>1?`<br><small>${importMoney(row.allocatedCost)} gesamt ÷ ${row.quantity}</small>`:""}</td>
     <td>${purchaseImportOldValues(row.oldExpectedSell)}</td>
     <td><strong>${row.expectedSell===null?"unverändert":importMoney(row.expectedSell)}</strong><br><small>Spalte „Erwarteter VK je Karte“</small></td>
-    <td>${row.foundQuantity}</td>
+    <td>${row.foundQuantity}<br><small>${escapeHtml(row.matchBasis||"Eindeutige Zuordnung")}</small></td>
   </tr>`).join("");
   content.innerHTML=`
     <div class="purchase-import-summary">
@@ -2321,6 +2321,7 @@ function renderPurchasePriceImportPreview(preview, fileNames=[]) {
       <div><small>Fehler / leere Zeilen</small><strong>${preview.errors.length} / ${preview.skipped.length}</strong></div>
       <div><small>EK-Summe der eindeutigen Treffer</small><strong>${importMoney(preview.sumImportedEk)}</strong></div>
     </div>
+    ${preview.detectedCohort?`<div class="purchase-import-control ok"><strong>Zusammengehörigen Ankauf erkannt</strong><br>${preview.detectedCohort.date?`Bestandsdatum ${escapeHtml(fmtDate(preview.detectedCohort.date))} · `:""}${preview.detectedCohort.matchedGroups} von ${preview.detectedCohort.businessGroups} geschäftlichen Tabellenpositionen passen eindeutig zu diesem Importlos. Ältere gleichnamige Karten werden nicht verwendet.</div>`:""}
     <div class="purchase-import-control ${preview.controlWithinTolerance?"ok":"warning"}"><strong>${preview.controlWithinTolerance?"Kontrollsumme plausibel":"Kontrollsumme außerhalb der Toleranz"}</strong><br>${escapeHtml(controlText)}${preview.missingRequiredSheets.length?`<br><strong>Fehlende Blätter: ${escapeHtml(preview.missingRequiredSheets.join(", "))}</strong>`:""}</div>
     <section class="purchase-import-section"><h3>Diese Werte werden übernommen</h3>
       ${matchedRows?`<div class="table-wrap"><table class="purchase-import-table"><thead><tr><th>Kartennummer</th><th>Kartenname</th><th>Alter EK</th><th>Neuer EK je Exemplar</th><th>Alter erwarteter VK</th><th>Neuer erwarteter VK</th><th>Gefundene Menge</th></tr></thead><tbody>${matchedRows}</tbody></table></div>`:'<div class="warning">Keine eindeutigen Treffer vorhanden.</div>'}

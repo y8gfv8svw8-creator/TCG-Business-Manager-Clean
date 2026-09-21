@@ -604,6 +604,14 @@
     return [productId, language, condition, normalizeStockEdition(item.edition)].join('|');
   }
 
+  function stockAcquisitionBaseKey(item = {}) {
+    const productId = String(item.productId || item.idProduct || '').replace(/\D/g, '');
+    const language = normalizeCardLanguage(item.language) || String(item.language || '').trim().toUpperCase();
+    const condition = String(item.condition || '').trim().toUpperCase();
+    if (!productId || !language || !condition) return '';
+    return [productId, language, condition].join('|');
+  }
+
   function medianPositive(values = []) {
     const sorted = values.map(asNumber).filter(value => value > 0).sort((a, b) => a - b);
     if (!sorted.length) return 0;
@@ -653,16 +661,37 @@
 
     const unavailableStatuses = new Set(['Verkauft', 'Storniert', 'Reserviert', 'Beschädigt', 'Rückgabe unterwegs']);
     const availableByKey = new Map();
+    const availableByBaseKey = new Map();
     for (const item of inventory || []) {
       if (item?.archived || item?.saleId || unavailableStatuses.has(String(item?.status || ''))) continue;
       const key = stockAcquisitionVariantKey(item);
       if (!key) continue;
       if (!availableByKey.has(key)) availableByKey.set(key, []);
       availableByKey.get(key).push(item);
+      const baseKey = stockAcquisitionBaseKey(item);
+      if (!availableByBaseKey.has(baseKey)) availableByBaseKey.set(baseKey, []);
+      availableByBaseKey.get(baseKey).push(item);
     }
 
     const stockRows = [...groups.values()].map(group => {
-      const existing = availableByKey.get(group.key) || [];
+      const exactExisting = availableByKey.get(group.key) || [];
+      const baseExisting = availableByBaseKey.get(stockAcquisitionBaseKey(group)) || [];
+      const requestedEdition = normalizeStockEdition(group.edition);
+      let existing = exactExisting;
+      if (requestedEdition === 'UNKNOWN' && baseExisting.length) {
+        const editions = new Set(baseExisting.map(item => normalizeStockEdition(item.edition)));
+        if (editions.size <= 1) existing = baseExisting;
+        else {
+          ambiguous.push({
+            ...group,
+            quantity: group.quantity,
+            reason: 'Die Edition fehlt in der CSV, im Bestand gibt es aber mehrere Editionen derselben Druckvariante.'
+          });
+        }
+      } else if (!exactExisting.length && baseExisting.length) {
+        const unknownExisting = baseExisting.filter(item => normalizeStockEdition(item.edition) === 'UNKNOWN');
+        if (unknownExisting.length) existing = unknownExisting;
+      }
       const oldQuantity = existing.length;
       const newQuantity = Math.max(0, group.quantity - oldQuantity);
       const expectedSell = medianPositive([

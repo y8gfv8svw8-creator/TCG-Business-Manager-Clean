@@ -5613,10 +5613,31 @@ function stockPurchaseHasOpenLines(purchaseId=""){
   return Boolean(purchase&&(purchase.pendingItems||[]).some((item,index)=>TcgBusinessAutomation.normalizePurchaseReceiptLine(item,index).open>0));
 }
 
-function stockAcquisitionMissingSaleRows(){
+function cardGameKeyFromProductUrl(url=""){
+  const match=String(url||"").match(/cardmarket\.com\/(?:de|en|fr|es|it|pt|nl|pl|at|be|ch)\/([^/]+)\/Products/i);
+  if(!match)return "";
+  return String(match[1]||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"");
+}
+
+function cardGameKeyForRecord(record={}){
+  const direct=cardGameKeyFromProductUrl(record.productUrl||record.url||"");
+  if(direct)return direct;
+  const productId=cleanProductId(record.productId||record.idProduct);
+  if(!productId)return "";
+  const catalog=state.productCatalog?.[productId]||BUILTIN_PRODUCT_CATALOG?.[productId]||{};
+  return cardGameKeyFromProductUrl(catalog.productUrl||"");
+}
+
+function stockAcquisitionGameKeys(rows=[]){
+  return [...new Set((rows||[]).map(row=>cardGameKeyForRecord(stockRowMetadata(row))).filter(Boolean))];
+}
+
+function stockAcquisitionMissingSaleRows(options={}){
   const inventoryById=new Map((state.inventory||[]).map(item=>[String(item.id),item]));
-  const activeStatuses=new Set(["Offen","Bezahlt","Kommissioniert","Verpackt","Versendet","Abgeschlossen","Abgerechnet"]);
+  const activeStatuses=new Set(["Offen"]);
+  const allowedGames=new Set((options.allowedGames||[]).map(value=>String(value||"").trim().toLowerCase()).filter(Boolean));
   const rows=[];
+  const filterStats={differentGame:0,unknownGame:0};
   (state.sales||[]).forEach(sale=>{
     if(!activeStatuses.has(String(sale.status||"Offen")))return;
     const claimedIds=new Set();
@@ -5625,6 +5646,10 @@ function stockAcquisitionMissingSaleRows(){
       const quantity=Math.max(0,Math.round(Number(line.quantity||0)));
       if(!quantity)return;
       const productId=cleanProductId(line.productId);
+      const product=resolveProduct(productId,line);
+      const gameKey=cardGameKeyForRecord({...line,...product,productId});
+      if(allowedGames.size&&!gameKey){filterStats.unknownGame+=quantity;return;}
+      if(allowedGames.size&&!allowedGames.has(gameKey)){filterStats.differentGame+=quantity;return;}
       const explicit=(line.matchedItemIds||[])
         .map(id=>inventoryById.get(String(id)))
         .filter(item=>item&&!claimedIds.has(String(item.id)));
@@ -5656,6 +5681,7 @@ function stockAcquisitionMissingSaleRows(){
       });
     });
   });
+  rows.filterStats=filterStats;
   return rows;
 }
 
@@ -5680,7 +5706,9 @@ async function importStock(file,options={}) {
       (stockPurchaseOptions.includeStockRows!==false?prepared.acquisitionRows:[]),state.inventory,stockPurchaseOptions.totalCost,
       {
         previousPurchaseCost:stockPurchaseExistingCost(stockPurchase?.id),
-        reservedRows:stockPurchaseOptions.includeUnassignedSales?stockAcquisitionMissingSaleRows():[],
+        reservedRows:stockPurchaseOptions.includeUnassignedSales?stockAcquisitionMissingSaleRows({
+          allowedGames:stockAcquisitionGameKeys(prepared.acquisitionRows)
+        }):[],
         includeStockRows:stockPurchaseOptions.includeStockRows!==false,
         excludedSourceKeys:stockPurchaseOptions.excludedSourceKeys||[]
       }
@@ -6416,7 +6444,10 @@ function stockPurchaseSelectorOptions(){
 
 function stockPurchaseControlsHtml(item){
   const suggested=String(item.fileName||"Cardmarket-Ankauf").replace(/\.[^.]+$/,"").replace(/^cardmarket-stock-?/i,"").trim()||"Cardmarket-Ankauf";
-  const missingSaleCount=stockAcquisitionMissingSaleRows().reduce((sum,row)=>sum+Number(row.quantity||0),0);
+  const allowedGames=stockAcquisitionGameKeys(item.stockAcquisitionRows||[]);
+  const missingSaleRows=stockAcquisitionMissingSaleRows({allowedGames});
+  const missingSaleCount=missingSaleRows.reduce((sum,row)=>sum+Number(row.quantity||0),0);
+  const filteredSaleCount=Number(missingSaleRows.filterStats?.differentGame||0)+Number(missingSaleRows.filterStats?.unknownGame||0);
   return `<section class="import-stock-purchase" data-stock-purchase-section="${item.id}">
     <label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-enabled="${item.id}"> Neue Exemplare optional einem Ankauf zuordnen und EK verteilen</label>
     <div class="import-stock-purchase-fields">
@@ -6426,7 +6457,8 @@ function stockPurchaseControlsHtml(item){
       <label>Gesamt-EK der Karten (€)<input type="number" min="0" step="0.01" data-stock-purchase-total="${item.id}" placeholder="0,00" disabled></label>
     </div>
     <label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-csv="${item.id}" checked disabled> Neue CSV-Bestandskarten ebenfalls diesem Ankauf zuordnen</label>
-    ${missingSaleCount?`<label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-sales="${item.id}" checked disabled> ${missingSaleCount} noch nicht zugeordnete Bestellkarte${missingSaleCount===1?"":"n"} in diesen Ankauf aufnehmen und mit EK anlegen</label>`:""}
+    ${missingSaleCount?`<label class="import-stock-toggle"><input type="checkbox" data-stock-purchase-sales="${item.id}" checked disabled> ${missingSaleCount} passende, noch nicht zugeordnete Karte${missingSaleCount===1?"":"n"} aus offenen Bestellungen (gleiches TCG) in diesen Ankauf aufnehmen und mit EK anlegen</label>`:""}
+    ${filteredSaleCount?`<div class="info">${filteredSaleCount} Karte${filteredSaleCount===1?"":"n"} aus anderen oder nicht eindeutig erkannten TCGs werden nicht automatisch übernommen.</div>`:""}
     <div class="import-stock-purchase-preview" data-stock-purchase-preview="${item.id}"></div>
   </section>`;
 }
@@ -6455,7 +6487,10 @@ function refreshStockPurchasePreview(itemId){
   if(title&&purchase)title.value=purchase.title||purchase.seller||"";
   if(date&&purchase)date.value=String(purchase.date||todayISO()).slice(0,10);
   const rawTotal=String(total?.value||"").trim();
-  const reservedRows=includeSales?.checked?stockAcquisitionMissingSaleRows():[];
+  const reservedRows=includeSales?.checked?stockAcquisitionMissingSaleRows({
+    allowedGames:stockAcquisitionGameKeys(item.stockAcquisitionRows||[])
+  }):[];
+  const filteredSaleCount=Number(reservedRows.filterStats?.differentGame||0)+Number(reservedRows.filterStats?.unknownGame||0);
   item.stockPurchaseExcludedKeys=item.stockPurchaseExcludedKeys||[];
   const preview=TcgBusinessAutomation.buildStockAcquisitionPreview(
     includeCsv?.checked?(item.stockAcquisitionRows||[]):[],state.inventory,rawTotal===""?0:rawTotal,
@@ -6471,7 +6506,7 @@ function refreshStockPurchasePreview(itemId){
   if(target){
     const rows=preview.rows.map(row=>`<tr class="${row.newQuantity?"stock-delta-new":""} ${row.excluded?"stock-delta-excluded":""}"><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml([row.collectorNumber,row.rarity,row.language,row.condition,row.edition].filter(Boolean).join(" · "))}</small></td><td>${row.sourceType==="sale-reservation"?`Bestellung #${escapeHtml(row.saleOrderNo||"-")}`:"Bestandsliste"}</td><td>${row.sourceType==="sale-reservation"?"–":row.oldQuantity}</td><td>${row.sourceType==="sale-reservation"?"–":row.csvQuantity}</td><td><strong>${row.excluded?`entfernt (${row.detectedNewQuantity})`:row.newQuantity}</strong></td><td>${row.usedSell?money(row.usedSell):"–"}<br><small>${escapeHtml(row.weightSource)}</small></td><td>${row.newQuantity?money(row.allocatedCost):"–"}</td><td>${stockPurchaseUnitCostText(row)}</td><td>${row.detectedNewQuantity?`<button type="button" class="secondary" data-stock-purchase-exclude="${item.id}" data-stock-source-key="${escapeHtml(row.sourceKey)}">${row.excluded?"Wieder aufnehmen":"Aus Ankauf entfernen"}</button>`:"–"}</td></tr>`).join("");
     const issues=[...preview.errors,...preview.ambiguous.map(row=>`${row.name||"Karte"}: ${row.reason}`)];
-    target.innerHTML=`<div class="import-stock-delta-summary"><strong>${preview.deltaQuantity} Exemplare für diesen Ankauf</strong><span>${preview.stockDeltaQuantity||0} aus der Bestandsliste · ${preview.reservedQuantity||0} aus Bestellungen${preview.excludedQuantity?` · ${preview.excludedQuantity} entfernt`:""}</span><span>Bestehende Exemplare und ihre EK bleiben unverändert.</span></div>
+    target.innerHTML=`<div class="import-stock-delta-summary"><strong>${preview.deltaQuantity} Exemplare für diesen Ankauf</strong><span>${preview.stockDeltaQuantity||0} aus der Bestandsliste · ${preview.reservedQuantity||0} aus offenen Bestellungen${preview.excludedQuantity?` · ${preview.excludedQuantity} entfernt`:""}</span><span>Bestehende Exemplare und ihre EK bleiben unverändert.</span>${filteredSaleCount?`<span>${filteredSaleCount} Karten aus anderen oder nicht eindeutig erkannten TCGs wurden nicht übernommen.</span>`:""}</div>
       ${enabled?`<div class="table-wrap import-stock-delta-table"><table><thead><tr><th>Karte / Print</th><th>Quelle</th><th>Alt</th><th>CSV</th><th>Neu</th><th>Verwendeter VK</th><th>EK-Anteil</th><th>EK je Exemplar</th><th>Auswahl</th></tr></thead><tbody>${rows||'<tr><td colspan="9">Keine auswertbaren Positionen.</td></tr>'}</tbody></table></div>
       <div class="info">„Aus Ankauf entfernen“ löscht keine Cardmarket-Bestandskarte: CSV-Karten bleiben im normalen Bestandsabgleich, erhalten aber keinen EK und keine Ankauf-Zuordnung. Entfernte Bestellkarten werden nicht automatisch angelegt.</div>
       <div class="import-stock-control ${preview.canApply&&item.stockPurchaseInputComplete?"ok":"warning"}"><strong>Ankauf-Gesamt-EK: ${rawTotal===""?"noch eingeben":money(preview.totalCost)}</strong><span>Bereits im gewählten Ankauf: ${money(preview.previousPurchaseCost)} · Neu zugeordnet: ${money(preview.allocatedNewCost)} · Kontrollsumme: ${money(preview.assignedTotal)}</span>${issues.length?`<span>${issues.map(escapeHtml).join("<br>")}</span>`:""}</div>`:""}`;

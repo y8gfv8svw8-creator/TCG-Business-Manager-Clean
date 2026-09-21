@@ -62,6 +62,18 @@ test('unterschiedliche Prints derselben Karte bleiben getrennte Delta-Positionen
   assert.deepEqual(preview.changedRows.map(item => [item.productId, item.newQuantity]), [['100', 1], ['200', 1]]);
 });
 
+test('eine fehlende Bestands-Edition erzeugt bei gleicher Druckvariante kein Duplikat', () => {
+  const preview = automation.buildStockAcquisitionPreview(
+    [row({ edition: '1st Edition' })],
+    [asset('old', { edition: undefined })],
+    5
+  );
+  assert.equal(preview.rows[0].oldQuantity, 1);
+  assert.equal(preview.deltaQuantity, 0);
+  assert.equal(preview.canApply, false);
+  assert.match(preview.errors[0], /keine neuen Exemplare/i);
+});
+
 test('vorhandener EK wird beim Anwenden niemals überschrieben', () => {
   const preview = automation.buildStockAcquisitionPreview([row({ quantity: 2 })], [asset('old', { cost: 7.35 })], 5);
   const applied = automation.applyStockAcquisitionPreview(preview, [asset('old', { cost: 7.35 }), asset('new', { cost: 0, costStatus: 'unknown' })], null, {

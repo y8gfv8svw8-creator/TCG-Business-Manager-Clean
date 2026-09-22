@@ -11,5 +11,6 @@ TCG_Warenwirtschaft_Backup_*.json
 *.sqlite3
 *.db-wal
 *.db-shm
+!resources/print-reference.sqlite
 .env
 Private Backups/

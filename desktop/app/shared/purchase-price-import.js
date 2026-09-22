@@ -427,6 +427,55 @@
     });
   }
 
+  function reweightPreviewByExpectedSell(preview = {}) {
+    const sourceGroups = groupSourceRows(preview.sourceRows || []);
+    const plannedByKey = new Map();
+    const sheetPlans = [];
+    const errors = [];
+    for (const sheetTotal of preview.sheetTotals || []) {
+      const groups = sourceGroups.filter(group => group.sourceRows[0]?.sheet === sheetTotal.sheet);
+      const invalid = groups.filter(group => group.conflict || group.expectedSell === null || group.expectedSell < 0);
+      if (invalid.length) {
+        errors.push({ sheet: sheetTotal.sheet, reason: `${invalid.length} Position(en) ohne eindeutigen erwarteten VK` });
+        continue;
+      }
+      const totalWeight = groups.reduce((sum, group) => sum + group.expectedSell * group.quantity, 0);
+      if (!(totalWeight > 0)) {
+        errors.push({ sheet: sheetTotal.sheet, reason: 'Gesamtgewicht aus erwartetem VK ist 0' });
+        continue;
+      }
+      let assigned = 0;
+      groups.forEach((group, index) => {
+        const allocatedCost = index === groups.length - 1
+          ? round(sheetTotal.allocatedCost - assigned, 8)
+          : round(sheetTotal.allocatedCost * group.expectedSell * group.quantity / totalWeight, 8);
+        assigned = round(assigned + allocatedCost, 8);
+        plannedByKey.set(group.key, {
+          allocatedCost,
+          newCostPerItem: round(allocatedCost / group.quantity, 8)
+        });
+      });
+      sheetPlans.push({
+        sheet: sheetTotal.sheet,
+        allocatedCost: round(assigned, 8),
+        expectedSellWeight: round(totalWeight, 8)
+      });
+    }
+    const matched = (preview.matched || []).map(match => {
+      const plan = plannedByKey.get(match.key);
+      return plan ? { ...match, ...plan, allocationMethod: 'expected_sell_value' } : match;
+    });
+    return {
+      ...preview,
+      matched,
+      sumImportedEk: round(matched.reduce((sum, row) => sum + (row.allocatedCost ?? 0), 0), 2),
+      valueWeighted: true,
+      valueWeightedErrors: errors,
+      sheetPlans,
+      canApply: Boolean(preview.canApply) && errors.length === 0
+    };
+  }
+
   function applyPreview(preview, inventory = [], options = {}) {
     if (!preview?.canApply) throw new Error('Diese Vorschau ist nicht zur Übernahme freigegeben.');
     const changedAt = options.changedAt || new Date().toISOString();
@@ -482,6 +531,7 @@
     extractSourceRows,
     groupSourceRows,
     buildPreview,
+    reweightPreviewByExpectedSell,
     applyPreview
   };
 });

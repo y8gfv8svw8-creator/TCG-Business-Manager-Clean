@@ -656,15 +656,32 @@ class TcgDatabase {
       throw new Error(`SQLite-Startprüfung fehlgeschlagen: Schema ${schemaVersion} statt ${CURRENT_SCHEMA_VERSION}.`);
     }
 
-    const quickCheckRows = this.db.prepare('PRAGMA quick_check;').all();
-    const quickCheckMessages = quickCheckRows.map(row => String(row.quick_check ?? Object.values(row)[0] ?? '')).filter(Boolean);
-    if (quickCheckMessages.length !== 1 || quickCheckMessages[0].toLowerCase() !== 'ok') {
-      throw new Error(`SQLite-Integritätsprüfung fehlgeschlagen: ${quickCheckMessages.join('; ') || 'kein Ergebnis'}.`);
-    }
-
-    const foreignKeyErrors = this.db.prepare('PRAGMA foreign_key_check;').all();
-    if (foreignKeyErrors.length) {
-      throw new Error(`SQLite-Konsistenzprüfung fehlgeschlagen: ${foreignKeyErrors.length} ungültige Fremdschlüssel.`);
+    // Die Marktpreistabellen koennen mehrere Gigabyte gross werden. Ein globales
+    // quick_check und foreign_key_check blockierte deshalb jeden Programmstart,
+    // obwohl diese wiederaufbaubaren Daten bereits atomar importiert werden.
+    // Vor der Startfreigabe werden weiterhin alle dauerhaften Geschaeftstabellen
+    // inklusive App-State, Bestand, Kaeufen und Verkaeufen vollstaendig geprueft.
+    const businessCriticalTables = [
+      'app_state', 'trade_orders', 'trade_lines', 'inventory_assets',
+      'purchase_receipt_lines', 'inventory_listing_history',
+      'capital_accounts', 'capital_ledger_entries',
+      'collection_purchase_analyses', 'collection_purchase_items',
+      'collection_purchase_decision_snapshots', 'collection_purchase_photos',
+      'collection_physical_cards', 'collection_card_observations'
+    ];
+    for (const tableName of businessCriticalTables) {
+      if (!presentTables.has(tableName)) continue;
+      const quickCheckRows = this.db.prepare(`PRAGMA quick_check(${tableName});`).all();
+      const quickCheckMessages = quickCheckRows
+        .map(row => String(row.quick_check ?? Object.values(row)[0] ?? ''))
+        .filter(Boolean);
+      if (quickCheckMessages.length !== 1 || quickCheckMessages[0].toLowerCase() !== 'ok') {
+        throw new Error(`SQLite-Integritätsprüfung fehlgeschlagen (${tableName}): ${quickCheckMessages.join('; ') || 'kein Ergebnis'}.`);
+      }
+      const foreignKeyErrors = this.db.prepare(`PRAGMA foreign_key_check(${tableName});`).all();
+      if (foreignKeyErrors.length) {
+        throw new Error(`SQLite-Konsistenzprüfung fehlgeschlagen (${tableName}): ${foreignKeyErrors.length} ungültige Fremdschlüssel.`);
+      }
     }
 
     const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
@@ -709,6 +726,7 @@ class TcgDatabase {
       valid: true,
       checkedAt: isoNow(),
       integrity: 'ok',
+      integrityScope: 'business-critical',
       foreignKeys: 'ok',
       schemaVersion,
       hasStoredState: Boolean(row?.state_json),

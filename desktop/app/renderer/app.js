@@ -707,6 +707,11 @@ function migrateState(data) {
 
 function loadState() {
   try {
+    if(window.__TCG_DESKTOP_STATE__ && typeof window.__TCG_DESKTOP_STATE__==="object"){
+      const desktopState=window.__TCG_DESKTOP_STATE__;
+      delete window.__TCG_DESKTOP_STATE__;
+      return migrateState(desktopState);
+    }
     let raw = localStorage.getItem(DB_KEY);
     if(!raw && typeof LEGACY_DB_KEYS!=="undefined") {
       for(const key of LEGACY_DB_KEYS){ raw=localStorage.getItem(key); if(raw) break; }
@@ -792,8 +797,10 @@ function scheduleMarketDecisionHistoryRefresh() {
 
 function saveState({ allowDestructiveReset = false } = {}) {
   const savedAt = new Date().toISOString();
-  const serialized = JSON.stringify(state);
-  localStorage.setItem(DB_KEY, serialized);
+  // Im Browser bleibt localStorage der dauerhafte Speicher. In der Desktop-App
+  // ist SQLite alleinige Hauptquelle; die synchrone 10-MB-Kopie bremste jede
+  // kleine Aenderung und wird dort nicht mehr erzeugt.
+  if (!window.desktopApp?.saveState) localStorage.setItem(DB_KEY, JSON.stringify(state));
   localStorage.setItem(DESKTOP_UPDATED_KEY, savedAt);
   scheduleCardNameLookupRefresh();
   scheduleMarketDecisionHistoryRefresh();
@@ -2373,7 +2380,7 @@ async function confirmPurchasePriceImport() {
       localStorage.setItem(DESKTOP_UPDATED_KEY,saved?.updatedAt||new Date().toISOString());
     }
     state=nextState;
-    localStorage.setItem(DB_KEY,JSON.stringify(state));
+    if(!window.desktopApp?.saveState)localStorage.setItem(DB_KEY,JSON.stringify(state));
     tradeInsightsCache=null;
     scheduleMarketDecisionHistoryRefresh();
     renderAll();
@@ -6817,7 +6824,7 @@ async function importBackupPayload(data,fileName="Backup.json"){
     if(!window.desktopApp?.restoreBackupBundle)throw new Error("Diese Sicherung mit Sammlungsfotos kann nur in der Desktop-App wiederhergestellt werden.");
     const restored=await window.desktopApp.restoreBackupBundle(data);
     state=migrateState(restored.state);
-    localStorage.setItem(DB_KEY,JSON.stringify(state));
+    if(!window.desktopApp?.saveState)localStorage.setItem(DB_KEY,JSON.stringify(state));
     localStorage.setItem(DESKTOP_UPDATED_KEY,restored.result?.updatedAt||new Date().toISOString());
   }else{
     state=migrateState(data);saveState();
@@ -7409,24 +7416,24 @@ installTextFieldErgonomics();
 systemThemeQuery?.addEventListener?.("change",()=>{if((state.settings.themeMode||"system")==="system")applyAppearanceSettings();});
 showView(state.settings.startView||"dashboard");
 initAutomation();
-refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
-  console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);
-});
-refreshMarketDecisionHistory(true);
-refreshOwnSalesExperience(true);
-
-// Beim ersten Start der Desktop-Version wird der vorhandene Browserstand
-// automatisch in die dauerhafte SQLite-Datei übernommen.
-if (window.desktopApp?.saveState) {
-  window.desktopApp.saveState(state).then(result => {
-    if (result?.updatedAt) localStorage.setItem(DESKTOP_UPDATED_KEY, result.updatedAt);
-    const el = document.getElementById("saveStatus");
-    if (el) el.textContent = "SQLite bereit";
-  }).catch(error => {
-    console.error("Erster SQLite-Abgleich fehlgeschlagen:", error);
-    const el = document.getElementById("saveStatus");
-    if (el) el.textContent = "Lokal bereit · SQLite-Fehler";
+const scheduleStartupBackgroundWork = callback => {
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(callback,{timeout:1200});
+  else setTimeout(callback,250);
+};
+scheduleStartupBackgroundWork(()=>{
+  refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
+    console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);
   });
+  refreshMarketDecisionHistory(true);
+  refreshOwnSalesExperience(true);
+});
+
+// Eine alte Browserinstallation wird bereits vor dem Laden von app.js einmalig
+// uebernommen. Ein unveraenderter SQLite-Stand darf beim normalen Start nicht
+// erneut vollstaendig materialisiert und gesichert werden.
+if (window.desktopApp?.saveState) {
+  const el = document.getElementById("saveStatus");
+  if (el) el.textContent = "SQLite bereit";
 }
 
 // Kaufanalyse: Katalogtreffer direkt auf die Watchlist setzen.

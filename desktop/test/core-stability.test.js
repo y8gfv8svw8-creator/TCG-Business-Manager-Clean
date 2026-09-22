@@ -39,10 +39,19 @@ test('SQLite-Startprüfung bestätigt Integrität, Schema und materialisierten A
   const validation = database.validateStartup();
   assert.equal(validation.valid, true);
   assert.equal(validation.integrity, 'ok');
+  assert.equal(validation.integrityScope, 'business-critical');
   assert.equal(validation.foreignKeys, 'ok');
   assert.equal(validation.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.deepEqual(validation.counts, { inventory: 1, privateCollection: 1, purchases: 1, sales: 1 });
   assert.equal(database.loadState().validation.valid, true);
+});
+
+test('Startprüfung scannt nur dauerhafte Geschäftstabellen und nicht den mehrgigabytegroßen Marktcache', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'app', 'main', 'database.js'), 'utf8');
+  const start = source.slice(source.indexOf('validateStartup()'), source.indexOf('loadState()', source.indexOf('validateStartup()')));
+  assert.doesNotMatch(start, /PRAGMA quick_check;/);
+  assert.match(start, /PRAGMA quick_check\(\$\{tableName\}\)/);
+  assert.doesNotMatch(start, /businessCriticalTables\s*=\s*\[[\s\S]*market_prices/);
 });
 
 test('SQLite-Startprüfung kennzeichnet eine neue leere Datenbank ausdrücklich', t => {

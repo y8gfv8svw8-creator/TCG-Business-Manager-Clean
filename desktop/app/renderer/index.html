@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.13.4</title>
+  <title>TCG Business Manager 6.13.5</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.13.4 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.13.5 · SQLite</div>
         </div>
       </div>
 
@@ -1273,11 +1273,15 @@
           // localStorage dient nur als wiederaufbaubarer Cache. Nur beim allerersten
           // Start einer alten Installation wird der vorhandene Browserstand übernommen.
           if (databaseState?.state) {
-            localStorage.setItem(DB_KEY, JSON.stringify(databaseState.state));
+            // SQLite ist in der Desktop-App die Hauptdatenquelle. Den fast 10 MB
+            // grossen Zustand nicht erst synchron in localStorage duplizieren und
+            // anschliessend erneut parsen, sondern direkt an app.js uebergeben.
+            window.__TCG_DESKTOP_STATE__ = databaseState.state;
             localStorage.setItem(UPDATED_KEY, databaseUpdatedAt);
           } else if (localRaw) {
             const migrated = JSON.parse(localRaw);
             const result = await window.desktopApp.saveState(migrated);
+            window.__TCG_DESKTOP_STATE__ = migrated;
             localStorage.setItem(UPDATED_KEY, result?.updatedAt || new Date().toISOString());
             validation = await window.desktopApp.validateStartup();
           }

@@ -1,0 +1,8 @@
+TCG Business Manager 6.13.5 – Wertgewichteter EK und schnellerer Start
+
+- Die EK-Werte der vorhandenen 345-Euro-Sammlung werden anhand des erwarteten VK statt gleichmäßig je Karte korrigiert.
+- Bereits verkaufte, eindeutig zugeordnete Exemplare behalten ihre Verbindung zur Bestellung und verwenden den korrigierten historischen EK.
+- Der Desktop-Start dupliziert und speichert den unveränderten SQLite-Zustand nicht mehr unnötig erneut.
+- Die verpflichtende Startprüfung konzentriert den vollständigen Integritäts- und Fremdschlüsselcheck auf die dauerhaften Geschäftsdaten; der mehrgigabytegroße, wiederaufbaubare Marktcache blockiert den Start nicht mehr.
+- Nicht unmittelbar benötigte Namens-, Marktverlaufs- und Verkaufsauswertungen werden erst nach Anzeige der Oberfläche im Hintergrund geladen.
+- Schema bleibt 12.

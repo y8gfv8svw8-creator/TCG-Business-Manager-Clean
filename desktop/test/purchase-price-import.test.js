@@ -187,6 +187,28 @@ test('Kontrollsumme 345 Euro wird geprüft und kleine Abweichung nur ausgewiesen
   assert.equal(result.canApply, true);
 });
 
+test('Wertgewichtete Korrektur verteilt den Set-EK nach erwartetem VK und berücksichtigt Privatentnahmen im Gesamtwert', () => {
+  const rows = [
+    ['EOJ-DE001', 'Karte A', 1, 'Offen', 3.33333333, 10, 1, 10],
+    ['EOJ-DE002', 'Karte B', 1, 'Offen', 3.33333333, 30, 1, 30],
+    ['EOJ-DE003', 'Private Karte', 1, 'Privatentnahme', 3.33333334, 60, 1, 60]
+  ];
+  const inventory = [
+    asset('a1', { collectorNumber: 'EOJ-EN001', name: 'Karte A', germanName: 'Karte A' }),
+    asset('a2', { collectorNumber: 'EOJ-EN002', name: 'Karte B', germanName: 'Karte B' })
+  ];
+  const original = preview(rows, inventory, { controlTotal: 10 });
+  const weighted = purchaseImport.reweightPreviewByExpectedSell(original);
+  assert.equal(weighted.canApply, true);
+  assert.equal(weighted.valueWeighted, true);
+  assert.equal(weighted.missing.length, 1);
+  assert.deepEqual(weighted.matched.map(row => row.newCostPerItem), [1, 3]);
+  assert.equal(weighted.sheetPlans[0].allocatedCost, 10);
+  const applied = purchaseImport.applyPreview(weighted, inventory, { makeId: () => 'history' });
+  assert.deepEqual(applied.inventory.map(row => row.cost), [1, 3]);
+  assert.equal(applied.summary.importedCost, 4);
+});
+
 test('ODS- und CSV-Leser erkennen Kopfzeilen, Zahlen und Tabellenblattnamen', () => {
   const xml = `<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="EOJ"><table:table-row><table:table-cell office:value-type="string"><text:p>Kartennummer</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>Menge</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>EOJ-DE033</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="2"><text:p>2</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`;
   const ods = parseOdsContentXml(xml);

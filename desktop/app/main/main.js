@@ -9,7 +9,7 @@ const { CollectionPhotoStore } = require('./collection-photo-store');
 const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.4';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.5';
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();

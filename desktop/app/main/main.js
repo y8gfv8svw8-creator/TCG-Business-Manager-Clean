@@ -7,6 +7,7 @@ const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
 const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
+const { PrintReferenceDatabase, resolveBundledPrintReferencePath } = require('./print-reference-database');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.5';
@@ -18,6 +19,7 @@ let dataRoot = '';
 let mainWindow = null;
 let scannerRecognizer = null;
 let collectionPhotoStore = null;
+let printReferenceDatabase = null;
 let startupValidation = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
@@ -137,6 +139,28 @@ function setupIpcHandlers() {
   ipcMain.handle('data:get-cardmarket-cache-seed', (_event, payload) => database.getCardmarketCacheSeed(payload));
   ipcMain.handle('data:clear-market-data', () => database.clearMarketData());
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
+  ipcMain.handle('print-reference:find-candidates', (_event, payload = {}) => {
+    try {
+      if (!printReferenceDatabase) {
+        printReferenceDatabase = new PrintReferenceDatabase({
+          databasePath: resolveBundledPrintReferencePath({
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath
+          })
+        }).open();
+      }
+      const setCode = String(payload.setCode || '').trim().slice(0, 40);
+      const rarity = String(payload.rarity || '').trim().slice(0, 120);
+      const candidates = printReferenceDatabase.findPrintCandidates({ setCode, rarity });
+      return {
+        ok: true,
+        candidates,
+        unique: Boolean(setCode && rarity && candidates.length === 1)
+      };
+    } catch (error) {
+      return { ok: false, candidates: [], unique: false, error: error.message };
+    }
+  });
   ipcMain.handle('import:parse-purchase-price-file', (_event, payload) => parseSpreadsheetFile(payload));
   ipcMain.handle('collection-photo:store', (_event, payload = {}) => {
     const loaded = database.loadState();
@@ -254,6 +278,11 @@ app.on('before-quit', () => {
     database?.close();
   } catch (error) {
     console.error('Datenbank konnte nicht sauber geschlossen werden:', error);
+  }
+  try {
+    printReferenceDatabase?.close();
+  } catch (error) {
+    console.error('Print-Referenz konnte nicht sauber geschlossen werden:', error);
   }
 });
 

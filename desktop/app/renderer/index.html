@@ -1051,6 +1051,20 @@
             </div>
           </article>
 
+          <article class="panel settings-section print-reference-diagnostics">
+            <div class="panel-head"><div><h2>Print-Referenz prüfen</h2><small>Nur-Lese-Diagnose der lokalen Print-Referenz. Bestand und Geschäftsdaten bleiben unverändert.</small></div></div>
+            <form id="printReferenceSearchForm" class="print-reference-search">
+              <label>Setcode
+                <input id="printReferenceSetCode" type="text" autocomplete="off" maxlength="40" placeholder="z. B. EOJ-DE033" required />
+              </label>
+              <label>Rarität (optional)
+                <input id="printReferenceRarity" type="text" autocomplete="off" maxlength="120" placeholder="z. B. Rare" />
+              </label>
+              <button id="printReferenceSearchBtn" class="secondary" type="submit">Suchen</button>
+            </form>
+            <div id="printReferenceResults" aria-live="polite"><div class="muted">Setcode eingeben, um die lokale Referenz zu prüfen.</div></div>
+          </article>
+
           <article class="panel settings-section">
             <div class="panel-head"><div><h2>Backups &amp; Daten</h2><small>SQLite bleibt die dauerhafte Datenquelle. Automatische Sicherungen schützen bestehende Nutzerdaten.</small></div></div>
             <div id="settingsDatabaseStatus" class="settings-status-grid"><div class="muted">Datenbankstatus wird gelesen …</div></div>

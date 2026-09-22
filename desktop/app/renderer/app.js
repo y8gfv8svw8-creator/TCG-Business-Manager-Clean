@@ -4178,6 +4178,69 @@ function renderSettings() {
   renderCapitalPanel();
 }
 
+function printReferenceStatusBadge(status){
+  const normalized=String(status||"unresolved").toLowerCase();
+  const cls=normalized==="exact"?"green":normalized==="likely"?"yellow":"red";
+  return `<span class="badge ${cls}">${escapeHtml(normalized)}</span>`;
+}
+
+function renderPrintReferenceResults(result,rarity){
+  const target=document.getElementById("printReferenceResults");
+  if(!target)return;
+  if(!result?.ok){
+    target.innerHTML=`<div class="warning">Print-Referenz konnte nicht gelesen werden: ${escapeHtml(result?.error||"Unbekannter Fehler")}</div>`;
+    return;
+  }
+  const candidates=Array.isArray(result.candidates)?result.candidates:[];
+  if(!candidates.length){
+    target.innerHTML='<div class="empty">Keine Print-Kandidaten gefunden.</div>';
+    return;
+  }
+  const summary=result.unique&&String(rarity||"").trim()
+    ? '<div class="print-reference-unique"><strong>Eindeutig</strong><span>Setcode und Rarität ergeben genau einen Print.</span></div>'
+    : `<div class="repair-result-count"><strong>${candidates.length.toLocaleString("de-DE")}</strong> Print-Kandidat${candidates.length===1?"":"en"} gefunden.</div>`;
+  const rows=candidates.map(row=>{
+    const exactProductId=String(row.matchStatus||"").toLowerCase()==="exact"&&row.cardmarketProductId
+      ? escapeHtml(row.cardmarketProductId)
+      : "–";
+    return `<tr>
+      <td><strong>${escapeHtml(row.germanName||"–")}</strong></td>
+      <td>${escapeHtml(row.englishName||"–")}</td>
+      <td>${escapeHtml(row.setName||"–")}</td>
+      <td><strong>${escapeHtml(row.setCode||"–")}</strong><br><small>Collector Number: ${escapeHtml(row.collectorNumber||"–")}</small></td>
+      <td>${escapeHtml(row.rarity||"–")}</td>
+      <td>${exactProductId}</td>
+      <td>${printReferenceStatusBadge(row.matchStatus)}</td>
+      <td>${escapeHtml(row.dataSource||"–")}</td>
+    </tr>`;
+  }).join("");
+  target.innerHTML=`${summary}<div class="table-wrap print-reference-result-table"><table><thead><tr><th>Deutscher Name</th><th>Englischer Name</th><th>Set / Expansion</th><th>Setcode / Collector Number</th><th>Rarität</th><th>Cardmarket-Produkt-ID</th><th>Mapping-Status</th><th>Datenquelle</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function searchPrintReference(){
+  const setCode=document.getElementById("printReferenceSetCode")?.value.trim()||"";
+  const rarity=document.getElementById("printReferenceRarity")?.value.trim()||"";
+  const target=document.getElementById("printReferenceResults");
+  const button=document.getElementById("printReferenceSearchBtn");
+  if(!setCode){
+    if(target)target.innerHTML='<div class="warning">Bitte einen Setcode eingeben.</div>';
+    return;
+  }
+  if(!window.desktopApp?.findPrintCandidates){
+    if(target)target.innerHTML='<div class="warning">Die lokale Print-Referenz ist nur in der Desktop-App verfügbar.</div>';
+    return;
+  }
+  if(button){button.disabled=true;button.textContent="Suche …";}
+  if(target)target.innerHTML='<div class="muted">Lokale Print-Referenz wird durchsucht …</div>';
+  try{
+    renderPrintReferenceResults(await window.desktopApp.findPrintCandidates({setCode,rarity}),rarity);
+  }catch(error){
+    renderPrintReferenceResults({ok:false,error:error.message},rarity);
+  }finally{
+    if(button){button.disabled=false;button.textContent="Suchen";}
+  }
+}
+
 function configureModalAction({submitLabel="Speichern",destructive=false}={}) {
   const submit=document.getElementById("modalSubmit");
   const addAnother=document.getElementById("modalAddAnother");
@@ -6996,6 +7059,11 @@ document.body.addEventListener("click",e=>{
 document.getElementById("addCapitalAccountBtn").onclick=addCapitalAccount;
 document.getElementById("addCapitalEntryBtn").onclick=addCapitalEntry;
 document.getElementById("addCapitalTransferBtn").onclick=addCapitalTransfer;
+
+document.getElementById("printReferenceSearchForm")?.addEventListener("submit",event=>{
+  event.preventDefault();
+  searchPrintReference();
+});
 
 document.getElementById("saveSettingsBtn").onclick=()=>{
   const next={...state.settings,

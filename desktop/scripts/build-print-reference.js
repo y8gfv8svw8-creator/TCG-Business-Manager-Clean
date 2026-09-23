@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const cardSearch = require('../app/shared/card-search');
-const { parsePrintSetCode } = require('../app/main/print-reference-database');
+const { normalizeTreatment, parsePrintSetCode } = require('../app/main/print-reference-database');
 
 const DATA_SOURCE = 'YGOPRODeck cardinfo v7 + Cardmarket products_singles_3';
 
@@ -16,26 +16,39 @@ function cardPasscode(card = {}) {
   return /^\d{1,8}$/.test(value) && Number(value) > 0 ? value.padStart(8, '0') : '';
 }
 
-function uniquePrintRows(card = {}) {
+function sourceTreatment(source = {}) {
+  const fields = ['treatment', 'set_treatment', 'print_variant', 'set_variant', 'variant'];
+  for (const field of fields) {
+    if (String(source?.[field] || '').trim()) return normalizeTreatment(source[field]);
+  }
+  return 'unknown';
+}
+
+function uniquePrintRows(...cards) {
   const rows = [];
   const seen = new Set();
-  for (const source of Array.isArray(card.card_sets) ? card.card_sets : []) {
-    const parsed = parsePrintSetCode(source?.set_code);
-    if (!parsed) continue;
-    const rarity = String(source?.set_rarity || '').trim();
-    const key = [parsed.full, rarity, String(source?.set_name || '').trim()].join('|');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rows.push({
-      setName: String(source?.set_name || '').trim(),
-      setPrefix: parsed.setPrefix,
-      collectorNumber: parsed.collectorNumber,
-      positionKey: parsed.positionKey,
-      knownSetCode: parsed.full,
-      setCodeLanguage: parsed.language,
-      rarity,
-      rarityKey: cardSearch.normalizeCompact(rarity)
-    });
+  for (const card of cards) {
+    for (const source of Array.isArray(card?.card_sets) ? card.card_sets : []) {
+      const parsed = parsePrintSetCode(source?.set_code);
+      if (!parsed) continue;
+      const rarity = String(source?.set_rarity || '').trim();
+      const treatment = sourceTreatment(source);
+      const key = [parsed.full, rarity, treatment, String(source?.set_name || '').trim()].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        setName: String(source?.set_name || '').trim(),
+        setPrefix: parsed.setPrefix,
+        collectorNumber: parsed.collectorNumber,
+        positionKey: parsed.positionKey,
+        knownSetCode: parsed.full,
+        setCodeLanguage: parsed.language,
+        rarity,
+        rarityKey: cardSearch.normalizeCompact(rarity),
+        treatment,
+        treatmentKey: treatment
+      });
+    }
   }
   return rows;
 }
@@ -63,7 +76,7 @@ function createSchema(database) {
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = DELETE;
     PRAGMA synchronous = FULL;
-    PRAGMA user_version = 1;
+    PRAGMA user_version = 2;
 
     CREATE TABLE reference_metadata (
       key TEXT PRIMARY KEY,
@@ -110,15 +123,21 @@ function createSchema(database) {
       set_code_language TEXT NOT NULL DEFAULT '',
       rarity TEXT NOT NULL DEFAULT '',
       rarity_key TEXT NOT NULL DEFAULT '',
+      treatment TEXT NOT NULL DEFAULT 'unknown',
+      treatment_key TEXT NOT NULL DEFAULT 'unknown',
       cardmarket_product_id TEXT,
       mapping_status TEXT NOT NULL CHECK(mapping_status IN ('exact', 'likely', 'unresolved')),
       data_source TEXT NOT NULL,
-      UNIQUE(position_id, known_set_code, rarity),
+      UNIQUE(position_id, known_set_code, rarity, treatment),
       FOREIGN KEY(position_id) REFERENCES reference_set_positions(position_id) ON DELETE CASCADE
     );
 
     CREATE INDEX idx_reference_prints_position_rarity
       ON reference_prints(position_id, rarity_key);
+    CREATE INDEX idx_reference_prints_position_rarity_treatment
+      ON reference_prints(position_id, rarity_key, treatment_key);
+    CREATE INDEX idx_reference_prints_full_code
+      ON reference_prints(known_set_code);
     CREATE INDEX idx_reference_prints_cardmarket
       ON reference_prints(cardmarket_product_id);
   `);
@@ -170,8 +189,8 @@ function buildPrintReferenceDatabase({
     const insertPrint = database.prepare(`
       INSERT INTO reference_prints (
         position_id, known_set_code, set_code_language, rarity, rarity_key,
-        cardmarket_product_id, mapping_status, data_source
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        treatment, treatment_key, cardmarket_product_id, mapping_status, data_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertMetadata = database.prepare('INSERT INTO reference_metadata (key, value) VALUES (?, ?)');
 
@@ -181,6 +200,7 @@ function buildPrintReferenceDatabase({
     let exactCardmarketCount = 0;
     let likelyCount = 0;
     let unresolvedCount = 0;
+    let knownTreatmentCount = 0;
 
     database.exec('BEGIN IMMEDIATE;');
     try {
@@ -197,7 +217,7 @@ function buildPrintReferenceDatabase({
         const cmProducts = exactMetacard ? [...cmMatches.get(exactMetacard).values()] : [];
         const internalMetacardId = `ygoprodeck:${ygoprodeckId}`;
         const metaStatus = exactMetacard ? 'exact' : 'unresolved';
-        const prints = uniquePrintRows(card);
+        const prints = uniquePrintRows(card, german);
         insertMetacard.run(
           internalMetacardId, exactMetacard || null, ygoprodeckId,
           nameDe, nameEn, cardPasscode(card), metaStatus, DATA_SOURCE
@@ -222,9 +242,11 @@ function buildPrintReferenceDatabase({
           const status = exactProduct ? 'exact' : exactMetacard ? 'likely' : 'unresolved';
           insertPrint.run(
             positionId, print.knownSetCode, print.setCodeLanguage,
-            print.rarity, print.rarityKey, exactProduct || null, status, DATA_SOURCE
+            print.rarity, print.rarityKey, print.treatment, print.treatmentKey,
+            exactProduct || null, status, DATA_SOURCE
           );
           printCount += 1;
+          if (print.treatment !== 'unknown') knownTreatmentCount += 1;
           if (status === 'exact') exactCardmarketCount += 1;
           else if (status === 'likely') likelyCount += 1;
           else unresolvedCount += 1;
@@ -244,6 +266,8 @@ function buildPrintReferenceDatabase({
         exact_cardmarket_count: exactCardmarketCount,
         likely_count: likelyCount,
         unresolved_count: unresolvedCount,
+        known_treatment_count: knownTreatmentCount,
+        unknown_treatment_count: printCount - knownTreatmentCount,
         without_cardmarket_id_count: printCount - exactCardmarketCount,
         ...sourceMetadata
       };
@@ -252,13 +276,14 @@ function buildPrintReferenceDatabase({
       database.exec('PRAGMA optimize;');
       report = {
         outputPath: targetPath,
-        schemaVersion: 1,
+        schemaVersion: 2,
         metacardCount,
         printCount,
         setPositionCount,
         exactCardmarketCount,
         likelyCount,
         unresolvedCount,
+        knownTreatmentCount,
         withoutCardmarketIdCount: printCount - exactCardmarketCount,
         source: DATA_SOURCE,
         sourceRevision: revision
@@ -315,5 +340,6 @@ module.exports = {
   buildPrintReferenceDatabase,
   cardPasscode,
   cardmarketIndex,
+  sourceTreatment,
   uniquePrintRows
 };

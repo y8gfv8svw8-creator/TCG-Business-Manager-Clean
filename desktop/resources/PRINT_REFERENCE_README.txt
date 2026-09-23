@@ -2,15 +2,15 @@ LOKALE PRINT-REFERENZ
 ====================
 
 Datei: print-reference.sqlite
-Referenzschema: 1 (separat vom Manager-Schema 12)
+Referenzschema: 2 (separat vom Manager-Schema 12)
 
 Quellen:
 - YGOPRODeck Card Information API v7, Englisch und Deutsch
-  Datenbankrevision 147.04, Stand 2026-09-16 00:05:12
+  Datenbankrevision 147.07, Stand 2026-09-23 00:02:22
 - vorhandener Cardmarket-Produktkatalog products_singles_3.json
 
 Enthalten:
-- 14.567 Metakarten
+- 14.572 Metakarten
 - 44.545 Print-Datensätze
 - 37.172 kartenspezifische Setpositionen
 - 215 eindeutig zugeordnete Cardmarket-Produkt-IDs
@@ -24,7 +24,13 @@ und der einzige vorhandene Print eindeutig zusammenpassen. Bei mehreren
 Cardmarket-Produkten bleibt die Produkt-ID leer; ihre Reihenfolge wird nicht als
 Printbeweis verwendet.
 
-Setcodes werden über Setpräfix und Collector Number gesucht. Sprachkennungen wie
-DE/EN beziehungsweise historische G/E-Kennungen gehören nicht zum einzigen
-Positionsschlüssel. Mehrere Raritäten derselben Setposition bleiben getrennte
-Print-Kandidaten.
+Setcodes werden zuerst als vollständiger Code geprüft. Nur wenn kein exakter
+Vollcode existiert, folgen bekannte historische Sprach-/Legacy-Aliase und zuletzt
+Setpräfix plus Collector Number als vorsichtiger Fallback. Dadurch werden
+PSV-093, PSV-E093 und PSV-EN093 nicht mehr gleichwertig behandelt.
+
+Rarität und Treatment/Variante sind getrennte Felder. Treatment wird nur aus
+einem ausdrücklich vorhandenen Quellfeld übernommen; andernfalls bleibt es
+"unknown". Der verwendete YGOPRODeck-Snapshot enthält derzeit keine separaten
+Treatment-Felder, deshalb bleiben alle 44.545 Treatments unbekannt. Es wird
+weder "normal" noch "overframe" aus Rarität, Bild oder Produktreihenfolge geraten.

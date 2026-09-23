@@ -20,10 +20,13 @@ test('Print-Referenzdiagnose ist vollständig über einen eigenen Nur-Lese-Kanal
   assert.match(preload, /findPrintCandidates: payload => ipcRenderer\.invoke\('print-reference:find-candidates', payload\)/);
   assert.match(html, /id="printReferenceSetCode"/);
   assert.match(html, /id="printReferenceRarity"/);
+  assert.match(html, /id="printReferenceTreatment"/);
   assert.match(html, /id="printReferenceSearchBtn"/);
   assert.match(html, /id="printReferenceResults"/);
-  assert.match(renderer, /window\.desktopApp\.findPrintCandidates\(\{setCode,rarity\}\)/);
-  assert.match(renderer, /Setcode und Rarität ergeben genau einen Print/);
+  assert.match(renderer, /window\.desktopApp\.findPrintCandidates\(\{setCode,rarity,treatment\}\)/);
+  assert.match(renderer, /Exakter Vollcode/);
+  assert.match(renderer, /Treatment \/ Variante/);
+  assert.match(renderer, /Setcode, Rarität/);
   assert.match(renderer, /Cardmarket-Produkt-ID/);
   assert.match(renderer, /Mapping-Status/);
   assert.match(renderer, /Datenquelle/);

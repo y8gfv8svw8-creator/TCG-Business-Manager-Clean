@@ -4184,7 +4184,14 @@ function printReferenceStatusBadge(status){
   return `<span class="badge ${cls}">${escapeHtml(normalized)}</span>`;
 }
 
-function renderPrintReferenceResults(result,rarity){
+function printReferenceCodeMatchBadge(row){
+  const match=String(row?.setCodeMatch||"");
+  if(match==="exact_full_code")return '<span class="badge green">Exakter Vollcode</span>';
+  if(match==="legacy_alias")return '<span class="badge blue">Legacy-Alias</span>';
+  return '<span class="badge yellow">Collector-Fallback</span>';
+}
+
+function renderPrintReferenceResults(result,rarity,treatment){
   const target=document.getElementById("printReferenceResults");
   if(!target)return;
   if(!result?.ok){
@@ -4197,7 +4204,7 @@ function renderPrintReferenceResults(result,rarity){
     return;
   }
   const summary=result.unique&&String(rarity||"").trim()
-    ? '<div class="print-reference-unique"><strong>Eindeutig</strong><span>Setcode und Rarität ergeben genau einen Print.</span></div>'
+    ? `<div class="print-reference-unique"><strong>Eindeutig</strong><span>Setcode, Rarität${String(treatment||"").trim()?" und Treatment":""} ergeben genau einen Print.</span></div>`
     : `<div class="repair-result-count"><strong>${candidates.length.toLocaleString("de-DE")}</strong> Print-Kandidat${candidates.length===1?"":"en"} gefunden.</div>`;
   const rows=candidates.map(row=>{
     const exactProductId=String(row.matchStatus||"").toLowerCase()==="exact"&&row.cardmarketProductId
@@ -4207,19 +4214,21 @@ function renderPrintReferenceResults(result,rarity){
       <td><strong>${escapeHtml(row.germanName||"–")}</strong></td>
       <td>${escapeHtml(row.englishName||"–")}</td>
       <td>${escapeHtml(row.setName||"–")}</td>
-      <td><strong>${escapeHtml(row.setCode||"–")}</strong><br><small>Collector Number: ${escapeHtml(row.collectorNumber||"–")}</small></td>
+      <td><strong>${escapeHtml(row.setCode||"–")}</strong><br><small>Collector Number: ${escapeHtml(row.collectorNumber||"–")}</small><br>${printReferenceCodeMatchBadge(row)}</td>
       <td>${escapeHtml(row.rarity||"–")}</td>
+      <td>${escapeHtml(row.treatment||"unknown")}</td>
       <td>${exactProductId}</td>
       <td>${printReferenceStatusBadge(row.matchStatus)}</td>
       <td>${escapeHtml(row.dataSource||"–")}</td>
     </tr>`;
   }).join("");
-  target.innerHTML=`${summary}<div class="table-wrap print-reference-result-table"><table><thead><tr><th>Deutscher Name</th><th>Englischer Name</th><th>Set / Expansion</th><th>Setcode / Collector Number</th><th>Rarität</th><th>Cardmarket-Produkt-ID</th><th>Mapping-Status</th><th>Datenquelle</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  target.innerHTML=`${summary}<div class="table-wrap print-reference-result-table"><table><thead><tr><th>Deutscher Name</th><th>Englischer Name</th><th>Set / Expansion</th><th>Setcode / Collector Number</th><th>Rarität</th><th>Treatment / Variante</th><th>Cardmarket-Produkt-ID</th><th>Mapping-Status</th><th>Datenquelle</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 async function searchPrintReference(){
   const setCode=document.getElementById("printReferenceSetCode")?.value.trim()||"";
   const rarity=document.getElementById("printReferenceRarity")?.value.trim()||"";
+  const treatment=document.getElementById("printReferenceTreatment")?.value.trim()||"";
   const target=document.getElementById("printReferenceResults");
   const button=document.getElementById("printReferenceSearchBtn");
   if(!setCode){
@@ -4233,9 +4242,9 @@ async function searchPrintReference(){
   if(button){button.disabled=true;button.textContent="Suche …";}
   if(target)target.innerHTML='<div class="muted">Lokale Print-Referenz wird durchsucht …</div>';
   try{
-    renderPrintReferenceResults(await window.desktopApp.findPrintCandidates({setCode,rarity}),rarity);
+    renderPrintReferenceResults(await window.desktopApp.findPrintCandidates({setCode,rarity,treatment}),rarity,treatment);
   }catch(error){
-    renderPrintReferenceResults({ok:false,error:error.message},rarity);
+    renderPrintReferenceResults({ok:false,error:error.message},rarity,treatment);
   }finally{
     if(button){button.disabled=false;button.textContent="Suchen";}
   }

@@ -151,11 +151,13 @@ function setupIpcHandlers() {
       }
       const setCode = String(payload.setCode || '').trim().slice(0, 40);
       const rarity = String(payload.rarity || '').trim().slice(0, 120);
-      const candidates = printReferenceDatabase.findPrintCandidates({ setCode, rarity });
+      const treatment = String(payload.treatment || '').trim().slice(0, 120);
+      const candidates = printReferenceDatabase.findPrintCandidates({ setCode, rarity, treatment });
       return {
         ok: true,
         candidates,
-        unique: Boolean(setCode && rarity && candidates.length === 1)
+        unique: Boolean(setCode && rarity && candidates.length === 1 && candidates[0]?.treatment !== 'unknown'),
+        uniqueWithinReference: Boolean(setCode && rarity && candidates.length === 1)
       };
     } catch (error) {
       return { ok: false, candidates: [], unique: false, error: error.message };

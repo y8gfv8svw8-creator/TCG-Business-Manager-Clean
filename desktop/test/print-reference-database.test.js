@@ -34,12 +34,48 @@ function fixturePayload() {
         id: 34567890,
         name: 'Unmapped Card',
         card_sets: [{ set_name: 'Missing Set', set_code: 'MISS-EN007', set_rarity: 'Common' }]
+      },
+      {
+        id: 45678901,
+        name: 'Legacy White Tiger',
+        card_sets: [
+          { set_name: "Pharaoh's Servant", set_code: 'PSV-093', set_rarity: 'Common' },
+          { set_name: "Pharaoh's Servant", set_code: 'PSV-E093', set_rarity: 'Common' },
+          { set_name: "Pharaoh's Servant", set_code: 'PSV-EN093', set_rarity: 'Common' }
+        ]
+      },
+      {
+        id: 56789012,
+        name: 'Legacy Revival Card',
+        card_sets: [
+          { set_name: 'Labyrinth of Nightmare', set_code: 'LON-006', set_rarity: 'Super Rare' },
+          { set_name: 'Labyrinth of Nightmare', set_code: 'LON-G006', set_rarity: 'Super Rare' },
+          { set_name: 'Labyrinth of Nightmare', set_code: 'LON-EN006', set_rarity: 'Super Rare' }
+        ]
+      },
+      {
+        id: 67890123,
+        name: 'Fallback Card',
+        card_sets: [{ set_name: 'Fallback Set', set_code: 'FBK-EN007', set_rarity: 'Rare' }]
+      },
+      {
+        id: 78901234,
+        name: 'Treatment Card',
+        card_sets: [
+          { set_name: 'Chaos Origins', set_code: 'CORI-EN029', set_rarity: 'Ultra Rare', set_treatment: 'normal' },
+          { set_name: 'Chaos Origins', set_code: 'CORI-EN029', set_rarity: 'Ultra Rare', set_treatment: 'Overframe' },
+          { set_name: 'Chaos Origins', set_code: 'CORI-EN029', set_rarity: 'Secret Rare' }
+        ]
       }
     ],
     germanCards: [
       { id: 12345678, name: 'Beispieldrache' },
       { id: 23456789, name: 'Karte mit zwei Seltenheiten' },
-      { id: 34567890, name: 'Nicht zugeordnete Karte' }
+      { id: 34567890, name: 'Nicht zugeordnete Karte' },
+      { id: 45678901, name: 'Historischer weißer Tiger' },
+      { id: 56789012, name: 'Historische Wiederbelebungskarte' },
+      { id: 67890123, name: 'Fallback-Karte' },
+      { id: 78901234, name: 'Treatment-Karte' }
     ],
     cardmarketCatalog: {
       version: 3,
@@ -47,7 +83,9 @@ function fixturePayload() {
       products: [
         { idProduct: 900001, idMetacard: 100001, idExpansion: 700001, name: 'Example Dragon' },
         { idProduct: 900002, idMetacard: 100002, idExpansion: 700002, name: 'Double Rarity Card' },
-        { idProduct: 900003, idMetacard: 100002, idExpansion: 700002, name: 'Double Rarity Card' }
+        { idProduct: 900003, idMetacard: 100002, idExpansion: 700002, name: 'Double Rarity Card' },
+        { idProduct: 900004, idMetacard: 100004, idExpansion: 700004, name: 'Treatment Card' },
+        { idProduct: 900005, idMetacard: 100004, idExpansion: 700004, name: 'Treatment Card' }
       ]
     },
     versionInfo: [{ database_version: 'test-1', last_update: '2026-09-22' }]
@@ -83,6 +121,36 @@ test('deutscher und englischer Setcode derselben Position liefern denselben Prin
   assert.equal(parsePrintSetCode('EOJ-DE033').positionKey, 'EOJ-033');
   assert.deepEqual(german.map(row => row.printId), english.map(row => row.printId));
   assert.equal(german[0].inputSetCodeLanguage, 'de');
+  assert.equal(english[0].setCodeMatch, 'exact_full_code');
+  assert.equal(german[0].setCodeMatch, 'collector_fallback');
+});
+
+for (const setCode of ['PSV-093', 'PSV-E093', 'PSV-EN093']) {
+  test(`${setCode} bevorzugt ausschließlich den exakten vollständigen Setcode`, t => {
+    const database = fixtureDatabase(t);
+    const result = database.findPrintCandidates({ setCode });
+    assert.equal(result.length, 1);
+    assert.equal(result[0].setCode, setCode);
+    assert.equal(result[0].setCodeMatch, 'exact_full_code');
+    assert.equal(result[0].exactSetCodeMatch, true);
+  });
+}
+
+test('LON-G006 bleibt als historischer Vollcode erhalten und wird exakt priorisiert', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({ setCode: 'LON-G006' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].setCode, 'LON-G006');
+  assert.equal(result[0].setCodeMatch, 'exact_full_code');
+});
+
+test('ohne exakten Vollcode bleibt der Collector-Fallback vorsichtig verfügbar', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({ setCode: 'FBK-DE007' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].setCode, 'FBK-EN007');
+  assert.equal(result[0].setCodeMatch, 'collector_fallback');
+  assert.equal(result[0].exactSetCodeMatch, false);
 });
 
 test('gleicher Setcode mit mehreren Raritäten bleibt mehrdeutig', t => {
@@ -97,6 +165,25 @@ test('Setcode plus Rarität liefert genau einen Print-Kandidaten', t => {
   const result = database.findPrintCandidates({ setCode: 'TST-EN001', rarity: 'Ultra Rare' });
   assert.equal(result.length, 1);
   assert.equal(result[0].rarity, 'Ultra Rare');
+});
+
+test('Setcode plus Rarität kann mehrere belegte Treatments liefern', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({ setCode: 'CORI-EN029', rarity: 'Ultra Rare' });
+  assert.deepEqual(result.map(row => row.treatment), ['normal', 'overframe']);
+  assert.ok(result.every(row => row.rarity === 'Ultra Rare'));
+});
+
+test('Setcode plus Rarität plus Treatment liefert genau einen Print', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({
+    setCode: 'CORI-DE029',
+    rarity: 'Ultra Rare',
+    treatment: 'Overframe'
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].treatment, 'overframe');
+  assert.equal(result[0].setCodeMatch, 'collector_fallback');
 });
 
 test('unbekannter Setcode liefert keine Kandidaten', t => {
@@ -115,6 +202,14 @@ test('fehlende Cardmarket-ID bleibt sichtbar unresolved', t => {
 test('mehrdeutige Cardmarket-Produkte erzeugen niemals eine erfundene Produkt-ID', t => {
   const database = fixtureDatabase(t);
   const result = database.findPrintCandidates({ setCode: 'TST-EN001' });
+  assert.ok(result.every(row => row.cardmarketProductId === null));
+  assert.ok(result.every(row => row.matchStatus === 'likely'));
+});
+
+test('mehrere Treatments derselben Rarität erhalten keine erfundene Cardmarket-ID', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({ setCode: 'CORI-EN029', rarity: 'Ultra Rare' });
+  assert.equal(result.length, 2);
   assert.ok(result.every(row => row.cardmarketProductId === null));
   assert.ok(result.every(row => row.matchStatus === 'likely'));
 });
@@ -149,4 +244,32 @@ test('gebündelte lokale Referenz enthält den vollständigen geprüften Snapsho
   assert.ok(stats.printCount > 44000);
   assert.ok(stats.setPositionCount > 36000);
   assert.equal(stats.exactCardmarketCount + stats.likelyCount + stats.unresolvedCount, stats.printCount);
+  assert.equal(stats.knownTreatmentCount + stats.unknownTreatmentCount, stats.printCount);
+});
+
+test('gebündelte Referenz priorisiert PSV-Vollcodes und behandelt LON-G006 als belegten Legacy-Alias', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+  for (const setCode of ['PSV-093', 'PSV-E093', 'PSV-EN093']) {
+    const result = database.findPrintCandidates({ setCode });
+    assert.equal(result.length, 1);
+    assert.equal(result[0].setCode, setCode);
+    assert.equal(result[0].setCodeMatch, 'exact_full_code');
+  }
+  const legacy = database.findPrintCandidates({ setCode: 'LON-G006' });
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].setCode, 'LON-006');
+  assert.equal(legacy[0].setCodeMatch, 'legacy_alias');
+});
+
+test('gebündelte CORI-DE029-Daten bleiben ohne erfundenes Treatment und ohne erfundene Produkt-ID', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+  const all = database.findPrintCandidates({ setCode: 'CORI-DE029' });
+  assert.deepEqual(all.map(row => row.rarity), ['Secret Rare', 'Starlight Rare', 'Ultra Rare']);
+  assert.ok(all.every(row => row.treatment === 'unknown'));
+  assert.ok(all.every(row => row.cardmarketProductId === null));
+  assert.ok(all.every(row => row.setCodeMatch === 'collector_fallback'));
 });

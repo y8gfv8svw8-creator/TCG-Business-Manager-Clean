@@ -55,7 +55,7 @@ function uniquePrintRows(...cards) {
 
 function cardmarketIndex(catalog = {}) {
   const byName = new Map();
-  for (const row of Array.isArray(catalog) ? catalog : (catalog.products || [])) {
+  for (const row of cardmarketProducts(catalog)) {
     const productId = String(row?.idProduct ?? row?.productId ?? '').trim();
     const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
     const nameKey = cardSearch.normalizeSpaced(row?.name || '');
@@ -69,6 +69,225 @@ function cardmarketIndex(catalog = {}) {
     });
   }
   return byName;
+}
+
+function cardmarketProducts(catalog = {}) {
+  return Array.isArray(catalog) ? catalog : (catalog.products || []);
+}
+
+function addSetValue(map, key, value) {
+  if (!key || !value) return;
+  if (!map.has(key)) map.set(key, new Set());
+  map.get(key).add(value);
+}
+
+function setSignature(values = new Set()) {
+  return [...values].sort((left, right) => left.localeCompare(right, 'en', { numeric: true })).join(',');
+}
+
+function uniqueSignatureOwners(groups = new Map()) {
+  const owners = new Map();
+  for (const [key, values] of groups) {
+    const signature = setSignature(values);
+    if (!signature) continue;
+    if (!owners.has(signature)) owners.set(signature, []);
+    owners.get(signature).push(key);
+  }
+  return owners;
+}
+
+function buildExactExpansionPrefixMap(database, cardmarketCatalog = {}) {
+  const referenceRows = database.prepare(`
+    SELECT DISTINCT
+      sp.set_prefix AS setPrefix,
+      sp.internal_metacard_id AS internalMetacardId,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId
+    FROM reference_set_positions sp
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+  `).all();
+  const allReferenceCards = new Map();
+  const mappedReferenceCards = new Map();
+  const knownCardmarketMetacards = new Set();
+  for (const row of referenceRows) {
+    const prefix = String(row.setPrefix || '').trim();
+    const internalId = String(row.internalMetacardId || '').trim();
+    const metacardId = String(row.cardmarketMetacardId || '').trim();
+    addSetValue(allReferenceCards, prefix, internalId);
+    if (metacardId) {
+      addSetValue(mappedReferenceCards, prefix, metacardId);
+      knownCardmarketMetacards.add(metacardId);
+    }
+  }
+
+  const allExpansionCards = new Map();
+  const mappedExpansionCards = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    if (!/^\d+$/.test(expansionId) || !/^\d+$/.test(metacardId)) continue;
+    addSetValue(allExpansionCards, expansionId, metacardId);
+    if (knownCardmarketMetacards.has(metacardId)) {
+      addSetValue(mappedExpansionCards, expansionId, metacardId);
+    }
+  }
+
+  // Eine Signatur ist nur beweiskräftig, wenn auf keiner Seite Karten wegen
+  // fehlender Metakarten-Zuordnung ausgeblendet wurden.
+  const completeReferenceGroups = new Map([...mappedReferenceCards].filter(([prefix, values]) =>
+    values.size === (allReferenceCards.get(prefix)?.size || 0)
+  ));
+  const completeExpansionGroups = new Map([...mappedExpansionCards].filter(([expansionId, values]) =>
+    values.size === (allExpansionCards.get(expansionId)?.size || 0)
+  ));
+  const referenceOwners = uniqueSignatureOwners(completeReferenceGroups);
+  const expansionOwners = uniqueSignatureOwners(completeExpansionGroups);
+  const exact = new Map();
+  for (const [signature, prefixes] of referenceOwners) {
+    const expansionIds = expansionOwners.get(signature) || [];
+    if (prefixes.length !== 1 || expansionIds.length !== 1) continue;
+    exact.set(prefixes[0], {
+      expansionId: expansionIds[0],
+      metacardCount: completeReferenceGroups.get(prefixes[0]).size
+    });
+  }
+  return exact;
+}
+
+function mappingStatusCounts(database) {
+  const result = { exact: 0, likely: 0, unresolved: 0 };
+  for (const row of database.prepare(`
+    SELECT mapping_status AS status, COUNT(*) AS count
+    FROM reference_prints
+    GROUP BY mapping_status
+  `).all()) {
+    result[row.status] = Number(row.count || 0);
+  }
+  return result;
+}
+
+function findSetCodeRarityCollisions(database) {
+  return database.prepare(`
+    SELECT
+      pr.known_set_code AS setCode,
+      pr.rarity,
+      COUNT(*) AS candidateCount,
+      GROUP_CONCAT(DISTINCT mc.name_en) AS englishNames
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+    GROUP BY pr.known_set_code, pr.rarity_key
+    HAVING COUNT(*) > 1
+    ORDER BY pr.known_set_code, pr.rarity_key
+  `).all().map(row => ({
+    setCode: row.setCode,
+    rarity: row.rarity,
+    candidateCount: Number(row.candidateCount || 0),
+    englishNames: String(row.englishNames || '').split(',').filter(Boolean)
+  }));
+}
+
+function applySafeCardmarketProductMappings(database, cardmarketCatalog = {}) {
+  const before = mappingStatusCounts(database);
+  const exactExpansionMap = buildExactExpansionPrefixMap(database, cardmarketCatalog);
+  const productsByMetacardExpansion = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const productId = String(row?.idProduct ?? row?.productId ?? '').trim();
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    if (!/^\d+$/.test(productId) || !/^\d+$/.test(metacardId) || !/^\d+$/.test(expansionId)) continue;
+    addSetValue(productsByMetacardExpansion, `${metacardId}|${expansionId}`, productId);
+  }
+
+  const rows = database.prepare(`
+    SELECT
+      pr.print_id AS printId,
+      pr.mapping_status AS mappingStatus,
+      pr.cardmarket_product_id AS cardmarketProductId,
+      sp.set_prefix AS setPrefix,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+    ORDER BY pr.print_id
+  `).all();
+  const printsByMetacardPrefix = new Map();
+  for (const row of rows) {
+    const metacardId = String(row.cardmarketMetacardId || '').trim();
+    const prefix = String(row.setPrefix || '').trim();
+    if (!metacardId || !prefix) continue;
+    const key = `${metacardId}|${prefix}`;
+    if (!printsByMetacardPrefix.has(key)) printsByMetacardPrefix.set(key, []);
+    printsByMetacardPrefix.get(key).push(row);
+  }
+
+  const update = database.prepare(`
+    UPDATE reference_prints
+    SET
+      cardmarket_product_id = ?,
+      mapping_status = 'exact',
+      data_source = CASE
+        WHEN INSTR(data_source, 'Cardmarket exact expansion membership') > 0 THEN data_source
+        ELSE data_source || ' + Cardmarket exact expansion membership'
+      END
+    WHERE print_id = ?
+      AND mapping_status = 'likely'
+      AND cardmarket_product_id IS NULL
+  `);
+  const productAssignments = new Map();
+  let upgraded = 0;
+  const blocked = {
+    noExactExpansion: 0,
+    multipleReferencePrints: 0,
+    missingProduct: 0,
+    multipleProducts: 0,
+    existingExact: 0
+  };
+  for (const row of rows) {
+    if (row.mappingStatus === 'exact') {
+      blocked.existingExact += 1;
+      continue;
+    }
+    if (row.mappingStatus !== 'likely' || !row.cardmarketMetacardId) continue;
+    const expansion = exactExpansionMap.get(String(row.setPrefix || '').trim());
+    if (!expansion) {
+      blocked.noExactExpansion += 1;
+      continue;
+    }
+    const printGroup = printsByMetacardPrefix.get(`${row.cardmarketMetacardId}|${row.setPrefix}`) || [];
+    if (printGroup.length !== 1) {
+      blocked.multipleReferencePrints += 1;
+      continue;
+    }
+    const productIds = [...(productsByMetacardExpansion.get(
+      `${row.cardmarketMetacardId}|${expansion.expansionId}`
+    ) || [])];
+    if (!productIds.length) {
+      blocked.missingProduct += 1;
+      continue;
+    }
+    if (productIds.length !== 1) {
+      blocked.multipleProducts += 1;
+      continue;
+    }
+    const productId = productIds[0];
+    const previousPrintId = productAssignments.get(productId);
+    if (previousPrintId && previousPrintId !== row.printId) continue;
+    const result = update.run(productId, row.printId);
+    if (Number(result.changes || 0) === 1) {
+      productAssignments.set(productId, row.printId);
+      upgraded += 1;
+    }
+  }
+  const after = mappingStatusCounts(database);
+  if (after.exact < before.exact) throw new Error('Bestehende exakte Cardmarket-Zuordnungen wurden verschlechtert.');
+  return {
+    before,
+    after,
+    upgraded,
+    exactExpansionCount: exactExpansionMap.size,
+    blocked,
+    collisions: findSetCodeRarityCollisions(database)
+  };
 }
 
 function createSchema(database) {
@@ -253,6 +472,11 @@ function buildPrintReferenceDatabase({
         }
       }
 
+      const mappingReport = applySafeCardmarketProductMappings(database, cardmarketCatalog);
+      exactCardmarketCount = mappingReport.after.exact;
+      likelyCount = mappingReport.after.likely;
+      unresolvedCount = mappingReport.after.unresolved;
+
       const revisionRow = Array.isArray(versionInfo) ? versionInfo[0] : versionInfo;
       const revision = String(revisionRow?.database_version || revisionRow?.version || 'unbekannt');
       const metadata = {
@@ -269,6 +493,10 @@ function buildPrintReferenceDatabase({
         known_treatment_count: knownTreatmentCount,
         unknown_treatment_count: printCount - knownTreatmentCount,
         without_cardmarket_id_count: printCount - exactCardmarketCount,
+        cardmarket_exact_expansion_count: mappingReport.exactExpansionCount,
+        cardmarket_exact_upgraded_count: mappingReport.upgraded,
+        set_code_rarity_collision_count: mappingReport.collisions.length,
+        cardmarket_exact_matching_rule: 'unique complete metacard membership signature + one print + one product',
         ...sourceMetadata
       };
       for (const [key, value] of Object.entries(metadata)) insertMetadata.run(key, String(value ?? ''));
@@ -285,6 +513,9 @@ function buildPrintReferenceDatabase({
         unresolvedCount,
         knownTreatmentCount,
         withoutCardmarketIdCount: printCount - exactCardmarketCount,
+        cardmarketUpgradedCount: mappingReport.upgraded,
+        exactExpansionCount: mappingReport.exactExpansionCount,
+        setCodeRarityCollisionCount: mappingReport.collisions.length,
         source: DATA_SOURCE,
         sourceRevision: revision
       };
@@ -301,12 +532,77 @@ function buildPrintReferenceDatabase({
   return report;
 }
 
+function upsertMetadata(database, key, value) {
+  database.prepare(`
+    INSERT INTO reference_metadata (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, String(value ?? ''));
+}
+
+function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, catalogPath = '' } = {}) {
+  if (!databasePath) throw new Error('Pfad zur Print-Referenz fehlt.');
+  const targetPath = path.resolve(databasePath);
+  if (!fs.existsSync(targetPath)) throw new Error(`Print-Referenz fehlt: ${targetPath}`);
+  const temporaryPath = `${targetPath}.mapping.new`;
+  fs.rmSync(temporaryPath, { force: true });
+  fs.copyFileSync(targetPath, temporaryPath);
+  const database = new DatabaseSync(temporaryPath);
+  let report;
+  try {
+    const schemaVersion = Number(database.prepare('PRAGMA user_version').get()?.user_version || 0);
+    if (schemaVersion !== 2) throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
+    database.exec('BEGIN IMMEDIATE;');
+    try {
+      report = applySafeCardmarketProductMappings(database, cardmarketCatalog);
+      upsertMetadata(database, 'exact_cardmarket_count', report.after.exact);
+      upsertMetadata(database, 'likely_count', report.after.likely);
+      upsertMetadata(database, 'unresolved_count', report.after.unresolved);
+      upsertMetadata(database, 'without_cardmarket_id_count', report.after.likely + report.after.unresolved);
+      upsertMetadata(database, 'cardmarket_exact_expansion_count', report.exactExpansionCount);
+      upsertMetadata(database, 'cardmarket_exact_upgraded_count', report.upgraded);
+      upsertMetadata(database, 'set_code_rarity_collision_count', report.collisions.length);
+      upsertMetadata(database, 'cardmarket_exact_matching_rule', 'unique complete metacard membership signature + one print + one product');
+      upsertMetadata(database, 'cardmarket_remapped_at', new Date().toISOString());
+      if (catalogPath) upsertMetadata(database, 'cardmarket_catalog_sha256', sha256File(catalogPath));
+      database.exec('COMMIT;');
+      database.exec('PRAGMA optimize;');
+    } catch (error) {
+      database.exec('ROLLBACK;');
+      throw error;
+    }
+    const integrity = String(database.prepare('PRAGMA integrity_check').get()?.integrity_check || '');
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (integrity !== 'ok' || foreignKeyErrors.length) {
+      throw new Error(`Print-Referenzprüfung fehlgeschlagen: ${integrity || 'unbekannt'}, FK ${foreignKeyErrors.length}.`);
+    }
+  } finally {
+    database.close();
+  }
+  fs.rmSync(targetPath, { force: true });
+  fs.renameSync(temporaryPath, targetPath);
+  return { databasePath: targetPath, ...report };
+}
+
 function parseJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
 function main() {
-  const [englishPath, germanPath, cardmarketPath, versionPath, outputPath] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  if (args[0] === '--remap-existing') {
+    const [, databasePath, cardmarketPath] = args;
+    if (!databasePath || !cardmarketPath) {
+      throw new Error('Aufruf: build-print-reference.js --remap-existing <print-reference.sqlite> <products_singles_3.json>');
+    }
+    const report = remapExistingPrintReference({
+      databasePath,
+      cardmarketCatalog: parseJson(cardmarketPath),
+      catalogPath: cardmarketPath
+    });
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  const [englishPath, germanPath, cardmarketPath, versionPath, outputPath] = args;
   if (![englishPath, germanPath, cardmarketPath, versionPath, outputPath].every(Boolean)) {
     throw new Error('Aufruf: build-print-reference.js <ygoprodeck-en.json> <ygoprodeck-de.json> <products_singles_3.json> <ygoprodeck-version.json> <output.sqlite>');
   }
@@ -337,9 +633,14 @@ if (require.main === module) main();
 
 module.exports = {
   DATA_SOURCE,
+  applySafeCardmarketProductMappings,
   buildPrintReferenceDatabase,
+  buildExactExpansionPrefixMap,
   cardPasscode,
   cardmarketIndex,
+  findSetCodeRarityCollisions,
+  mappingStatusCounts,
+  remapExistingPrintReference,
   sourceTreatment,
   uniquePrintRows
 };

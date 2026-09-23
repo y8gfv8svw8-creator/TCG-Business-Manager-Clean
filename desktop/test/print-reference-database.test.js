@@ -10,7 +10,10 @@ const {
   PrintReferenceDatabase,
   parsePrintSetCode
 } = require('../app/main/print-reference-database');
-const { buildPrintReferenceDatabase } = require('../scripts/build-print-reference');
+const {
+  buildPrintReferenceDatabase,
+  findSetCodeRarityCollisions
+} = require('../scripts/build-print-reference');
 
 const schemaPath = path.join(__dirname, '..', 'database', 'schema.sql');
 
@@ -66,6 +69,29 @@ function fixturePayload() {
           { set_name: 'Chaos Origins', set_code: 'CORI-EN029', set_rarity: 'Ultra Rare', set_treatment: 'Overframe' },
           { set_name: 'Chaos Origins', set_code: 'CORI-EN029', set_rarity: 'Secret Rare' }
         ]
+      },
+      {
+        id: 89000001,
+        name: 'Expansion Matched Card',
+        card_sets: [
+          { set_name: 'Safe Set', set_code: 'SAFE-EN001', set_rarity: 'Rare' },
+          { set_name: 'Other Set', set_code: 'OTHR-EN001', set_rarity: 'Common' }
+        ]
+      },
+      {
+        id: 89000002,
+        name: 'Safe Set Anchor',
+        card_sets: [{ set_name: 'Safe Set', set_code: 'SAFE-EN002', set_rarity: 'Common' }]
+      },
+      {
+        id: 89000003,
+        name: 'Other Set Anchor',
+        card_sets: [{ set_name: 'Other Set', set_code: 'OTHR-EN002', set_rarity: 'Common' }]
+      },
+      {
+        id: 89000004,
+        name: 'Multiple Product Card',
+        card_sets: [{ set_name: 'Safe Set', set_code: 'SAFE-EN003', set_rarity: 'Ultra Rare' }]
       }
     ],
     germanCards: [
@@ -75,7 +101,11 @@ function fixturePayload() {
       { id: 45678901, name: 'Historischer weißer Tiger' },
       { id: 56789012, name: 'Historische Wiederbelebungskarte' },
       { id: 67890123, name: 'Fallback-Karte' },
-      { id: 78901234, name: 'Treatment-Karte' }
+      { id: 78901234, name: 'Treatment-Karte' },
+      { id: 89000001, name: 'Expansionstreffer-Karte' },
+      { id: 89000002, name: 'Sicherer Set-Anker' },
+      { id: 89000003, name: 'Anderer Set-Anker' },
+      { id: 89000004, name: 'Mehrprodukt-Karte' }
     ],
     cardmarketCatalog: {
       version: 3,
@@ -85,7 +115,13 @@ function fixturePayload() {
         { idProduct: 900002, idMetacard: 100002, idExpansion: 700002, name: 'Double Rarity Card' },
         { idProduct: 900003, idMetacard: 100002, idExpansion: 700002, name: 'Double Rarity Card' },
         { idProduct: 900004, idMetacard: 100004, idExpansion: 700004, name: 'Treatment Card' },
-        { idProduct: 900005, idMetacard: 100004, idExpansion: 700004, name: 'Treatment Card' }
+        { idProduct: 900005, idMetacard: 100004, idExpansion: 700004, name: 'Treatment Card' },
+        { idProduct: 900010, idMetacard: 100010, idExpansion: 700010, name: 'Expansion Matched Card' },
+        { idProduct: 900011, idMetacard: 100010, idExpansion: 700011, name: 'Expansion Matched Card' },
+        { idProduct: 900012, idMetacard: 100011, idExpansion: 700010, name: 'Safe Set Anchor' },
+        { idProduct: 900013, idMetacard: 100012, idExpansion: 700011, name: 'Other Set Anchor' },
+        { idProduct: 900014, idMetacard: 100013, idExpansion: 700010, name: 'Multiple Product Card' },
+        { idProduct: 900015, idMetacard: 100013, idExpansion: 700010, name: 'Multiple Product Card' }
       ]
     },
     versionInfo: [{ database_version: 'test-1', last_update: '2026-09-22' }]
@@ -214,6 +250,27 @@ test('mehrere Treatments derselben Rarität erhalten keine erfundene Cardmarket-
   assert.ok(result.every(row => row.matchStatus === 'likely'));
 });
 
+test('vollständige eindeutige Set-Mitgliedschaft ordnet genau ein Produkt pro Expansion sicher zu', t => {
+  const database = fixtureDatabase(t);
+  const safe = database.findPrintCandidates({ setCode: 'SAFE-EN001' });
+  const other = database.findPrintCandidates({ setCode: 'OTHR-EN001' });
+  assert.equal(safe.length, 1);
+  assert.equal(safe[0].cardmarketProductId, '900010');
+  assert.equal(safe[0].matchStatus, 'exact');
+  assert.match(safe[0].dataSource, /exact expansion membership/);
+  assert.equal(other.length, 1);
+  assert.equal(other[0].cardmarketProductId, '900011');
+  assert.equal(other[0].matchStatus, 'exact');
+});
+
+test('mehrere Cardmarket-Produkte innerhalb der eindeutig erkannten Expansion bleiben likely', t => {
+  const database = fixtureDatabase(t);
+  const result = database.findPrintCandidates({ setCode: 'SAFE-EN003' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].cardmarketProductId, null);
+  assert.equal(result[0].matchStatus, 'likely');
+});
+
 test('Aufbau der separaten Print-Referenz verändert bestehende Manager-Daten nicht', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-preserve-'));
   const mainPath = path.join(root, 'manager.sqlite');
@@ -272,4 +329,15 @@ test('gebündelte CORI-DE029-Daten bleiben ohne erfundenes Treatment und ohne er
   assert.ok(all.every(row => row.treatment === 'unknown'));
   assert.ok(all.every(row => row.cardmarketProductId === null));
   assert.ok(all.every(row => row.setCodeMatch === 'collector_fallback'));
+});
+
+test('gebündelte Referenz dokumentiert die neun bekannten Setcode-Raritäts-Kollisionen', t => {
+  const { DatabaseSync } = require('node:sqlite');
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  t.after(() => database.close());
+  const collisions = findSetCodeRarityCollisions(database);
+  assert.equal(collisions.length, 9);
+  assert.ok(collisions.some(row => row.setCode === 'BLCR-EN012'));
+  assert.ok(collisions.every(row => row.candidateCount === 2));
 });

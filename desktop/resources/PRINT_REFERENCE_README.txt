@@ -13,9 +13,9 @@ Enthalten:
 - 14.572 Metakarten
 - 44.545 Print-Datensätze
 - 37.172 kartenspezifische Setpositionen
-- 17.346 eindeutig zugeordnete Cardmarket-Produkt-IDs
-- 26.762 wahrscheinliche Metakarten-Zuordnungen ohne behauptete Produkt-ID
-- 437 vollständig ungelöste Zuordnungen
+- 20.446 eindeutig zugeordnete Cardmarket-Produkt-IDs
+- 24.002 wahrscheinliche Metakarten-Zuordnungen ohne behauptete Produkt-ID
+- 97 vollständig ungelöste Zuordnungen
 
 Wichtig:
 Die Cardmarket-Produktdatei enthält keine Setnamen oder Raritäten. Eine konkrete
@@ -28,6 +28,26 @@ einen Referenzprint sowie genau ein Cardmarket-Produkt. 373 Expansionen erfülle
 diese vollständige, beidseitig eindeutige Signaturregel. Bei mehreren Prints
 oder Produkten bleibt die Zuordnung likely. Produktnummernfolgen werden nicht
 als Printbeweis verwendet.
+
+Zusätzlich wurden 3.010 Prints aus 33 Setpräfixen über eine konservative
+Kontextregel eindeutig zugeordnet: Die bereits bekannten Metakarten passen
+exakt zu genau einer Expansion, sämtliche bislang fehlenden Metakarten lassen
+sich dort über normalisierte englische Namen vollständig und 1:1 den übrigen
+Cardmarket-Metakarten zuordnen, keine zweite Referenz beansprucht dieselbe
+Expansion, und für den konkreten Print existieren genau ein Referenzprint und
+genau ein Cardmarket-Produkt. Eindeutig verdoppelte Anführungszeichen im
+Cardmarket-Export werden dabei normalisiert. Datum, Ähnlichkeitswerte,
+Produktreihenfolge, Raritätsraten und vermutete Treatments werden nicht als
+Beweis verwendet.
+
+Von den zuvor 437 vollständig ungelösten Prints wurden ausschließlich die 340
+im Audit eindeutig belegten Fälle aufgelöst: 125 über die vollständige
+1:1-Zuordnung der in einer Expansion verbleibenden Metakarten, 102 über eine
+beidseitig eindeutige kompakte Zeichen-/Abstandsnormalisierung und 113 über
+einen eindeutigen "(Skill)"-Namenszusatz bei ausschließlich in Speed-Duel-Sets
+vorkommenden Karten. Davon konnten 90 Prints zusätzlich genau einem
+Cardmarket-Produkt zugeordnet werden; 250 bleiben ohne behauptete Produkt-ID
+likely. Die übrigen 97 Fälle bleiben unverändert unresolved.
 
 Setcodes werden zuerst als vollständiger Code geprüft. Nur wenn kein exakter
 Vollcode existiert, folgen bekannte historische Sprach-/Legacy-Aliase und zuletzt

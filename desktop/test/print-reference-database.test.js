@@ -12,7 +12,8 @@ const {
 } = require('../app/main/print-reference-database');
 const {
   buildPrintReferenceDatabase,
-  findSetCodeRarityCollisions
+  findSetCodeRarityCollisions,
+  remapExistingPrintReference
 } = require('../scripts/build-print-reference');
 
 const schemaPath = path.join(__dirname, '..', 'database', 'schema.sql');
@@ -125,6 +126,103 @@ function fixturePayload() {
       ]
     },
     versionInfo: [{ database_version: 'test-1', last_update: '2026-09-22' }]
+  };
+}
+
+function contextualFixturePayload({ competingPrefix = false } = {}) {
+  const contextualSets = (code, rarity = 'Common') => [
+    { set_name: 'Context Set', set_code: `CTX-EN${code}`, set_rarity: rarity },
+    ...(competingPrefix
+      ? [{ set_name: 'Competing Context Set', set_code: `CTY-EN${code}`, set_rarity: rarity }]
+      : [])
+  ];
+  return {
+    englishCards: [
+      {
+        id: 91000001,
+        name: 'Context Anchor',
+        card_sets: [
+          ...contextualSets('001'),
+          { set_name: 'Anchor Control Set', set_code: 'CTRL-EN001', set_rarity: 'Common' }
+        ]
+      },
+      {
+        id: 91000002,
+        name: 'Quoted "Card"',
+        card_sets: contextualSets('002')
+      },
+      {
+        id: 91000003,
+        name: 'Context Multiple Product',
+        card_sets: contextualSets('003')
+      },
+      {
+        id: 91000004,
+        name: 'Context Multiple Print',
+        card_sets: [
+          ...contextualSets('004', 'Rare'),
+          ...contextualSets('004', 'Ultra Rare')
+        ]
+      }
+    ],
+    germanCards: [],
+    cardmarketCatalog: {
+      version: 3,
+      createdAt: '2026-09-24',
+      products: [
+        { idProduct: 920001, idMetacard: 110001, idExpansion: 810001, name: 'Context Anchor', dateAdded: '2007-01-01' },
+        { idProduct: 920002, idMetacard: 110001, idExpansion: 810002, name: 'Context Anchor', dateAdded: '2007-01-01' },
+        { idProduct: 920003, idMetacard: 110002, idExpansion: 810001, name: 'Quoted ""Card""', dateAdded: '2099-12-31' },
+        { idProduct: 920004, idMetacard: 110003, idExpansion: 810003, name: 'Quoted "Card"', dateAdded: '2001-01-01' },
+        { idProduct: 920005, idMetacard: 110004, idExpansion: 810001, name: 'Context Multiple Product' },
+        { idProduct: 920006, idMetacard: 110004, idExpansion: 810001, name: 'Context Multiple Product' },
+        { idProduct: 920007, idMetacard: 110005, idExpansion: 810001, name: 'Context Multiple Print' }
+      ]
+    },
+    versionInfo: [{ database_version: 'context-test-1', last_update: '2026-09-24' }]
+  };
+}
+
+function normalizationFixturePayload() {
+  return {
+    englishCards: [
+      {
+        id: 93000001,
+        name: 'Live☆Twin Ki-sikil',
+        card_sets: [{ set_name: 'Symbol Test Set', set_code: 'SYM-EN001', set_rarity: 'Rare' }]
+      },
+      {
+        id: 93000002,
+        name: 'Here Goes Something!',
+        card_sets: [{ set_name: 'Speed Duel GX: Duel Academy Box', set_code: 'SGX1-ENS01', set_rarity: 'Ultra Rare' }]
+      },
+      {
+        id: 93000003,
+        name: 'Ordinary Card',
+        card_sets: [{ set_name: 'Ordinary Set', set_code: 'ORD-EN001', set_rarity: 'Common' }]
+      },
+      {
+        id: 93000004,
+        name: 'Existing Likely Anchor',
+        card_sets: [
+          { set_name: 'Symbol Test Set', set_code: 'SYM-EN002', set_rarity: 'Common' },
+          { set_name: 'Anchor Control Set', set_code: 'CTL-EN001', set_rarity: 'Common' }
+        ]
+      }
+    ],
+    germanCards: [],
+    cardmarketCatalog: {
+      version: 3,
+      createdAt: '2026-09-24',
+      products: [
+        { idProduct: 940001, idMetacard: 120001, idExpansion: 820001, name: 'LiveTwin Ki-sikil' },
+        { idProduct: 940002, idMetacard: 120002, idExpansion: 820002, name: 'Here Goes Something! (Skill)' },
+        { idProduct: 940003, idMetacard: 120003, idExpansion: 820003, name: 'Ordinary Card (Skill)' },
+        { idProduct: 940004, idMetacard: 120004, idExpansion: 820001, name: 'Existing Likely Anchor' },
+        { idProduct: 940005, idMetacard: 120004, idExpansion: 820004, name: 'Existing Likely Anchor' }
+      ]
+    },
+    versionInfo: [{ database_version: 'normalization-test-1', last_update: '2026-09-24' }]
   };
 }
 
@@ -271,6 +369,116 @@ test('mehrere Cardmarket-Produkte innerhalb der eindeutig erkannten Expansion bl
   assert.equal(result[0].matchStatus, 'likely');
 });
 
+test('konservative Kontextregel löst eine unvollständige Expansion über vollständigen 1:1-Namensabgleich', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-context-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  const report = buildPrintReferenceDatabase({ ...contextualFixturePayload(), outputPath: databasePath });
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const anchor = database.findPrintCandidates({ setCode: 'CTX-EN001' });
+  assert.equal(anchor.length, 1);
+  assert.equal(anchor[0].cardmarketProductId, '920001');
+  assert.equal(anchor[0].matchStatus, 'exact');
+  assert.match(anchor[0].dataSource, /exact (?:contextual )?expansion membership/);
+  assert.equal(report.unresolvedResolution.resolved.contextual, 1);
+  assert.equal(report.unresolvedResolution.metacards.contextual, 1);
+
+  const normalizedQuote = database.findPrintCandidates({ setCode: 'CTX-EN002' });
+  assert.equal(normalizedQuote[0].matchStatus, 'exact');
+  assert.equal(normalizedQuote[0].cardmarketProductId, '920003');
+
+  const multipleProducts = database.findPrintCandidates({ setCode: 'CTX-EN003' });
+  assert.equal(multipleProducts[0].matchStatus, 'likely');
+  assert.equal(multipleProducts[0].cardmarketProductId, null);
+
+  const multiplePrints = database.findPrintCandidates({ setCode: 'CTX-EN004' });
+  assert.equal(multiplePrints.length, 2);
+  assert.ok(multiplePrints.every(row => row.matchStatus === 'likely' && row.cardmarketProductId === null));
+});
+
+test('harmlose Zeichenabweichung und eindeutiger Speed-Duel-Skill-Zusatz lösen nur die belegten Metakarten', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-normalization-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  const report = buildPrintReferenceDatabase({ ...normalizationFixturePayload(), outputPath: databasePath });
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const compact = database.findPrintCandidates({ setCode: 'SYM-EN001' });
+  assert.equal(compact.length, 1);
+  assert.equal(compact[0].matchStatus, 'exact');
+  assert.equal(compact[0].cardmarketProductId, '940001');
+  assert.match(compact[0].dataSource, /safe compact name normalization/);
+
+  const skill = database.findPrintCandidates({ setCode: 'SGX1-ENS01' });
+  assert.equal(skill.length, 1);
+  assert.equal(skill[0].matchStatus, 'exact');
+  assert.equal(skill[0].cardmarketProductId, '940002');
+  assert.match(skill[0].dataSource, /safe Speed Duel skill suffix normalization/);
+
+  const nonSpeedSkill = database.findPrintCandidates({ setCode: 'ORD-EN001' });
+  assert.equal(nonSpeedSkill.length, 1);
+  assert.equal(nonSpeedSkill[0].matchStatus, 'unresolved');
+  assert.equal(nonSpeedSkill[0].cardmarketProductId, null);
+
+  const existingLikely = database.findPrintCandidates({ setCode: 'SYM-EN002' });
+  assert.equal(existingLikely.length, 1);
+  assert.equal(existingLikely[0].matchStatus, 'likely');
+  assert.equal(existingLikely[0].cardmarketProductId, null);
+
+  assert.deepEqual(report.unresolvedResolution.resolved, {
+    contextual: 0,
+    compact: 1,
+    skill: 1,
+    total: 2
+  });
+});
+
+test('erneute Ausführung verändert weder bereits exact noch bereits likely zugeordnete Prints', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-idempotent-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  const payload = normalizationFixturePayload();
+  buildPrintReferenceDatabase({ ...payload, outputPath: databasePath });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const report = remapExistingPrintReference({
+    databasePath,
+    cardmarketCatalog: payload.cardmarketCatalog
+  });
+  assert.deepEqual(report.after, report.before);
+  assert.equal(report.upgraded, 0);
+  assert.equal(report.unresolvedResolution.resolved.total, 2);
+});
+
+test('zweites Referenzset für dieselbe Kontext-Expansion verhindert jede Hochstufung', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-context-conflict-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  const report = buildPrintReferenceDatabase({
+    ...contextualFixturePayload({ competingPrefix: true }),
+    outputPath: databasePath
+  });
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.equal(report.cardmarketContextualUpgradedCount, 0);
+  assert.equal(report.contextualExpansionCount, 0);
+  for (const setCode of ['CTX-EN001', 'CTY-EN001']) {
+    const result = database.findPrintCandidates({ setCode });
+    assert.equal(result.length, 1);
+    assert.equal(result[0].matchStatus, 'likely');
+    assert.equal(result[0].cardmarketProductId, null);
+  }
+});
+
 test('Aufbau der separaten Print-Referenz verändert bestehende Manager-Daten nicht', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-preserve-'));
   const mainPath = path.join(root, 'manager.sqlite');
@@ -302,6 +510,9 @@ test('gebündelte lokale Referenz enthält den vollständigen geprüften Snapsho
   assert.ok(stats.setPositionCount > 36000);
   assert.equal(stats.exactCardmarketCount + stats.likelyCount + stats.unresolvedCount, stats.printCount);
   assert.equal(stats.knownTreatmentCount + stats.unknownTreatmentCount, stats.printCount);
+  assert.equal(stats.exactCardmarketCount, 20446);
+  assert.equal(stats.likelyCount, 24002);
+  assert.equal(stats.unresolvedCount, 97);
 });
 
 test('gebündelte Referenz priorisiert PSV-Vollcodes und behandelt LON-G006 als belegten Legacy-Alias', t => {

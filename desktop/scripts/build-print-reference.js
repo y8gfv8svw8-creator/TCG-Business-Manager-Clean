@@ -153,6 +153,130 @@ function buildExactExpansionPrefixMap(database, cardmarketCatalog = {}) {
   return exact;
 }
 
+function normalizedContextualName(value = '') {
+  return cardSearch.normalizeSpaced(decodeCardNameEntities(String(value || '').replace(/"{2,}/g, '"')));
+}
+
+function decodeCardNameEntities(value = '') {
+  return String(value || '')
+    .replace(/&apos;|&#0*39;|&#x0*27;/gi, "'")
+    .replace(/&quot;|&#0*34;|&#x0*22;/gi, '"')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+
+function normalizedCompactReferenceName(value = '') {
+  return cardSearch.normalizeCompact(decodeCardNameEntities(String(value || '').replace(/"{2,}/g, '"')));
+}
+
+function normalizedSkillName(value = '') {
+  return normalizedContextualName(value).replace(/\s+skill(?:\s+card)?$/i, '').trim();
+}
+
+function isExplicitCardmarketSkillName(value = '') {
+  return /\(\s*skill(?:\s+card)?\s*\)|\bskill(?:\s+card)?\s*$/i.test(String(value || ''));
+}
+
+function isSpeedDuelSetName(value = '') {
+  return /speed\s*duel/i.test(String(value || ''));
+}
+
+function buildContextualExpansionPrefixMap(database, cardmarketCatalog = {}, exactExpansionMap = new Map()) {
+  const referenceRows = database.prepare(`
+    SELECT DISTINCT
+      sp.set_prefix AS setPrefix,
+      sp.internal_metacard_id AS internalMetacardId,
+      mc.name_en AS nameEn,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId
+    FROM reference_set_positions sp
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+  `).all();
+  const referencesByPrefix = new Map();
+  const knownCardmarketMetacards = new Set();
+  for (const row of referenceRows) {
+    const prefix = String(row.setPrefix || '').trim();
+    if (!prefix) continue;
+    if (!referencesByPrefix.has(prefix)) referencesByPrefix.set(prefix, new Map());
+    referencesByPrefix.get(prefix).set(String(row.internalMetacardId || ''), {
+      internalMetacardId: String(row.internalMetacardId || ''),
+      nameEn: String(row.nameEn || '').trim(),
+      cardmarketMetacardId: String(row.cardmarketMetacardId || '').trim()
+    });
+    if (row.cardmarketMetacardId) knownCardmarketMetacards.add(String(row.cardmarketMetacardId));
+  }
+
+  const allExpansionMetacards = new Map();
+  const mappedExpansionMetacards = new Map();
+  const namesByExpansionMetacard = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    if (!/^\d+$/.test(expansionId) || !/^\d+$/.test(metacardId)) continue;
+    addSetValue(allExpansionMetacards, expansionId, metacardId);
+    if (knownCardmarketMetacards.has(metacardId)) {
+      addSetValue(mappedExpansionMetacards, expansionId, metacardId);
+    }
+    const nameKey = normalizedContextualName(row?.name || '');
+    if (nameKey) addSetValue(namesByExpansionMetacard, `${expansionId}|${metacardId}`, nameKey);
+  }
+
+  const expansionOwners = uniqueSignatureOwners(mappedExpansionMetacards);
+  const exactExpansionOwners = new Map();
+  for (const [prefix, value] of exactExpansionMap) {
+    addSetValue(exactExpansionOwners, String(value?.expansionId || ''), prefix);
+  }
+  const candidates = [];
+  for (const [prefix, references] of referencesByPrefix) {
+    const mapped = [...references.values()].filter(row => row.cardmarketMetacardId);
+    const missing = [...references.values()].filter(row => !row.cardmarketMetacardId);
+    if (!mapped.length || !missing.length) continue;
+    const signature = setSignature(new Set(mapped.map(row => row.cardmarketMetacardId)));
+    const expansionIds = [...(expansionOwners.get(signature) || [])];
+    if (expansionIds.length !== 1) continue;
+    const expansionId = expansionIds[0];
+    const remainingMetacards = [...(allExpansionMetacards.get(expansionId) || [])]
+      .filter(metacardId => !knownCardmarketMetacards.has(metacardId));
+    if (missing.length !== remainingMetacards.length) continue;
+
+    const referencesByName = new Map();
+    for (const row of missing) {
+      const nameKey = normalizedContextualName(row.nameEn);
+      if (!nameKey) continue;
+      addSetValue(referencesByName, nameKey, row.internalMetacardId);
+    }
+    const metacardsByName = new Map();
+    let inconsistentProductName = false;
+    for (const metacardId of remainingMetacards) {
+      const names = namesByExpansionMetacard.get(`${expansionId}|${metacardId}`) || new Set();
+      if (names.size !== 1) {
+        inconsistentProductName = true;
+        break;
+      }
+      addSetValue(metacardsByName, [...names][0], metacardId);
+    }
+    if (inconsistentProductName) continue;
+    const referenceNames = [...referencesByName.keys()].sort();
+    const metacardNames = [...metacardsByName.keys()].sort();
+    if (referenceNames.length !== missing.length || metacardNames.length !== remainingMetacards.length) continue;
+    if (referenceNames.join('|') !== metacardNames.join('|')) continue;
+    if (referenceNames.some(name => referencesByName.get(name).size !== 1 || metacardsByName.get(name).size !== 1)) continue;
+    candidates.push({ prefix, expansionId });
+  }
+
+  const contextualOwners = new Map();
+  for (const row of candidates) addSetValue(contextualOwners, row.expansionId, row.prefix);
+  const exact = new Map();
+  for (const row of candidates) {
+    if (contextualOwners.get(row.expansionId)?.size !== 1) continue;
+    const otherExactOwners = [...(exactExpansionOwners.get(row.expansionId) || [])]
+      .filter(prefix => prefix !== row.prefix);
+    if (otherExactOwners.length) continue;
+    exact.set(row.prefix, { expansionId: row.expansionId });
+  }
+  return exact;
+}
+
 function mappingStatusCounts(database) {
   const result = { exact: 0, likely: 0, unresolved: 0 };
   for (const row of database.prepare(`
@@ -184,6 +308,420 @@ function findSetCodeRarityCollisions(database) {
     candidateCount: Number(row.candidateCount || 0),
     englishNames: String(row.englishNames || '').split(',').filter(Boolean)
   }));
+}
+
+function buildSafeUnresolvedMetacardMappings(
+  database,
+  cardmarketCatalog = {},
+  exactExpansionMap = new Map()
+) {
+  const referenceRows = database.prepare(`
+    SELECT DISTINCT
+      mc.internal_metacard_id AS internalMetacardId,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId,
+      mc.name_en AS nameEn,
+      sp.set_prefix AS setPrefix,
+      sp.set_name AS setName
+    FROM reference_metacards mc
+    JOIN reference_set_positions sp ON sp.internal_metacard_id = mc.internal_metacard_id
+  `).all();
+  const allMetacards = database.prepare(`
+    SELECT
+      internal_metacard_id AS internalMetacardId,
+      cardmarket_metacard_id AS cardmarketMetacardId,
+      name_en AS nameEn
+    FROM reference_metacards
+  `).all();
+  const knownCardmarketMetacards = new Set(allMetacards
+    .map(row => String(row.cardmarketMetacardId || '').trim())
+    .filter(Boolean));
+  const referencesByPrefix = new Map();
+  const referencesByMetacard = new Map();
+  for (const row of referenceRows) {
+    const internalMetacardId = String(row.internalMetacardId || '').trim();
+    const setPrefix = String(row.setPrefix || '').trim();
+    if (!internalMetacardId || !setPrefix) continue;
+    if (!referencesByPrefix.has(setPrefix)) referencesByPrefix.set(setPrefix, new Map());
+    referencesByPrefix.get(setPrefix).set(internalMetacardId, {
+      internalMetacardId,
+      cardmarketMetacardId: String(row.cardmarketMetacardId || '').trim(),
+      nameEn: String(row.nameEn || '').trim()
+    });
+    if (!referencesByMetacard.has(internalMetacardId)) {
+      referencesByMetacard.set(internalMetacardId, {
+        internalMetacardId,
+        cardmarketMetacardId: String(row.cardmarketMetacardId || '').trim(),
+        nameEn: String(row.nameEn || '').trim(),
+        setNames: new Set()
+      });
+    }
+    referencesByMetacard.get(internalMetacardId).setNames.add(String(row.setName || '').trim());
+  }
+
+  const cardmarketByName = new Map();
+  const cardmarketByCompactName = new Map();
+  const cardmarketBySkillName = new Map();
+  const explicitSkillMetacards = new Set();
+  const namesByExpansionMetacard = new Map();
+  const allExpansionMetacards = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    if (!/^\d+$/.test(metacardId)) continue;
+    addSetValue(cardmarketByName, normalizedContextualName(row?.name || ''), metacardId);
+    addSetValue(cardmarketByCompactName, normalizedCompactReferenceName(row?.name || ''), metacardId);
+    addSetValue(cardmarketBySkillName, normalizedSkillName(row?.name || ''), metacardId);
+    if (isExplicitCardmarketSkillName(row?.name || '')) explicitSkillMetacards.add(metacardId);
+    if (/^\d+$/.test(expansionId)) {
+      addSetValue(allExpansionMetacards, expansionId, metacardId);
+      addSetValue(
+        namesByExpansionMetacard,
+        `${expansionId}|${metacardId}`,
+        normalizedContextualName(row?.name || '')
+      );
+    }
+  }
+
+  const referenceByCompactName = new Map();
+  for (const row of allMetacards) {
+    addSetValue(
+      referenceByCompactName,
+      normalizedCompactReferenceName(row.nameEn),
+      String(row.internalMetacardId || '').trim()
+    );
+  }
+
+  // Regel 1: Ein unvollständiges Referenzset darf nur über die bereits
+  // eindeutig bestimmte Expansion und einen vollständigen 1:1-Namensabgleich
+  // der auf beiden Seiten verbleibenden Metakarten ergänzt werden.
+  const contextualExpansionMap = buildContextualExpansionPrefixMap(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const contextualCandidates = new Map();
+  for (const [setPrefix, contextual] of contextualExpansionMap) {
+    const references = referencesByPrefix.get(setPrefix) || new Map();
+    const missing = [...references.values()].filter(row => !row.cardmarketMetacardId);
+    const remaining = [...(allExpansionMetacards.get(contextual.expansionId) || [])]
+      .filter(metacardId => !knownCardmarketMetacards.has(metacardId));
+    const referencesByName = new Map();
+    const metacardsByName = new Map();
+    for (const row of missing) {
+      addSetValue(referencesByName, normalizedContextualName(row.nameEn), row.internalMetacardId);
+    }
+    for (const metacardId of remaining) {
+      const names = namesByExpansionMetacard.get(`${contextual.expansionId}|${metacardId}`) || new Set();
+      if (names.size !== 1) continue;
+      addSetValue(metacardsByName, [...names][0], metacardId);
+    }
+    for (const [nameKey, internalIds] of referencesByName) {
+      const metacardIds = metacardsByName.get(nameKey) || new Set();
+      if (internalIds.size !== 1 || metacardIds.size !== 1) continue;
+      addSetValue(contextualCandidates, [...internalIds][0], [...metacardIds][0]);
+    }
+  }
+  const contextual = new Map([...contextualCandidates]
+    .filter(([, metacardIds]) => metacardIds.size === 1)
+    .map(([internalMetacardId, metacardIds]) => [internalMetacardId, [...metacardIds][0]]));
+
+  // Regel 2: Nur ein beidseitig eindeutiger kompakter Name ohne bereits
+  // vorhandenen exakten Namensmatch darf harmlose Zeichen/Abstände ausgleichen.
+  const compact = new Map();
+  for (const row of referencesByMetacard.values()) {
+    if (row.cardmarketMetacardId || contextual.has(row.internalMetacardId)) continue;
+    const exactMatches = cardmarketByName.get(normalizedContextualName(row.nameEn)) || new Set();
+    const compactKey = normalizedCompactReferenceName(row.nameEn);
+    const compactMatches = cardmarketByCompactName.get(compactKey) || new Set();
+    const referenceMatches = referenceByCompactName.get(compactKey) || new Set();
+    if (exactMatches.size || compactMatches.size !== 1 || referenceMatches.size !== 1) continue;
+    compact.set(row.internalMetacardId, [...compactMatches][0]);
+  }
+
+  // Regel 3: Der entfernte Zusatz "(Skill)" ist nur für Karten zulässig, die
+  // ausschließlich in eindeutig bezeichneten Speed-Duel-Sets vorkommen.
+  const skill = new Map();
+  for (const row of referencesByMetacard.values()) {
+    if (row.cardmarketMetacardId || contextual.has(row.internalMetacardId) || compact.has(row.internalMetacardId)) continue;
+    if (!row.setNames.size || [...row.setNames].some(setName => !isSpeedDuelSetName(setName))) continue;
+    const exactMatches = cardmarketByName.get(normalizedContextualName(row.nameEn)) || new Set();
+    const compactMatches = cardmarketByCompactName.get(normalizedCompactReferenceName(row.nameEn)) || new Set();
+    if (exactMatches.size || compactMatches.size) continue;
+    const candidates = [...(cardmarketBySkillName.get(normalizedSkillName(row.nameEn)) || [])]
+      .filter(metacardId => explicitSkillMetacards.has(metacardId));
+    if (candidates.length === 1) skill.set(row.internalMetacardId, candidates[0]);
+  }
+
+  return { contextual, compact, skill };
+}
+
+function applySafeUnresolvedMetacardMappings(
+  database,
+  cardmarketCatalog = {},
+  exactExpansionMap = new Map()
+) {
+  const mappings = buildSafeUnresolvedMetacardMappings(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const updateMetacard = database.prepare(`
+    UPDATE reference_metacards
+    SET
+      cardmarket_metacard_id = ?,
+      mapping_status = 'exact',
+      data_source = CASE
+        WHEN INSTR(data_source, ?) > 0 THEN data_source
+        ELSE data_source || ' + ' || ?
+      END
+    WHERE internal_metacard_id = ?
+      AND cardmarket_metacard_id IS NULL
+      AND mapping_status = 'unresolved'
+  `);
+  const updatePrints = database.prepare(`
+    UPDATE reference_prints
+    SET
+      mapping_status = 'likely',
+      data_source = CASE
+        WHEN INSTR(data_source, ?) > 0 THEN data_source
+        ELSE data_source || ' + ' || ?
+      END
+    WHERE mapping_status = 'unresolved'
+      AND cardmarket_product_id IS NULL
+      AND position_id IN (
+        SELECT position_id
+        FROM reference_set_positions
+        WHERE internal_metacard_id = ?
+      )
+  `);
+  const unresolvedPrintIds = database.prepare(`
+    SELECT pr.print_id AS printId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    WHERE sp.internal_metacard_id = ?
+      AND pr.mapping_status = 'unresolved'
+      AND pr.cardmarket_product_id IS NULL
+    ORDER BY pr.print_id
+  `);
+  const rules = [
+    ['contextual', 'Cardmarket safe contextual metacard 1:1'],
+    ['compact', 'Cardmarket safe compact name normalization'],
+    ['skill', 'Cardmarket safe Speed Duel skill suffix normalization']
+  ];
+  const resolved = { contextual: 0, compact: 0, skill: 0, total: 0 };
+  const metacards = { contextual: 0, compact: 0, skill: 0, total: 0 };
+  const printIds = [];
+  for (const [rule, marker] of rules) {
+    for (const [internalMetacardId, cardmarketMetacardId] of mappings[rule]) {
+      const metaResult = updateMetacard.run(
+        cardmarketMetacardId,
+        marker,
+        marker,
+        internalMetacardId
+      );
+      if (Number(metaResult.changes || 0) !== 1) continue;
+      metacards[rule] += 1;
+      metacards.total += 1;
+      const changedPrintIds = unresolvedPrintIds.all(internalMetacardId)
+        .map(row => Number(row.printId));
+      const printResult = updatePrints.run(marker, marker, internalMetacardId);
+      const printCount = Number(printResult.changes || 0);
+      if (printCount !== changedPrintIds.length) {
+        throw new Error(`Inkonsistente unresolved-Auflösung für ${internalMetacardId}.`);
+      }
+      printIds.push(...changedPrintIds);
+      resolved[rule] += printCount;
+      resolved.total += printCount;
+    }
+  }
+  return { resolved, metacards, printIds };
+}
+
+function applySafeProductMappingsForPrintIds(database, cardmarketCatalog = {}, printIds = []) {
+  const targets = new Set((Array.isArray(printIds) ? printIds : []).map(Number).filter(Number.isFinite));
+  if (!targets.size) return { upgraded: 0 };
+  const exactExpansionMap = buildExactExpansionPrefixMap(database, cardmarketCatalog);
+  const contextualExpansionMap = buildContextualExpansionPrefixMap(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const productsByMetacardExpansion = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const productId = String(row?.idProduct ?? row?.productId ?? '').trim();
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    if (!/^\d+$/.test(productId) || !/^\d+$/.test(metacardId) || !/^\d+$/.test(expansionId)) continue;
+    addSetValue(productsByMetacardExpansion, `${metacardId}|${expansionId}`, productId);
+  }
+  const rows = database.prepare(`
+    SELECT
+      pr.print_id AS printId,
+      pr.mapping_status AS mappingStatus,
+      pr.cardmarket_product_id AS cardmarketProductId,
+      sp.set_prefix AS setPrefix,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+    ORDER BY pr.print_id
+  `).all();
+  const printsByMetacardPrefix = new Map();
+  const usedProductIds = new Set();
+  for (const row of rows) {
+    if (row.mappingStatus === 'exact' && row.cardmarketProductId) {
+      usedProductIds.add(String(row.cardmarketProductId));
+    }
+    const metacardId = String(row.cardmarketMetacardId || '').trim();
+    const prefix = String(row.setPrefix || '').trim();
+    if (!metacardId || !prefix) continue;
+    const key = `${metacardId}|${prefix}`;
+    if (!printsByMetacardPrefix.has(key)) printsByMetacardPrefix.set(key, []);
+    printsByMetacardPrefix.get(key).push(row);
+  }
+  const update = database.prepare(`
+    UPDATE reference_prints
+    SET
+      cardmarket_product_id = ?,
+      mapping_status = 'exact',
+      data_source = CASE
+        WHEN INSTR(data_source, 'Cardmarket exact safe unresolved mapping') > 0 THEN data_source
+        ELSE data_source || ' + Cardmarket exact safe unresolved mapping'
+      END
+    WHERE print_id = ?
+      AND mapping_status = 'likely'
+      AND cardmarket_product_id IS NULL
+  `);
+  let upgraded = 0;
+  for (const row of rows) {
+    if (!targets.has(Number(row.printId))) continue;
+    if (row.mappingStatus !== 'likely' || row.cardmarketProductId || !row.cardmarketMetacardId) continue;
+    const prefix = String(row.setPrefix || '').trim();
+    const expansionIds = new Set([
+      exactExpansionMap.get(prefix)?.expansionId,
+      contextualExpansionMap.get(prefix)?.expansionId
+    ].filter(Boolean));
+    if (expansionIds.size !== 1) continue;
+    const metacardId = String(row.cardmarketMetacardId).trim();
+    const printGroup = printsByMetacardPrefix.get(`${metacardId}|${prefix}`) || [];
+    if (printGroup.length !== 1) continue;
+    const expansionId = [...expansionIds][0];
+    const productIds = [...(productsByMetacardExpansion.get(`${metacardId}|${expansionId}`) || [])];
+    if (productIds.length !== 1 || usedProductIds.has(productIds[0])) continue;
+    const result = update.run(productIds[0], row.printId);
+    if (Number(result.changes || 0) !== 1) continue;
+    usedProductIds.add(productIds[0]);
+    upgraded += 1;
+  }
+  return { upgraded };
+}
+
+function applySafeContextualCardmarketProductMappings(
+  database,
+  cardmarketCatalog = {},
+  exactExpansionMap = new Map()
+) {
+  const contextualExpansionMap = buildContextualExpansionPrefixMap(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const productsByMetacardExpansion = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const productId = String(row?.idProduct ?? row?.productId ?? '').trim();
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    const expansionId = String(row?.idExpansion ?? row?.expansionId ?? '').trim();
+    if (!/^\d+$/.test(productId) || !/^\d+$/.test(metacardId) || !/^\d+$/.test(expansionId)) continue;
+    addSetValue(productsByMetacardExpansion, `${metacardId}|${expansionId}`, productId);
+  }
+  const rows = database.prepare(`
+    SELECT
+      pr.print_id AS printId,
+      pr.mapping_status AS mappingStatus,
+      pr.cardmarket_product_id AS cardmarketProductId,
+      sp.set_prefix AS setPrefix,
+      mc.cardmarket_metacard_id AS cardmarketMetacardId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+    ORDER BY pr.print_id
+  `).all();
+  const printsByMetacardPrefix = new Map();
+  const usedProductIds = new Set();
+  for (const row of rows) {
+    const metacardId = String(row.cardmarketMetacardId || '').trim();
+    const prefix = String(row.setPrefix || '').trim();
+    if (row.mappingStatus === 'exact' && row.cardmarketProductId) {
+      usedProductIds.add(String(row.cardmarketProductId));
+    }
+    if (!metacardId || !prefix) continue;
+    const key = `${metacardId}|${prefix}`;
+    if (!printsByMetacardPrefix.has(key)) printsByMetacardPrefix.set(key, []);
+    printsByMetacardPrefix.get(key).push(row);
+  }
+
+  const update = database.prepare(`
+    UPDATE reference_prints
+    SET
+      cardmarket_product_id = ?,
+      mapping_status = 'exact',
+      data_source = CASE
+        WHEN INSTR(data_source, 'Cardmarket exact contextual expansion membership') > 0 THEN data_source
+        ELSE data_source || ' + Cardmarket exact contextual expansion membership'
+      END
+    WHERE print_id = ?
+      AND mapping_status = 'likely'
+      AND cardmarket_product_id IS NULL
+  `);
+  let upgraded = 0;
+  const blocked = {
+    noContextualExpansion: 0,
+    multipleReferencePrints: 0,
+    missingProduct: 0,
+    multipleProducts: 0,
+    productAlreadyAssigned: 0
+  };
+  for (const row of rows) {
+    if (row.mappingStatus !== 'likely' || row.cardmarketProductId || !row.cardmarketMetacardId) continue;
+    const prefix = String(row.setPrefix || '').trim();
+    const contextual = contextualExpansionMap.get(prefix);
+    if (!contextual) {
+      blocked.noContextualExpansion += 1;
+      continue;
+    }
+    const metacardId = String(row.cardmarketMetacardId).trim();
+    const printGroup = printsByMetacardPrefix.get(`${metacardId}|${prefix}`) || [];
+    if (printGroup.length !== 1) {
+      blocked.multipleReferencePrints += 1;
+      continue;
+    }
+    const productIds = [...(productsByMetacardExpansion.get(
+      `${metacardId}|${contextual.expansionId}`
+    ) || [])];
+    if (!productIds.length) {
+      blocked.missingProduct += 1;
+      continue;
+    }
+    if (productIds.length !== 1) {
+      blocked.multipleProducts += 1;
+      continue;
+    }
+    const productId = productIds[0];
+    if (usedProductIds.has(productId)) {
+      blocked.productAlreadyAssigned += 1;
+      continue;
+    }
+    const result = update.run(productId, row.printId);
+    if (Number(result.changes || 0) === 1) {
+      usedProductIds.add(productId);
+      upgraded += 1;
+    }
+  }
+  return {
+    upgraded,
+    exactExpansionCount: contextualExpansionMap.size,
+    blocked
+  };
 }
 
 function applySafeCardmarketProductMappings(database, cardmarketCatalog = {}) {
@@ -278,14 +816,40 @@ function applySafeCardmarketProductMappings(database, cardmarketCatalog = {}) {
       upgraded += 1;
     }
   }
+  const contextual = applySafeContextualCardmarketProductMappings(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const unresolvedResolutionInternal = applySafeUnresolvedMetacardMappings(
+    database,
+    cardmarketCatalog,
+    exactExpansionMap
+  );
+  const newlyResolvedProducts = applySafeProductMappingsForPrintIds(
+    database,
+    cardmarketCatalog,
+    unresolvedResolutionInternal.printIds
+  );
+  const unresolvedResolution = {
+    resolved: unresolvedResolutionInternal.resolved,
+    metacards: unresolvedResolutionInternal.metacards,
+    exactProducts: newlyResolvedProducts.upgraded
+  };
   const after = mappingStatusCounts(database);
   if (after.exact < before.exact) throw new Error('Bestehende exakte Cardmarket-Zuordnungen wurden verschlechtert.');
   return {
     before,
     after,
-    upgraded,
+    upgraded: upgraded + contextual.upgraded + newlyResolvedProducts.upgraded,
+    exactExpansionUpgraded: upgraded,
+    contextualUpgraded: contextual.upgraded,
+    newlyResolvedExactUpgraded: newlyResolvedProducts.upgraded,
     exactExpansionCount: exactExpansionMap.size,
+    contextualExpansionCount: contextual.exactExpansionCount,
+    unresolvedResolution,
     blocked,
+    contextualBlocked: contextual.blocked,
     collisions: findSetCodeRarityCollisions(database)
   };
 }
@@ -494,9 +1058,17 @@ function buildPrintReferenceDatabase({
         unknown_treatment_count: printCount - knownTreatmentCount,
         without_cardmarket_id_count: printCount - exactCardmarketCount,
         cardmarket_exact_expansion_count: mappingReport.exactExpansionCount,
+        cardmarket_contextual_expansion_count: mappingReport.contextualExpansionCount,
+        cardmarket_exact_expansion_upgraded_count: mappingReport.exactExpansionUpgraded,
+        cardmarket_contextual_exact_upgraded_count: mappingReport.contextualUpgraded,
         cardmarket_exact_upgraded_count: mappingReport.upgraded,
+        unresolved_contextual_resolved_count: mappingReport.unresolvedResolution.resolved.contextual,
+        unresolved_compact_name_resolved_count: mappingReport.unresolvedResolution.resolved.compact,
+        unresolved_speed_duel_skill_resolved_count: mappingReport.unresolvedResolution.resolved.skill,
+        unresolved_safe_resolved_count: mappingReport.unresolvedResolution.resolved.total,
+        unresolved_safe_exact_count: mappingReport.unresolvedResolution.exactProducts,
         set_code_rarity_collision_count: mappingReport.collisions.length,
-        cardmarket_exact_matching_rule: 'unique complete metacard membership signature + one print + one product',
+        cardmarket_exact_matching_rule: 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact name normalization or explicit Speed Duel skill suffix; product exact only with one print + one product',
         ...sourceMetadata
       };
       for (const [key, value] of Object.entries(metadata)) insertMetadata.run(key, String(value ?? ''));
@@ -514,7 +1086,11 @@ function buildPrintReferenceDatabase({
         knownTreatmentCount,
         withoutCardmarketIdCount: printCount - exactCardmarketCount,
         cardmarketUpgradedCount: mappingReport.upgraded,
+        cardmarketExactExpansionUpgradedCount: mappingReport.exactExpansionUpgraded,
+        cardmarketContextualUpgradedCount: mappingReport.contextualUpgraded,
         exactExpansionCount: mappingReport.exactExpansionCount,
+        contextualExpansionCount: mappingReport.contextualExpansionCount,
+        unresolvedResolution: mappingReport.unresolvedResolution,
         setCodeRarityCollisionCount: mappingReport.collisions.length,
         source: DATA_SOURCE,
         sourceRevision: revision
@@ -539,6 +1115,39 @@ function upsertMetadata(database, key, value) {
   `).run(key, String(value ?? ''));
 }
 
+function metadataNumber(database, key, fallback = 0) {
+  const row = database.prepare('SELECT value FROM reference_metadata WHERE key = ?').get(key);
+  const value = Number(row?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function existingSafeResolutionReport(database) {
+  const counts = mappingStatusCounts(database);
+  return {
+    before: counts,
+    after: counts,
+    upgraded: 0,
+    exactExpansionUpgraded: 0,
+    contextualUpgraded: 0,
+    newlyResolvedExactUpgraded: 0,
+    exactExpansionCount: metadataNumber(database, 'cardmarket_exact_expansion_count'),
+    contextualExpansionCount: metadataNumber(database, 'cardmarket_contextual_expansion_count'),
+    unresolvedResolution: {
+      resolved: {
+        contextual: metadataNumber(database, 'unresolved_contextual_resolved_count'),
+        compact: metadataNumber(database, 'unresolved_compact_name_resolved_count'),
+        skill: metadataNumber(database, 'unresolved_speed_duel_skill_resolved_count'),
+        total: metadataNumber(database, 'unresolved_safe_resolved_count')
+      },
+      metacards: { contextual: 0, compact: 0, skill: 0, total: 0 },
+      exactProducts: metadataNumber(database, 'unresolved_safe_exact_count')
+    },
+    blocked: {},
+    contextualBlocked: {},
+    collisions: findSetCodeRarityCollisions(database)
+  };
+}
+
 function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, catalogPath = '' } = {}) {
   if (!databasePath) throw new Error('Pfad zur Print-Referenz fehlt.');
   const targetPath = path.resolve(databasePath);
@@ -553,15 +1162,25 @@ function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, cat
     if (schemaVersion !== 2) throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
     database.exec('BEGIN IMMEDIATE;');
     try {
-      report = applySafeCardmarketProductMappings(database, cardmarketCatalog);
+      report = metadataNumber(database, 'unresolved_safe_resolved_count') > 0
+        ? existingSafeResolutionReport(database)
+        : applySafeCardmarketProductMappings(database, cardmarketCatalog);
       upsertMetadata(database, 'exact_cardmarket_count', report.after.exact);
       upsertMetadata(database, 'likely_count', report.after.likely);
       upsertMetadata(database, 'unresolved_count', report.after.unresolved);
       upsertMetadata(database, 'without_cardmarket_id_count', report.after.likely + report.after.unresolved);
       upsertMetadata(database, 'cardmarket_exact_expansion_count', report.exactExpansionCount);
+      upsertMetadata(database, 'cardmarket_contextual_expansion_count', report.contextualExpansionCount);
+      upsertMetadata(database, 'cardmarket_exact_expansion_upgraded_count', report.exactExpansionUpgraded);
+      upsertMetadata(database, 'cardmarket_contextual_exact_upgraded_count', report.contextualUpgraded);
       upsertMetadata(database, 'cardmarket_exact_upgraded_count', report.upgraded);
+      upsertMetadata(database, 'unresolved_contextual_resolved_count', report.unresolvedResolution.resolved.contextual);
+      upsertMetadata(database, 'unresolved_compact_name_resolved_count', report.unresolvedResolution.resolved.compact);
+      upsertMetadata(database, 'unresolved_speed_duel_skill_resolved_count', report.unresolvedResolution.resolved.skill);
+      upsertMetadata(database, 'unresolved_safe_resolved_count', report.unresolvedResolution.resolved.total);
+      upsertMetadata(database, 'unresolved_safe_exact_count', report.unresolvedResolution.exactProducts);
       upsertMetadata(database, 'set_code_rarity_collision_count', report.collisions.length);
-      upsertMetadata(database, 'cardmarket_exact_matching_rule', 'unique complete metacard membership signature + one print + one product');
+      upsertMetadata(database, 'cardmarket_exact_matching_rule', 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact name normalization or explicit Speed Duel skill suffix; product exact only with one print + one product');
       upsertMetadata(database, 'cardmarket_remapped_at', new Date().toISOString());
       if (catalogPath) upsertMetadata(database, 'cardmarket_catalog_sha256', sha256File(catalogPath));
       database.exec('COMMIT;');
@@ -633,7 +1252,11 @@ if (require.main === module) main();
 
 module.exports = {
   DATA_SOURCE,
+  applySafeUnresolvedMetacardMappings,
+  applySafeContextualCardmarketProductMappings,
   applySafeCardmarketProductMappings,
+  buildSafeUnresolvedMetacardMappings,
+  buildContextualExpansionPrefixMap,
   buildPrintReferenceDatabase,
   buildExactExpansionPrefixMap,
   cardPasscode,

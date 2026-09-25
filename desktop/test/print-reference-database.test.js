@@ -226,6 +226,66 @@ function normalizationFixturePayload() {
   };
 }
 
+function auditedResolutionFixturePayload() {
+  return {
+    englishCards: [
+      {
+        id: 98535702,
+        name: 'Damage Vaccine Omega MAX',
+        card_sets: [{ set_name: 'Generation Force', set_code: 'GENF-EN066', set_rarity: 'Common' }]
+      },
+      {
+        id: 80863132,
+        name: 'Muko',
+        card_sets: [
+          { set_name: 'Dark Revelation Volume 3', set_code: 'DR3-EN057', set_rarity: 'Super Rare' },
+          { set_name: 'Soul of the Duelist', set_code: 'SOD-EN057', set_rarity: 'Super Rare' },
+          { set_name: 'Soul of the Duelist', set_code: 'SOD-EN057', set_rarity: 'Ultimate Rare' }
+        ]
+      },
+      {
+        id: 56741506,
+        name: 'Sky Striker Ace - Azalea Temperance',
+        card_sets: [{ set_name: 'Battles of Legend: Terminal Revenge', set_code: 'BLTR-EN044', set_rarity: 'Secret Rare' }]
+      },
+      {
+        id: 300101001,
+        name: 'Ectoplasmic Fortification!',
+        card_sets: [{ set_name: 'Speed Duel: Arena of Lost Souls', set_code: 'SBLS-ENS01', set_rarity: 'Super Rare' }]
+      },
+      {
+        id: 99000001,
+        name: 'Ectoplasmic Fortification',
+        card_sets: [{ set_name: 'Unrelated Set', set_code: 'UNR-EN001', set_rarity: 'Common' }]
+      },
+      {
+        id: 300302053,
+        name: 'Spell of Mask (Skill Card)',
+        card_sets: [{ set_name: 'Speed Duel: Battle City Box', set_code: 'SBCB-ENS08', set_rarity: 'Common' }]
+      }
+    ],
+    germanCards: [],
+    cardmarketCatalog: {
+      version: 3,
+      createdAt: '2026-09-25',
+      products: [
+        { idProduct: 950001, idMetacard: 203852, idExpansion: 830001, name: 'Damage Vaccine Ω MAX' },
+        { idProduct: 950002, idMetacard: 203852, idExpansion: 830001, name: 'Damage Vaccine Ω MAX' },
+        { idProduct: 950003, idMetacard: 103590, idExpansion: 830002, name: 'Null and Void' },
+        { idProduct: 950004, idMetacard: 103590, idExpansion: 830003, name: 'Null and Void' },
+        { idProduct: 950005, idMetacard: 436034, idExpansion: 830004, name: 'Sky Striker Ace - Azalea Temperance' },
+        { idProduct: 950006, idMetacard: 436034, idExpansion: 830004, name: 'Sky Striker Ace - Azalea Temperance' },
+        { idProduct: 950007, idMetacard: 431542, idExpansion: 830005, name: 'Sky Striker Ace - Azalea Temperance' },
+        { idProduct: 950008, idMetacard: 269015, idExpansion: 830006, name: 'Ectoplasmic Fortification! (Skill)' },
+        { idProduct: 950009, idMetacard: 269015, idExpansion: 830006, name: 'Ectoplasmic Fortification! (Skill)' },
+        { idProduct: 950011, idMetacard: 459815, idExpansion: 830008, name: 'Ectoplasmic Fortification' },
+        { idProduct: 950010, idMetacard: 324211, idExpansion: 830007, name: 'Spell of Mask' }
+      ]
+    },
+    versionInfo: [{ database_version: 'audited-resolution-test-1', last_update: '2026-09-25' }]
+  };
+}
+
 function fixtureDatabase(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-reference-'));
   const databasePath = path.join(root, 'print-reference.sqlite');
@@ -440,6 +500,46 @@ test('harmlose Zeichenabweichung und eindeutiger Speed-Duel-Skill-Zusatz lösen 
   });
 });
 
+test('Audit-Zuordnungen lösen ausschließlich bestätigte Restfälle und raten keine Produkt-ID', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-audited-resolution-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  const report = buildPrintReferenceDatabase({
+    ...auditedResolutionFixturePayload(),
+    outputPath: databasePath
+  });
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.deepEqual(report.unresolvedResolution.audited.resolved, {
+    name: 1,
+    historical: 3,
+    expansion: 1,
+    skill: 1,
+    total: 6
+  });
+  for (const setCode of [
+    'GENF-EN066',
+    'DR3-EN057',
+    'SOD-EN057',
+    'BLTR-EN044',
+    'SBLS-ENS01'
+  ]) {
+    const results = database.findPrintCandidates({ setCode });
+    assert.ok(results.length >= 1);
+    assert.ok(results.every(row => row.matchStatus === 'likely'));
+    assert.ok(results.every(row => row.cardmarketProductId === null));
+  }
+
+  const manual = database.findPrintCandidates({ setCode: 'SBCB-ENS08' });
+  assert.equal(manual.length, 1);
+  assert.equal(manual[0].englishName, 'Spell of Mask (Skill Card)');
+  assert.equal(manual[0].matchStatus, 'unresolved');
+  assert.equal(manual[0].cardmarketProductId, null);
+});
+
 test('erneute Ausführung verändert weder bereits exact noch bereits likely zugeordnete Prints', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-idempotent-'));
   const databasePath = path.join(root, 'print-reference.sqlite');
@@ -510,9 +610,46 @@ test('gebündelte lokale Referenz enthält den vollständigen geprüften Snapsho
   assert.ok(stats.setPositionCount > 36000);
   assert.equal(stats.exactCardmarketCount + stats.likelyCount + stats.unresolvedCount, stats.printCount);
   assert.equal(stats.knownTreatmentCount + stats.unknownTreatmentCount, stats.printCount);
-  assert.equal(stats.exactCardmarketCount, 20446);
-  assert.equal(stats.likelyCount, 24002);
-  assert.equal(stats.unresolvedCount, 97);
+  assert.equal(stats.exactCardmarketCount, 20453);
+  assert.equal(stats.likelyCount, 24043);
+  assert.equal(stats.unresolvedCount, 49);
+});
+
+test('gebündelte Referenz enthält genau die 48 auditierten Restauflösungen', t => {
+  const { DatabaseSync } = require('node:sqlite');
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  t.after(() => database.close());
+
+  const metadata = Object.fromEntries(database.prepare(`
+    SELECT key, value
+    FROM reference_metadata
+    WHERE key LIKE 'unresolved_audited_%'
+  `).all().map(row => [row.key, Number(row.value)]));
+  assert.equal(metadata.unresolved_audited_name_resolved_count, 29);
+  assert.equal(metadata.unresolved_audited_historical_resolved_count, 3);
+  assert.equal(metadata.unresolved_audited_expansion_resolved_count, 4);
+  assert.equal(metadata.unresolved_audited_skill_resolved_count, 12);
+  assert.equal(metadata.unresolved_audited_safe_resolved_count, 48);
+
+  const auditedStatus = Object.fromEntries(database.prepare(`
+    SELECT mapping_status AS status, COUNT(*) AS count
+    FROM reference_prints
+    WHERE data_source LIKE '%Cardmarket audited%'
+    GROUP BY mapping_status
+  `).all().map(row => [row.status, Number(row.count)]));
+  assert.deepEqual(auditedStatus, { exact: 7, likely: 41 });
+
+  const manual = database.prepare(`
+    SELECT pr.mapping_status AS status, pr.cardmarket_product_id AS productId,
+           mc.cardmarket_metacard_id AS metacardId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    JOIN reference_metacards mc ON mc.internal_metacard_id = sp.internal_metacard_id
+    WHERE pr.known_set_code = 'SBCB-ENS08'
+      AND mc.name_en = 'Spell of Mask (Skill Card)'
+  `).get();
+  assert.deepEqual({ ...manual }, { status: 'unresolved', productId: null, metacardId: null });
 });
 
 test('gebündelte Referenz priorisiert PSV-Vollcodes und behandelt LON-G006 als belegten Legacy-Alias', t => {

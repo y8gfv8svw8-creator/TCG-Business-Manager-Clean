@@ -13,9 +13,9 @@ Enthalten:
 - 14.572 Metakarten
 - 44.545 Print-Datensätze
 - 37.172 kartenspezifische Setpositionen
-- 20.446 eindeutig zugeordnete Cardmarket-Produkt-IDs
-- 24.002 wahrscheinliche Metakarten-Zuordnungen ohne behauptete Produkt-ID
-- 97 vollständig ungelöste Zuordnungen
+- 20.453 eindeutig zugeordnete Cardmarket-Produkt-IDs
+- 24.043 wahrscheinliche Metakarten-Zuordnungen ohne behauptete Produkt-ID
+- 49 vollständig ungelöste Zuordnungen
 
 Wichtig:
 Die Cardmarket-Produktdatei enthält keine Setnamen oder Raritäten. Eine konkrete
@@ -40,14 +40,21 @@ Cardmarket-Export werden dabei normalisiert. Datum, Ähnlichkeitswerte,
 Produktreihenfolge, Raritätsraten und vermutete Treatments werden nicht als
 Beweis verwendet.
 
-Von den zuvor 437 vollständig ungelösten Prints wurden ausschließlich die 340
-im Audit eindeutig belegten Fälle aufgelöst: 125 über die vollständige
+Von den zuvor 437 vollständig ungelösten Prints wurden zunächst ausschließlich
+die 340 im Audit eindeutig belegten Fälle aufgelöst: 125 über die vollständige
 1:1-Zuordnung der in einer Expansion verbleibenden Metakarten, 102 über eine
 beidseitig eindeutige kompakte Zeichen-/Abstandsnormalisierung und 113 über
 einen eindeutigen "(Skill)"-Namenszusatz bei ausschließlich in Speed-Duel-Sets
-vorkommenden Karten. Davon konnten 90 Prints zusätzlich genau einem
-Cardmarket-Produkt zugeordnet werden; 250 bleiben ohne behauptete Produkt-ID
-likely. Die übrigen 97 Fälle bleiben unverändert unresolved.
+vorkommenden Karten.
+
+Aus den anschliessend auditierten 97 Restfaellen wurden weitere exakt 48 lokal
+belegte Prints aufgeloest: 29 eindeutige Symbol-, Tippfehler- oder
+Grammatikabweichungen, 3 historische Muko-/Null-and-Void-Faelle, 4 ueber den
+Expansionskontext eindeutig getrennte gleichnamige Metakarten und 12 eindeutige
+Skill-/Speed-Duel-Faelle. Ueber beide Auditstufen konnten damit 97 Prints genau
+einem Cardmarket-Produkt zugeordnet werden; 291 bleiben ohne behauptete
+Produkt-ID likely. Die verbleibenden 49 Prints bleiben unveraendert unresolved,
+darunter ausdruecklich SBCB-ENS08 "Spell of Mask (Skill Card)".
 
 Setcodes werden zuerst als vollständiger Code geprüft. Nur wenn kein exakter
 Vollcode existiert, folgen bekannte historische Sprach-/Legacy-Aliase und zuletzt

@@ -7,6 +7,146 @@ const { normalizeTreatment, parsePrintSetCode } = require('../app/main/print-ref
 
 const DATA_SOURCE = 'YGOPRODeck cardinfo v7 + Cardmarket products_singles_3';
 
+// Ausschliesslich die im Audit vom 25.09.2026 einzeln bestaetigten Restfaelle.
+// Die vollstaendige Kombination aus YGOPRODeck-ID, Namen und Prints verhindert,
+// dass die Zuordnung spaeter still auf neue oder veraenderte Quelldaten uebergreift.
+const AUDITED_UNRESOLVED_METACARD_MAPPINGS = Object.freeze([
+  {
+    group: 'name', ygoprodeckId: '86170989', nameEn: 'Falchion Beta',
+    cardmarketMetacardId: '106416', cardmarketName: 'Falchionβ',
+    prints: ['ANPR-EN039|Rare', 'SBCB-EN070|Common', 'SDCR-EN015|Common']
+  },
+  {
+    group: 'name', ygoprodeckId: '98535702', nameEn: 'Damage Vaccine Omega MAX',
+    cardmarketMetacardId: '203852', cardmarketName: 'Damage Vaccine Ω MAX',
+    prints: ['GENF-EN066|Common']
+  },
+  {
+    group: 'name', ygoprodeckId: '82556058', nameEn: 'Fiendish Engine Omega',
+    cardmarketMetacardId: '105017', cardmarketName: 'Fiendish Engine Ω',
+    prints: ['LCJW-EN181|Common', 'TDGS-EN095|Secret Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '60802233', nameEn: 'Kuwagata α',
+    cardmarketMetacardId: '103222', cardmarketName: 'Kuwagata alpha',
+    prints: ['OP19-EN013|Common', 'TP1-030|Common', 'TP1-E030|Common']
+  },
+  {
+    group: 'name', ygoprodeckId: '90011273', nameEn: 'Breachborrel Dragon',
+    cardmarketMetacardId: '458888', cardmarketName: 'Breechborrel Dragon',
+    prints: ['BLZD-EN049|Super Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '44694191', nameEn: 'Fleeting Phantom Mask Master',
+    cardmarketMetacardId: '462792', cardmarketName: 'Fleeting Phantom Mask Maker',
+    prints: ['BLZD-EN023|Common']
+  },
+  {
+    group: 'name', ygoprodeckId: '17473466', nameEn: 'Nervedo the Shadebeast Power Patron',
+    cardmarketMetacardId: '462785', cardmarketName: 'Nervado the Shadebeast Power Patron',
+    prints: ['BLZD-EN011|Starlight Rare', 'BLZD-EN011|Ultra Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '51669847', nameEn: 'Plundered Power Patron Plane - Vidolia',
+    cardmarketMetacardId: '462811', cardmarketName: 'Plunder Power Patron Plane – Vidolia',
+    prints: ['BLZD-EN057|Super Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '54603525', nameEn: 'Clear Wing Synchro Dragon, Four Heavenly Dragons',
+    cardmarketMetacardId: '461155', cardmarketName: 'Clear Wing Synchro Dragon of the Four Heavenly Dragons',
+    prints: ['MAMS-EN014|Grand Master Rare', 'MAMS-EN014|Starlight Rare', 'MAMS-EN014|Ultra Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '29053656', nameEn: 'Crimson Dragon Quetzalcoatl',
+    cardmarketMetacardId: '461148', cardmarketName: 'Crimson Dragon Quetzacoatl',
+    prints: ['MAMS-EN007|Grand Master Rare', 'MAMS-EN007|Starlight Rare', 'MAMS-EN007|Ultra Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '90091224', nameEn: 'Dark Rebellion Xyz Dragon, Four Heavenly Dragons',
+    cardmarketMetacardId: '461156', cardmarketName: 'Dark Rebellion Xyz Dragon of the Four Heavenly Dragons',
+    prints: ['MAMS-EN015|Grand Master Rare', 'MAMS-EN015|Starlight Rare', 'MAMS-EN015|Ultra Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '92936364', nameEn: "Red Dragon Archfiend's Chains",
+    cardmarketMetacardId: '461150', cardmarketName: "Red Dragon Archfiend's Chain",
+    prints: ['MAMS-EN009|Grand Master Rare', 'MAMS-EN009|Starlight Rare', 'MAMS-EN009|Ultra Rare']
+  },
+  {
+    group: 'name', ygoprodeckId: '27118421', nameEn: 'Starving Venom Fusion Dragon, Four Heavenly Dragons',
+    cardmarketMetacardId: '461154', cardmarketName: 'Starving Venom Fusion Dragon of the Four Heavenly Dragons',
+    prints: ['MAMS-EN013|Grand Master Rare', 'MAMS-EN013|Starlight Rare', 'MAMS-EN013|Ultra Rare']
+  },
+  {
+    group: 'historical', ygoprodeckId: '80863132', nameEn: 'Muko',
+    cardmarketMetacardId: '103590', cardmarketName: 'Null and Void',
+    prints: ['DR3-EN057|Super Rare', 'SOD-EN057|Super Rare', 'SOD-EN057|Ultimate Rare']
+  },
+  {
+    group: 'expansion', ygoprodeckId: '56741506', nameEn: 'Sky Striker Ace - Azalea Temperance',
+    cardmarketMetacardId: '436034', cardmarketName: 'Sky Striker Ace - Azalea Temperance',
+    prints: ['BLTR-EN044|Secret Rare']
+  },
+  {
+    group: 'expansion', ygoprodeckId: '91677585', nameEn: 'Hi-Five the Sky',
+    cardmarketMetacardId: '219690', cardmarketName: 'Hi-Five the Sky',
+    prints: [
+      'RA04-EN239|Platinum Secret Rare',
+      'RA04-EN239|Quarter Century Secret Rare',
+      'WSUP-EN030|Prismatic Secret Rare'
+    ]
+  },
+  {
+    group: 'skill', ygoprodeckId: '300202002', nameEn: 'Beatdown!',
+    cardmarketMetacardId: '268088', cardmarketName: 'Beatdown! (Skill)',
+    prints: ['JMPS-ENS01|Ultra Rare', 'SS02-ENAS2|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300201002', nameEn: 'Destiny Draw (Skill Card)',
+    cardmarketMetacardId: '268072', cardmarketName: 'Destiny Draw (Skill)',
+    prints: ['SS01-ENAS2|Common', 'YDPR-ENS01|Ultra Rare']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300101001', nameEn: 'Ectoplasmic Fortification!',
+    cardmarketMetacardId: '269015', cardmarketName: 'Ectoplasmic Fortification! (Skill)',
+    prints: ['SBLS-ENS01|Super Rare']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302057', nameEn: "Archfiend's Conscription",
+    cardmarketMetacardId: '417918', cardmarketName: "Archfiend's Conscription (Skills)",
+    prints: ['SGX3-ENS05|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302065', nameEn: 'Fog Warning',
+    cardmarketMetacardId: '417921', cardmarketName: 'Fog Warning (Skills)',
+    prints: ['SGX3-ENS08|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302066', nameEn: 'Forged Steel',
+    cardmarketMetacardId: '417915', cardmarketName: 'Forged Steel (Skills)',
+    prints: ['SGX3-ENS02|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302070', nameEn: 'Professor of Alchemy',
+    cardmarketMetacardId: '417919', cardmarketName: 'Professor of Alchemy (Skills)',
+    prints: ['SGX3-ENS06|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302071', nameEn: 'Ruthless Means',
+    cardmarketMetacardId: '417914', cardmarketName: 'Ruthless Means (Skills)',
+    prints: ['SGX3-ENS01|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302073', nameEn: 'Unlocking the Power',
+    cardmarketMetacardId: '417920', cardmarketName: 'Unlocking the Power (Skills)',
+    prints: ['SGX3-ENS07|Common']
+  },
+  {
+    group: 'skill', ygoprodeckId: '300302076', nameEn: 'Welcome to the Jungle',
+    cardmarketMetacardId: '417917', cardmarketName: 'Welcome to the Jungle (Skills)',
+    prints: ['SGX3-ENS04|Common']
+  }
+]);
+
 function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
@@ -455,6 +595,132 @@ function buildSafeUnresolvedMetacardMappings(
   return { contextual, compact, skill };
 }
 
+function applyAuditedUnresolvedMetacardMappings(database, cardmarketCatalog = {}) {
+  const namesByMetacard = new Map();
+  for (const row of cardmarketProducts(cardmarketCatalog)) {
+    const metacardId = String(row?.idMetacard ?? row?.metacardId ?? '').trim();
+    const name = String(row?.name || '').trim();
+    if (/^\d+$/.test(metacardId) && name) addSetValue(namesByMetacard, metacardId, name);
+  }
+
+  const findMetacard = database.prepare(`
+    SELECT
+      internal_metacard_id AS internalMetacardId,
+      cardmarket_metacard_id AS cardmarketMetacardId,
+      name_en AS nameEn,
+      mapping_status AS mappingStatus
+    FROM reference_metacards
+    WHERE ygoprodeck_id = ?
+  `);
+  const findPrints = database.prepare(`
+    SELECT
+      pr.print_id AS printId,
+      pr.known_set_code AS knownSetCode,
+      pr.rarity,
+      pr.mapping_status AS mappingStatus,
+      pr.cardmarket_product_id AS cardmarketProductId
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    WHERE sp.internal_metacard_id = ?
+    ORDER BY pr.known_set_code, pr.rarity, pr.print_id
+  `);
+  const updateMetacard = database.prepare(`
+    UPDATE reference_metacards
+    SET
+      cardmarket_metacard_id = ?,
+      mapping_status = 'exact',
+      data_source = CASE
+        WHEN INSTR(data_source, ?) > 0 THEN data_source
+        ELSE data_source || ' + ' || ?
+      END
+    WHERE internal_metacard_id = ?
+      AND cardmarket_metacard_id IS NULL
+      AND mapping_status = 'unresolved'
+  `);
+  const updatePrint = database.prepare(`
+    UPDATE reference_prints
+    SET
+      mapping_status = 'likely',
+      data_source = CASE
+        WHEN INSTR(data_source, ?) > 0 THEN data_source
+        ELSE data_source || ' + ' || ?
+      END
+    WHERE print_id = ?
+      AND mapping_status = 'unresolved'
+      AND cardmarket_product_id IS NULL
+  `);
+  const markerByGroup = {
+    name: 'Cardmarket audited safe name normalization',
+    historical: 'Cardmarket audited historical identity',
+    expansion: 'Cardmarket audited expansion disambiguation',
+    skill: 'Cardmarket audited Skill context'
+  };
+  const resolved = { name: 0, historical: 0, expansion: 0, skill: 0, total: 0 };
+  const metacards = { name: 0, historical: 0, expansion: 0, skill: 0, total: 0 };
+  const printIds = [];
+
+  for (const audited of AUDITED_UNRESOLVED_METACARD_MAPPINGS) {
+    const row = findMetacard.get(audited.ygoprodeckId);
+    if (!row) continue;
+    const actualCardmarketNames = namesByMetacard.get(audited.cardmarketMetacardId) || new Set();
+    if (!actualCardmarketNames.has(audited.cardmarketName)) {
+      throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: Cardmarket-Metakarte oder Name fehlt.`);
+    }
+    if (String(row.nameEn || '') !== audited.nameEn) {
+      throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: Referenzname hat sich geaendert.`);
+    }
+
+    const prints = findPrints.all(row.internalMetacardId);
+    const actualPrints = prints
+      .map(print => `${String(print.knownSetCode || '')}|${String(print.rarity || '')}`)
+      .sort();
+    const expectedPrints = [...audited.prints].sort();
+    if (actualPrints.length !== expectedPrints.length || actualPrints.some((value, index) => value !== expectedPrints[index])) {
+      throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: Printumfang hat sich geaendert.`);
+    }
+
+    const existingMetacardId = String(row.cardmarketMetacardId || '').trim();
+    if (existingMetacardId) {
+      if (existingMetacardId !== audited.cardmarketMetacardId) {
+        throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: abweichende Cardmarket-Metakarte vorhanden.`);
+      }
+      if (prints.some(print => print.mappingStatus === 'unresolved')) {
+        throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: nur teilweise angewendet.`);
+      }
+      continue;
+    }
+    if (row.mappingStatus !== 'unresolved' || prints.some(print =>
+      print.mappingStatus !== 'unresolved' || print.cardmarketProductId
+    )) {
+      throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: bestehendes Mapping darf nicht veraendert werden.`);
+    }
+
+    const marker = markerByGroup[audited.group];
+    const metaResult = updateMetacard.run(
+      audited.cardmarketMetacardId,
+      marker,
+      marker,
+      row.internalMetacardId
+    );
+    if (Number(metaResult.changes || 0) !== 1) {
+      throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: Metakarte wurde nicht aktualisiert.`);
+    }
+    metacards[audited.group] += 1;
+    metacards.total += 1;
+    for (const print of prints) {
+      const printResult = updatePrint.run(marker, marker, print.printId);
+      if (Number(printResult.changes || 0) !== 1) {
+        throw new Error(`Audit-Zuordnung ${audited.ygoprodeckId}: Print ${print.printId} wurde nicht aktualisiert.`);
+      }
+      printIds.push(Number(print.printId));
+      resolved[audited.group] += 1;
+      resolved.total += 1;
+    }
+  }
+
+  return { resolved, metacards, printIds };
+}
+
 function applySafeUnresolvedMetacardMappings(
   database,
   cardmarketCatalog = {},
@@ -826,14 +1092,25 @@ function applySafeCardmarketProductMappings(database, cardmarketCatalog = {}) {
     cardmarketCatalog,
     exactExpansionMap
   );
+  const auditedResolution = applyAuditedUnresolvedMetacardMappings(
+    database,
+    cardmarketCatalog
+  );
   const newlyResolvedProducts = applySafeProductMappingsForPrintIds(
     database,
     cardmarketCatalog,
-    unresolvedResolutionInternal.printIds
+    [...unresolvedResolutionInternal.printIds, ...auditedResolution.printIds]
   );
   const unresolvedResolution = {
-    resolved: unresolvedResolutionInternal.resolved,
-    metacards: unresolvedResolutionInternal.metacards,
+    resolved: {
+      ...unresolvedResolutionInternal.resolved,
+      total: unresolvedResolutionInternal.resolved.total + auditedResolution.resolved.total
+    },
+    metacards: {
+      ...unresolvedResolutionInternal.metacards,
+      total: unresolvedResolutionInternal.metacards.total + auditedResolution.metacards.total
+    },
+    audited: auditedResolution,
     exactProducts: newlyResolvedProducts.upgraded
   };
   const after = mappingStatusCounts(database);
@@ -1067,8 +1344,14 @@ function buildPrintReferenceDatabase({
         unresolved_speed_duel_skill_resolved_count: mappingReport.unresolvedResolution.resolved.skill,
         unresolved_safe_resolved_count: mappingReport.unresolvedResolution.resolved.total,
         unresolved_safe_exact_count: mappingReport.unresolvedResolution.exactProducts,
+        unresolved_audited_rule_version: 1,
+        unresolved_audited_name_resolved_count: mappingReport.unresolvedResolution.audited.resolved.name,
+        unresolved_audited_historical_resolved_count: mappingReport.unresolvedResolution.audited.resolved.historical,
+        unresolved_audited_expansion_resolved_count: mappingReport.unresolvedResolution.audited.resolved.expansion,
+        unresolved_audited_skill_resolved_count: mappingReport.unresolvedResolution.audited.resolved.skill,
+        unresolved_audited_safe_resolved_count: mappingReport.unresolvedResolution.audited.resolved.total,
         set_code_rarity_collision_count: mappingReport.collisions.length,
-        cardmarket_exact_matching_rule: 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact name normalization or explicit Speed Duel skill suffix; product exact only with one print + one product',
+        cardmarket_exact_matching_rule: 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact/audited name normalization, audited historical/expansion identity or explicit Skill context; product exact only with one print + one product',
         ...sourceMetadata
       };
       for (const [key, value] of Object.entries(metadata)) insertMetadata.run(key, String(value ?? ''));
@@ -1121,12 +1404,71 @@ function metadataNumber(database, key, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function applyAuditedUnresolvedMappingsOnly(database, cardmarketCatalog = {}) {
+  const before = mappingStatusCounts(database);
+  const audited = applyAuditedUnresolvedMetacardMappings(database, cardmarketCatalog);
+  const exactProducts = applySafeProductMappingsForPrintIds(
+    database,
+    cardmarketCatalog,
+    audited.printIds
+  ).upgraded;
+  const after = mappingStatusCounts(database);
+  if (after.unresolved !== before.unresolved - audited.resolved.total) {
+    throw new Error('Audit-Zuordnung hat eine unerwartete Anzahl unresolved Prints veraendert.');
+  }
+  if (after.exact - before.exact !== exactProducts) {
+    throw new Error('Audit-Zuordnung hat nicht freigegebene exact Mappings veraendert.');
+  }
+  if (after.likely - before.likely !== audited.resolved.total - exactProducts) {
+    throw new Error('Audit-Zuordnung hat nicht freigegebene likely Mappings veraendert.');
+  }
+
+  const previousResolved = {
+    contextual: metadataNumber(database, 'unresolved_contextual_resolved_count'),
+    compact: metadataNumber(database, 'unresolved_compact_name_resolved_count'),
+    skill: metadataNumber(database, 'unresolved_speed_duel_skill_resolved_count'),
+    total: metadataNumber(database, 'unresolved_safe_resolved_count')
+  };
+  const previousExactProducts = metadataNumber(database, 'unresolved_safe_exact_count');
+  return {
+    before,
+    after,
+    upgraded: exactProducts,
+    cumulativeUpgraded: metadataNumber(database, 'cardmarket_exact_upgraded_count') + exactProducts,
+    exactExpansionUpgraded: metadataNumber(database, 'cardmarket_exact_expansion_upgraded_count'),
+    contextualUpgraded: metadataNumber(database, 'cardmarket_contextual_exact_upgraded_count'),
+    newlyResolvedExactUpgraded: exactProducts,
+    exactExpansionCount: metadataNumber(database, 'cardmarket_exact_expansion_count'),
+    contextualExpansionCount: metadataNumber(database, 'cardmarket_contextual_expansion_count'),
+    unresolvedResolution: {
+      resolved: {
+        ...previousResolved,
+        total: previousResolved.total + audited.resolved.total
+      },
+      metacards: audited.metacards,
+      audited,
+      exactProducts: previousExactProducts + exactProducts
+    },
+    blocked: {},
+    contextualBlocked: {},
+    collisions: findSetCodeRarityCollisions(database)
+  };
+}
+
 function existingSafeResolutionReport(database) {
   const counts = mappingStatusCounts(database);
+  const auditedResolved = {
+    name: metadataNumber(database, 'unresolved_audited_name_resolved_count'),
+    historical: metadataNumber(database, 'unresolved_audited_historical_resolved_count'),
+    expansion: metadataNumber(database, 'unresolved_audited_expansion_resolved_count'),
+    skill: metadataNumber(database, 'unresolved_audited_skill_resolved_count'),
+    total: metadataNumber(database, 'unresolved_audited_safe_resolved_count')
+  };
   return {
     before: counts,
     after: counts,
     upgraded: 0,
+    cumulativeUpgraded: metadataNumber(database, 'cardmarket_exact_upgraded_count'),
     exactExpansionUpgraded: 0,
     contextualUpgraded: 0,
     newlyResolvedExactUpgraded: 0,
@@ -1140,6 +1482,11 @@ function existingSafeResolutionReport(database) {
         total: metadataNumber(database, 'unresolved_safe_resolved_count')
       },
       metacards: { contextual: 0, compact: 0, skill: 0, total: 0 },
+      audited: {
+        resolved: auditedResolved,
+        metacards: { name: 0, historical: 0, expansion: 0, skill: 0, total: 0 },
+        printIds: []
+      },
       exactProducts: metadataNumber(database, 'unresolved_safe_exact_count')
     },
     blocked: {},
@@ -1162,9 +1509,12 @@ function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, cat
     if (schemaVersion !== 2) throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
     database.exec('BEGIN IMMEDIATE;');
     try {
-      report = metadataNumber(database, 'unresolved_safe_resolved_count') > 0
+      const auditedRuleApplied = metadataNumber(database, 'unresolved_audited_rule_version', -1) >= 0;
+      report = auditedRuleApplied
         ? existingSafeResolutionReport(database)
-        : applySafeCardmarketProductMappings(database, cardmarketCatalog);
+        : metadataNumber(database, 'unresolved_safe_resolved_count') > 0
+          ? applyAuditedUnresolvedMappingsOnly(database, cardmarketCatalog)
+          : applySafeCardmarketProductMappings(database, cardmarketCatalog);
       upsertMetadata(database, 'exact_cardmarket_count', report.after.exact);
       upsertMetadata(database, 'likely_count', report.after.likely);
       upsertMetadata(database, 'unresolved_count', report.after.unresolved);
@@ -1173,14 +1523,24 @@ function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, cat
       upsertMetadata(database, 'cardmarket_contextual_expansion_count', report.contextualExpansionCount);
       upsertMetadata(database, 'cardmarket_exact_expansion_upgraded_count', report.exactExpansionUpgraded);
       upsertMetadata(database, 'cardmarket_contextual_exact_upgraded_count', report.contextualUpgraded);
-      upsertMetadata(database, 'cardmarket_exact_upgraded_count', report.upgraded);
+      upsertMetadata(
+        database,
+        'cardmarket_exact_upgraded_count',
+        report.cumulativeUpgraded ?? report.upgraded
+      );
       upsertMetadata(database, 'unresolved_contextual_resolved_count', report.unresolvedResolution.resolved.contextual);
       upsertMetadata(database, 'unresolved_compact_name_resolved_count', report.unresolvedResolution.resolved.compact);
       upsertMetadata(database, 'unresolved_speed_duel_skill_resolved_count', report.unresolvedResolution.resolved.skill);
       upsertMetadata(database, 'unresolved_safe_resolved_count', report.unresolvedResolution.resolved.total);
       upsertMetadata(database, 'unresolved_safe_exact_count', report.unresolvedResolution.exactProducts);
+      upsertMetadata(database, 'unresolved_audited_rule_version', 1);
+      upsertMetadata(database, 'unresolved_audited_name_resolved_count', report.unresolvedResolution.audited.resolved.name);
+      upsertMetadata(database, 'unresolved_audited_historical_resolved_count', report.unresolvedResolution.audited.resolved.historical);
+      upsertMetadata(database, 'unresolved_audited_expansion_resolved_count', report.unresolvedResolution.audited.resolved.expansion);
+      upsertMetadata(database, 'unresolved_audited_skill_resolved_count', report.unresolvedResolution.audited.resolved.skill);
+      upsertMetadata(database, 'unresolved_audited_safe_resolved_count', report.unresolvedResolution.audited.resolved.total);
       upsertMetadata(database, 'set_code_rarity_collision_count', report.collisions.length);
-      upsertMetadata(database, 'cardmarket_exact_matching_rule', 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact name normalization or explicit Speed Duel skill suffix; product exact only with one print + one product');
+      upsertMetadata(database, 'cardmarket_exact_matching_rule', 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact/audited name normalization, audited historical/expansion identity or explicit Skill context; product exact only with one print + one product');
       upsertMetadata(database, 'cardmarket_remapped_at', new Date().toISOString());
       if (catalogPath) upsertMetadata(database, 'cardmarket_catalog_sha256', sha256File(catalogPath));
       database.exec('COMMIT;');
@@ -1251,7 +1611,9 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  AUDITED_UNRESOLVED_METACARD_MAPPINGS,
   DATA_SOURCE,
+  applyAuditedUnresolvedMetacardMappings,
   applySafeUnresolvedMetacardMappings,
   applySafeContextualCardmarketProductMappings,
   applySafeCardmarketProductMappings,

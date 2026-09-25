@@ -67,7 +67,7 @@ class CardScannerRecognizer {
       const startedAt = Date.now();
       const worker = await this.worker();
       const passResults = [];
-      const passes = Array.isArray(payload.passes) ? payload.passes.slice(0, 20) : [];
+      const passes = Array.isArray(payload.passes) ? payload.passes.slice(0, 60) : [];
       for (const pass of passes) {
         const config = PASS_CONFIG[pass?.kind];
         const buffer = config ? imageBuffer(pass?.imageDataUrl) : null;
@@ -76,7 +76,7 @@ class CardScannerRecognizer {
           await worker.setParameters({
             tessedit_pageseg_mode: pass?.segmentation === 'sparse' && (pass.kind === 'title' || pass.kind === 'passcode')
               ? PSM.SPARSE_TEXT
-              : pass?.segmentation === 'raw-line' && pass.kind === 'title' ? PSM.RAW_LINE : config.mode,
+              : pass?.segmentation === 'raw-line' && (pass.kind === 'title' || pass.kind === 'setCode') ? PSM.RAW_LINE : config.mode,
             preserve_interword_spaces: '1',
             tessedit_char_whitelist: config.whitelist
           });
@@ -94,6 +94,9 @@ class CardScannerRecognizer {
 
       const titleTexts = passResults.filter(row => row.kind === 'title' && row.text).map(row => row.text);
       const setCodeTexts = passResults.filter(row => row.kind === 'setCode' && row.text).map(row => row.text);
+      const setCodeReadings = passResults
+        .filter(row => row.kind === 'setCode' && row.text)
+        .map(row => ({ text: row.text, confidence: row.confidence, variant: row.variant }));
       const footerTexts = passResults.filter(row => (row.kind === 'footer' || row.kind === 'passcode') && row.text).map(row => row.text);
       let fullText = '';
       let fullConfidence = 0;
@@ -118,6 +121,31 @@ class CardScannerRecognizer {
       const confidenceValues = passResults.filter(row => row.text).map(row => row.confidence);
       if (fullText) confidenceValues.push(fullConfidence);
       const setCodes = [...new Set([text, ...setCodeTexts].flatMap(ScannerRecognition.extractSetCodes))];
+      const setCodeSignals = [];
+      for (const row of passResults.filter(entry => entry.kind === 'setCode' && entry.text)) {
+        for (const setCode of ScannerRecognition.extractSetCodes(row.text)) {
+          if (setCodeSignals.some(entry => entry.setCode === setCode && entry.variant === String(row.variant || ''))) continue;
+          setCodeSignals.push({
+            setCode,
+            confidence: Math.max(0, Math.min(100, Number(row.confidence || 0))),
+            rawText: String(row.text || '').trim(),
+            variant: String(row.variant || 'set-code-region'),
+            source: 'set_code_region'
+          });
+        }
+      }
+      if (!setCodeSignals.length && fullText) {
+        for (const setCode of ScannerRecognition.extractSetCodes(fullText)) {
+          setCodeSignals.push({
+            setCode,
+            confidence: fullConfidence,
+            rawText: fullText,
+            variant: 'full-text-fallback',
+            source: 'full_text_fallback'
+          });
+        }
+      }
+      setCodeSignals.sort((left, right) => right.confidence - left.confidence || left.setCode.localeCompare(right.setCode));
       const passcodes = [...new Set([text, ...footerTexts].flatMap(ScannerRecognition.extractPasscodes))];
       const edition = ScannerRecognition.extractEdition(footerTexts.join('\n')) || ScannerRecognition.extractEdition(text);
       return {
@@ -127,6 +155,8 @@ class CardScannerRecognizer {
         queries: ScannerRecognition.buildQueries({ hint: payload.hint, text: fullText, titleTexts, setCodeTexts }),
         titleCandidates: [...new Set(titleTexts.flatMap(ScannerRecognition.extractTitleCandidates))],
         setCodes,
+        setCodeSignals,
+        setCodeReadings,
         passcodes,
         edition,
         regionResults: passResults,

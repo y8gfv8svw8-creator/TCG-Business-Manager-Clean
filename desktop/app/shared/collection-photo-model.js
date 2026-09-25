@@ -143,8 +143,93 @@
       setName: text(candidate.setName || candidate.set),
       collectorNumber: text(candidate.collectorNumber || candidate.setCode),
       rarity: text(candidate.rarity || candidate.variant),
+      version: text(candidate.version),
+      treatment: text(candidate.treatment),
+      artwork: text(candidate.artwork),
+      mappingStatus: ['exact', 'likely', 'unresolved'].includes(text(candidate.mappingStatus).toLowerCase())
+        ? text(candidate.mappingStatus).toLowerCase() : 'unresolved',
+      verified: Boolean(candidate.verified),
       source: text(candidate.source) || 'manual_search',
       signals: Array.isArray(candidate.signals) ? candidate.signals.map(text).filter(Boolean) : []
+    };
+  }
+
+  function normalizeSetCodeSignal(signal, index = 0) {
+    if (!signal || typeof signal !== 'object' || Array.isArray(signal)) return null;
+    const setCode = text(signal.setCode).toUpperCase();
+    const confidence = finite(signal.confidence);
+    if (!setCode) return null;
+    return {
+      id: text(signal.id) || `set-code-signal-${index}`,
+      setCode,
+      confidence: confidence === null ? null : Math.max(0, Math.min(100, Math.round(confidence * 10) / 10)),
+      rawText: text(signal.rawText),
+      variant: text(signal.variant),
+      source: text(signal.source) || 'set_code_region',
+      validationMethod: text(signal.validationMethod)
+    };
+  }
+
+  function normalizeReferenceCandidate(candidate, index = 0) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const mappingStatus = text(candidate.mappingStatus).toLowerCase();
+    return {
+      id: text(candidate.id) || `reference-candidate-${index}`,
+      kind: text(candidate.kind) || 'reference_print',
+      printId: text(candidate.printId),
+      variantId: text(candidate.variantId),
+      internalMetacardId: text(candidate.internalMetacardId),
+      germanName: text(candidate.germanName),
+      englishName: text(candidate.englishName),
+      setName: text(candidate.setName),
+      setCode: text(candidate.setCode).toUpperCase(),
+      collectorNumber: text(candidate.collectorNumber),
+      rarity: text(candidate.rarity),
+      version: text(candidate.version),
+      treatment: text(candidate.treatment),
+      artwork: text(candidate.artwork),
+      cardmarketProductId: cleanProductId(candidate.cardmarketProductId),
+      cardmarketProductName: text(candidate.cardmarketProductName),
+      productUrl: text(candidate.productUrl),
+      mappingStatus: ['exact', 'likely', 'unresolved'].includes(mappingStatus) ? mappingStatus : 'unresolved',
+      dataSource: text(candidate.dataSource),
+      verifiedAt: text(candidate.verifiedAt),
+      setCodeMatch: text(candidate.setCodeMatch),
+      exactSetCodeMatch: Boolean(candidate.exactSetCodeMatch),
+      verified: Boolean(candidate.verified && cleanProductId(candidate.cardmarketProductId))
+    };
+  }
+
+  function normalizePrintRecognition(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const status = text(value.mappingStatus).toLowerCase();
+    const rarityOptions = (Array.isArray(value.rarityOptions) ? value.rarityOptions : [])
+      .map(option => typeof option === 'string' ? { value: text(option), count: 0 } : { value: text(option?.value), count: Math.max(0, Math.round(Number(option?.count || 0))) })
+      .filter(option => option.value);
+    return {
+      setCode: text(value.setCode).toUpperCase(),
+      setCodeConfidence: finite(value.setCodeConfidence) === null ? null : Math.max(0, Math.min(100, Math.round(Number(value.setCodeConfidence) * 10) / 10)),
+      setCodeSignals: (Array.isArray(value.setCodeSignals) ? value.setCodeSignals : []).map(normalizeSetCodeSignal).filter(Boolean),
+      setCodeValidationStatus: text(value.setCodeValidationStatus),
+      setCodeValidationMethod: text(value.setCodeValidationMethod),
+      setCodeValidationCandidates: (Array.isArray(value.setCodeValidationCandidates) ? value.setCodeValidationCandidates : []).map(text).filter(Boolean),
+      mappingStatus: ['exact', 'likely', 'unresolved'].includes(status) ? status : 'unresolved',
+      resolutionStatus: text(value.resolutionStatus) || 'unreadable_set_code',
+      rarityOptions,
+      selectedRarity: text(value.selectedRarity),
+      suggestedRarity: text(value.suggestedRarity),
+      unknownRarityValue: text(value.unknownRarityValue),
+      selectedCandidateId: text(value.selectedCandidateId),
+      selectedVersion: text(value.selectedVersion),
+      suggestedCandidateId: text(value.suggestedCandidateId),
+      referenceCandidates: (Array.isArray(value.referenceCandidates) ? value.referenceCandidates : []).map(normalizeReferenceCandidate).filter(Boolean),
+      variantCandidates: (Array.isArray(value.variantCandidates) ? value.variantCandidates : []).map(normalizeReferenceCandidate).filter(Boolean),
+      requiresRaritySelection: Boolean(value.requiresRaritySelection),
+      requiresVersionSelection: Boolean(value.requiresVersionSelection),
+      detailPhotoStatus: text(value.detailPhotoStatus),
+      detailPhotoReason: text(value.detailPhotoReason),
+      manualSelectionProtected: Boolean(value.manualSelectionProtected),
+      updatedAt: text(value.updatedAt)
     };
   }
 
@@ -212,8 +297,11 @@
             conflicts: Array.isArray(observation.nameRecognition.conflicts) ? observation.nameRecognition.conflicts.map(text).filter(Boolean) : []
           }
         : undefined,
+      printRecognition: normalizePrintRecognition(observation?.printRecognition),
       economicRelevant: Boolean(observation?.economicRelevant),
       detailPhotoRequired: Boolean(observation?.detailPhotoRequired),
+      detailPhotoStatus: text(observation?.detailPhotoStatus),
+      detailPhotoReason: text(observation?.detailPhotoReason),
       reviewStatus: normalizeReviewStatus(observation?.reviewStatus),
       physicalCardId: text(observation?.physicalCardId),
       linkedCollectionItemId: text(observation?.linkedCollectionItemId),
@@ -329,6 +417,29 @@
     };
   }
 
+  function choosePreferredRecognitionSource(analysis = {}, targetObservation = {}) {
+    const photos = Array.isArray(analysis?.photos) ? analysis.photos : [];
+    const observations = Array.isArray(analysis?.photoObservations) ? analysis.photoObservations : [];
+    const targetId = text(targetObservation?.id);
+    const physicalCardId = text(targetObservation?.physicalCardId);
+    const candidates = observations.filter(row => {
+      if (row?.detectionReviewState === 'rejected') return false;
+      if (text(row?.id) === targetId) return true;
+      return Boolean(physicalCardId && text(row?.physicalCardId) === physicalCardId);
+    }).map(observation => {
+      const photo = photos.find(row => text(row?.id) === text(observation?.photoId));
+      const box = normalizeBoundingBox(observation?.boundingBox);
+      if (!photo || !box) return null;
+      const pixelWidth = Math.max(0, Number(photo.width || 0) * box.width);
+      const pixelHeight = Math.max(0, Number(photo.height || 0) * box.height);
+      const explicitDetail = Boolean(photo.isDetailPhoto || ['detail', 'detail_photo'].includes(text(photo.photoType || photo.kind).toLowerCase()));
+      const coverage = box.width * box.height;
+      const score = Math.min(pixelWidth / 420, pixelHeight / 615) + Math.min(1, coverage * 2) + (explicitDetail ? 4 : 0);
+      return { photo, observation, pixelWidth, pixelHeight, explicitDetail, score };
+    }).filter(Boolean).sort((left, right) => right.score - left.score || Number(right.explicitDetail) - Number(left.explicitDetail));
+    return candidates[0] || null;
+  }
+
   function removePhotoEvidence(analysis = {}, photoId = '') {
     const target = text(photoId);
     return {
@@ -342,6 +453,25 @@
 
   function isPrintExplicitlyConfirmed(observation = {}) {
     return normalizeConfidence(observation.printConfidence) === 'confirmed' && Boolean(cleanProductId(observation.selectedProductId));
+  }
+
+  function mergeAutomaticPrintRecognition(observation = {}, incoming = {}) {
+    if (!observation || typeof observation !== 'object') return observation;
+    const previous = normalizePrintRecognition(observation.printRecognition) || {};
+    const next = normalizePrintRecognition(incoming) || normalizePrintRecognition({});
+    const protectedPrint = isPrintExplicitlyConfirmed(observation);
+    const selectedRarity = protectedPrint ? previous.selectedRarity : (next.selectedRarity || previous.selectedRarity || '');
+    const selectedCandidateId = protectedPrint ? previous.selectedCandidateId : (next.selectedCandidateId || previous.selectedCandidateId || '');
+    const selectedVersion = protectedPrint ? previous.selectedVersion : (next.selectedVersion || previous.selectedVersion || '');
+    observation.printRecognition = {
+      ...next,
+      selectedRarity,
+      selectedCandidateId,
+      selectedVersion,
+      manualSelectionProtected: protectedPrint,
+      updatedAt: text(incoming.updatedAt) || new Date().toISOString()
+    };
+    return observation;
   }
 
   return Object.freeze({
@@ -359,6 +489,9 @@
     normalizeSceneAnalysis,
     normalizeNameCandidate,
     normalizePrintCandidate,
+    normalizeSetCodeSignal,
+    normalizeReferenceCandidate,
+    normalizePrintRecognition,
     normalizePhoto,
     normalizeObservation,
     normalizePhysicalCard,
@@ -366,7 +499,9 @@
     boundingBoxIoU,
     mergeDetectionSuggestions,
     summarizePhotoEvidence,
+    choosePreferredRecognitionSource,
     removePhotoEvidence,
-    isPrintExplicitlyConfirmed
+    isPrintExplicitlyConfirmed,
+    mergeAutomaticPrintRecognition
   });
 });

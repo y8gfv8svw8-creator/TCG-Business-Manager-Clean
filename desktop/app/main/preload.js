@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   getSnapshotDates: payload => ipcRenderer.invoke('data:get-snapshot-dates', payload),
   getCardmarketCacheSeed: payload => ipcRenderer.invoke('data:get-cardmarket-cache-seed', payload),
   findPrintCandidates: payload => ipcRenderer.invoke('print-reference:find-candidates', payload),
+  resolveCollectionPrintRecognition: payload => ipcRenderer.invoke('print-reference:resolve-collection-recognition', payload),
   clearMarketData: () => ipcRenderer.invoke('data:clear-market-data'),
   recordImportRun: run => ipcRenderer.invoke('data:record-import-run', run),
   parsePurchasePriceFile: payload => ipcRenderer.invoke('import:parse-purchase-price-file', payload),

@@ -6,6 +6,8 @@ const cardSearch = require('../app/shared/card-search');
 const { normalizeTreatment, parsePrintSetCode } = require('../app/main/print-reference-database');
 
 const DATA_SOURCE = 'YGOPRODeck cardinfo v7 + Cardmarket products_singles_3';
+const REFERENCE_SCHEMA_VERSION = 3;
+const VERIFIED_VARIANT_STATUS = 'verified';
 
 // Ausschliesslich die im Audit vom 25.09.2026 einzeln bestaetigten Restfaelle.
 // Die vollstaendige Kombination aus YGOPRODeck-ID, Namen und Prints verhindert,
@@ -1131,12 +1133,186 @@ function applySafeCardmarketProductMappings(database, cardmarketCatalog = {}) {
   };
 }
 
+function createVariantLayerSchema(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS reference_cardmarket_variants (
+      variant_id INTEGER PRIMARY KEY,
+      position_id INTEGER NOT NULL,
+      set_code TEXT NOT NULL,
+      cardmarket_product_id TEXT NOT NULL UNIQUE,
+      version TEXT NOT NULL,
+      rarity TEXT NOT NULL,
+      rarity_key TEXT NOT NULL,
+      cardmarket_product_name TEXT NOT NULL,
+      product_url TEXT NOT NULL,
+      product_slug TEXT NOT NULL,
+      expansion TEXT NOT NULL,
+      source TEXT NOT NULL,
+      verified_at TEXT NOT NULL,
+      verification_status TEXT NOT NULL CHECK(verification_status = 'verified'),
+      treatment TEXT,
+      treatment_source TEXT,
+      artwork TEXT,
+      artwork_source TEXT,
+      UNIQUE(set_code, version, rarity, cardmarket_product_id),
+      FOREIGN KEY(position_id) REFERENCES reference_set_positions(position_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reference_variants_position
+      ON reference_cardmarket_variants(position_id);
+    CREATE INDEX IF NOT EXISTS idx_reference_variants_set_code
+      ON reference_cardmarket_variants(set_code);
+    CREATE INDEX IF NOT EXISTS idx_reference_variants_set_code_rarity
+      ON reference_cardmarket_variants(set_code, rarity_key);
+  `);
+}
+
+function normalizeVerifiedVariant(record = {}) {
+  const productId = String(record.cardmarketProductId ?? '').trim();
+  const setCode = String(record.setCode || '').trim().toUpperCase();
+  const parsedSetCode = parsePrintSetCode(setCode);
+  const version = String(record.version || '').trim();
+  const rarity = String(record.rarity || '').trim();
+  const productName = String(record.cardmarketProductName || '').trim();
+  const productUrl = String(record.productUrl || '').trim();
+  const productSlug = String(record.productSlug || '').trim();
+  const expansion = String(record.expansion || '').trim();
+  const source = String(record.source || '').trim();
+  const verifiedAt = String(record.verifiedAt || '').trim();
+  const verificationStatus = String(record.verificationStatus || '').trim().toLowerCase();
+  const treatment = String(record.treatment || '').trim() || null;
+  const treatmentSource = String(record.treatmentSource || '').trim() || null;
+  const artwork = String(record.artwork || '').trim() || null;
+  const artworkSource = String(record.artworkSource || '').trim() || null;
+
+  if (!/^\d+$/.test(productId)) throw new Error('Verifizierte Cardmarket-Variante ohne gueltige Produkt-ID.');
+  if (!parsedSetCode) throw new Error(`Verifizierte Cardmarket-Variante mit ungueltigem Setcode: ${setCode || '(leer)'}.`);
+  if (!/^V\.\d+$/i.test(version)) throw new Error(`Verifizierte Cardmarket-Variante mit ungueltiger Version: ${version || '(leer)'}.`);
+  if (!rarity || !productName || !productSlug || !expansion || !verifiedAt) {
+    throw new Error(`Verifizierte Cardmarket-Variante ${productId} ist unvollstaendig.`);
+  }
+  if (verificationStatus !== VERIFIED_VARIANT_STATUS) {
+    throw new Error(`Cardmarket-Variante ${productId} ist nicht extern als verified belegt.`);
+  }
+  for (const [label, value] of [['Produkt-URL', productUrl], ['Quelle', source]]) {
+    let parsedUrl;
+    try { parsedUrl = new URL(value); } catch { throw new Error(`${label} der Variante ${productId} ist ungueltig.`); }
+    if (parsedUrl.protocol !== 'https:' || !/(^|\.)cardmarket\.com$/i.test(parsedUrl.hostname)) {
+      throw new Error(`${label} der Variante ${productId} ist keine Cardmarket-HTTPS-Adresse.`);
+    }
+  }
+  if (!productUrl.endsWith(`/${productSlug}`)) {
+    throw new Error(`Cardmarket-Produkt-URL und Slug der Variante ${productId} stimmen nicht ueberein.`);
+  }
+  if (treatment && !treatmentSource) {
+    throw new Error(`Treatment der Variante ${productId} besitzt keinen ausdruecklichen Beleg.`);
+  }
+  if (artwork && !artworkSource) {
+    throw new Error(`Artwork der Variante ${productId} besitzt keinen ausdruecklichen Beleg.`);
+  }
+  return {
+    productId,
+    setCode,
+    parsedSetCode,
+    version: version.toUpperCase(),
+    rarity,
+    rarityKey: cardSearch.normalizeCompact(rarity),
+    productName,
+    productUrl,
+    productSlug,
+    expansion,
+    source,
+    verifiedAt,
+    verificationStatus,
+    treatment,
+    treatmentSource,
+    artwork,
+    artworkSource
+  };
+}
+
+function insertVerifiedCardmarketVariants(database, variants = []) {
+  createVariantLayerSchema(database);
+  const findPosition = database.prepare(`
+    SELECT DISTINCT sp.position_id AS positionId,
+           sp.collector_number AS collectorNumber,
+           sp.set_name AS setName
+    FROM reference_prints pr
+    JOIN reference_set_positions sp ON sp.position_id = pr.position_id
+    WHERE pr.known_set_code = ?
+  `);
+  const findExisting = database.prepare(`
+    SELECT set_code AS setCode, version, rarity,
+           cardmarket_product_name AS productName, product_url AS productUrl,
+           product_slug AS productSlug, expansion, source,
+           verified_at AS verifiedAt, verification_status AS verificationStatus,
+           treatment, treatment_source AS treatmentSource,
+           artwork, artwork_source AS artworkSource
+    FROM reference_cardmarket_variants
+    WHERE cardmarket_product_id = ?
+  `);
+  const insert = database.prepare(`
+    INSERT INTO reference_cardmarket_variants (
+      position_id, set_code, cardmarket_product_id, version, rarity,
+      rarity_key,
+      cardmarket_product_name, product_url, product_slug, expansion,
+      source, verified_at, verification_status,
+      treatment, treatment_source, artwork, artwork_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  let inserted = 0;
+  let unchanged = 0;
+  for (const input of Array.isArray(variants) ? variants : []) {
+    const variant = normalizeVerifiedVariant(input);
+    const positions = findPosition.all(variant.setCode);
+    if (positions.length !== 1) {
+      throw new Error(`Setcode ${variant.setCode} verweist nicht eindeutig auf eine Referenzposition.`);
+    }
+    if (String(positions[0].collectorNumber) !== variant.parsedSetCode.collectorNumber) {
+      throw new Error(`Collector Number der Variante ${variant.productId} passt nicht zur Referenzposition.`);
+    }
+    const existing = findExisting.get(variant.productId);
+    if (existing) {
+      const comparable = {
+        setCode: variant.setCode,
+        version: variant.version,
+        rarity: variant.rarity,
+        productName: variant.productName,
+        productUrl: variant.productUrl,
+        productSlug: variant.productSlug,
+        expansion: variant.expansion,
+        source: variant.source,
+        verifiedAt: variant.verifiedAt,
+        verificationStatus: variant.verificationStatus,
+        treatment: variant.treatment,
+        treatmentSource: variant.treatmentSource,
+        artwork: variant.artwork,
+        artworkSource: variant.artworkSource
+      };
+      if (JSON.stringify({ ...existing }) !== JSON.stringify(comparable)) {
+        throw new Error(`Verifizierte Cardmarket-Variante ${variant.productId} widerspricht dem vorhandenen Layer.`);
+      }
+      unchanged += 1;
+      continue;
+    }
+    insert.run(
+      positions[0].positionId, variant.setCode, variant.productId,
+      variant.version, variant.rarity, variant.rarityKey, variant.productName,
+      variant.productUrl, variant.productSlug, variant.expansion,
+      variant.source, variant.verifiedAt, variant.verificationStatus,
+      variant.treatment, variant.treatmentSource, variant.artwork, variant.artworkSource
+    );
+    inserted += 1;
+  }
+  return { inserted, unchanged, total: inserted + unchanged };
+}
+
 function createSchema(database) {
   database.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = DELETE;
     PRAGMA synchronous = FULL;
-    PRAGMA user_version = 2;
+    PRAGMA user_version = ${REFERENCE_SCHEMA_VERSION};
 
     CREATE TABLE reference_metadata (
       key TEXT PRIMARY KEY,
@@ -1201,6 +1377,7 @@ function createSchema(database) {
     CREATE INDEX idx_reference_prints_cardmarket
       ON reference_prints(cardmarket_product_id);
   `);
+  createVariantLayerSchema(database);
 }
 
 function buildPrintReferenceDatabase({
@@ -1208,6 +1385,7 @@ function buildPrintReferenceDatabase({
   germanCards = [],
   cardmarketCatalog = {},
   versionInfo = {},
+  verifiedVariants = [],
   outputPath,
   sourceMetadata = {}
 } = {}) {
@@ -1317,6 +1495,7 @@ function buildPrintReferenceDatabase({
       exactCardmarketCount = mappingReport.after.exact;
       likelyCount = mappingReport.after.likely;
       unresolvedCount = mappingReport.after.unresolved;
+      const variantReport = insertVerifiedCardmarketVariants(database, verifiedVariants);
 
       const revisionRow = Array.isArray(versionInfo) ? versionInfo[0] : versionInfo;
       const revision = String(revisionRow?.database_version || revisionRow?.version || 'unbekannt');
@@ -1350,6 +1529,8 @@ function buildPrintReferenceDatabase({
         unresolved_audited_expansion_resolved_count: mappingReport.unresolvedResolution.audited.resolved.expansion,
         unresolved_audited_skill_resolved_count: mappingReport.unresolvedResolution.audited.resolved.skill,
         unresolved_audited_safe_resolved_count: mappingReport.unresolvedResolution.audited.resolved.total,
+        verified_cardmarket_variant_count: variantReport.total,
+        verified_cardmarket_variant_source: variantReport.total ? 'externally verified Cardmarket product pages' : '',
         set_code_rarity_collision_count: mappingReport.collisions.length,
         cardmarket_exact_matching_rule: 'unique complete signature, conservative contextual 1:1 reconciliation, safe compact/audited name normalization, audited historical/expansion identity or explicit Skill context; product exact only with one print + one product',
         ...sourceMetadata
@@ -1359,7 +1540,7 @@ function buildPrintReferenceDatabase({
       database.exec('PRAGMA optimize;');
       report = {
         outputPath: targetPath,
-        schemaVersion: 2,
+        schemaVersion: REFERENCE_SCHEMA_VERSION,
         metacardCount,
         printCount,
         setPositionCount,
@@ -1374,6 +1555,7 @@ function buildPrintReferenceDatabase({
         exactExpansionCount: mappingReport.exactExpansionCount,
         contextualExpansionCount: mappingReport.contextualExpansionCount,
         unresolvedResolution: mappingReport.unresolvedResolution,
+        verifiedCardmarketVariantCount: variantReport.total,
         setCodeRarityCollisionCount: mappingReport.collisions.length,
         source: DATA_SOURCE,
         sourceRevision: revision
@@ -1495,6 +1677,77 @@ function existingSafeResolutionReport(database) {
   };
 }
 
+function referenceCoreDigest(database) {
+  const hash = crypto.createHash('sha256');
+  for (const table of ['reference_metacards', 'reference_set_positions', 'reference_prints']) {
+    hash.update(`${table}\n`);
+    for (const row of database.prepare(`SELECT * FROM ${table} ORDER BY 1`).iterate()) {
+      hash.update(JSON.stringify({ ...row }));
+      hash.update('\n');
+    }
+  }
+  return hash.digest('hex');
+}
+
+function applyVerifiedCardmarketVariantLayer({ databasePath, variants = [], variantsPath = '' } = {}) {
+  if (!databasePath) throw new Error('Pfad zur Print-Referenz fehlt.');
+  const targetPath = path.resolve(databasePath);
+  if (!fs.existsSync(targetPath)) throw new Error(`Print-Referenz fehlt: ${targetPath}`);
+  const temporaryPath = `${targetPath}.variants.new`;
+  fs.rmSync(temporaryPath, { force: true });
+  fs.copyFileSync(targetPath, temporaryPath);
+  const database = new DatabaseSync(temporaryPath);
+  let report;
+  let completed = false;
+  try {
+    database.exec('PRAGMA foreign_keys = ON;');
+    const schemaVersion = Number(database.prepare('PRAGMA user_version').get()?.user_version || 0);
+    if (![2, REFERENCE_SCHEMA_VERSION].includes(schemaVersion)) {
+      throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
+    }
+    const coreDigestBefore = referenceCoreDigest(database);
+    database.exec('BEGIN IMMEDIATE;');
+    try {
+      createVariantLayerSchema(database);
+      report = insertVerifiedCardmarketVariants(database, variants);
+      upsertMetadata(database, 'verified_cardmarket_variant_count', report.total);
+      upsertMetadata(database, 'verified_cardmarket_variant_source', report.total ? 'externally verified Cardmarket product pages' : '');
+      upsertMetadata(database, 'verified_cardmarket_variant_updated_at', new Date().toISOString());
+      if (variantsPath) upsertMetadata(database, 'verified_cardmarket_variant_source_sha256', sha256File(variantsPath));
+      database.exec(`PRAGMA user_version = ${REFERENCE_SCHEMA_VERSION};`);
+      database.exec('COMMIT;');
+      database.exec('PRAGMA optimize;');
+    } catch (error) {
+      database.exec('ROLLBACK;');
+      throw error;
+    }
+    const coreDigestAfter = referenceCoreDigest(database);
+    if (coreDigestAfter !== coreDigestBefore) {
+      throw new Error('Der Variant-Layer hat bestehende Print-Referenzdaten veraendert.');
+    }
+    const integrity = String(database.prepare('PRAGMA integrity_check').get()?.integrity_check || '');
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (integrity !== 'ok' || foreignKeyErrors.length) {
+      throw new Error(`Print-Referenzpruefung fehlgeschlagen: ${integrity || 'unbekannt'}, FK ${foreignKeyErrors.length}.`);
+    }
+    report = {
+      databasePath: targetPath,
+      schemaVersion: REFERENCE_SCHEMA_VERSION,
+      coreDigest: coreDigestAfter,
+      integrity,
+      foreignKeyErrors: foreignKeyErrors.length,
+      ...report
+    };
+    completed = true;
+  } finally {
+    database.close();
+    if (!completed) fs.rmSync(temporaryPath, { force: true });
+  }
+  fs.rmSync(targetPath, { force: true });
+  fs.renameSync(temporaryPath, targetPath);
+  return report;
+}
+
 function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, catalogPath = '' } = {}) {
   if (!databasePath) throw new Error('Pfad zur Print-Referenz fehlt.');
   const targetPath = path.resolve(databasePath);
@@ -1506,7 +1759,9 @@ function remapExistingPrintReference({ databasePath, cardmarketCatalog = {}, cat
   let report;
   try {
     const schemaVersion = Number(database.prepare('PRAGMA user_version').get()?.user_version || 0);
-    if (schemaVersion !== 2) throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
+    if (![2, REFERENCE_SCHEMA_VERSION].includes(schemaVersion)) {
+      throw new Error(`Unbekannte Print-Referenzversion: ${schemaVersion}.`);
+    }
     database.exec('BEGIN IMMEDIATE;');
     try {
       const auditedRuleApplied = metadataNumber(database, 'unresolved_audited_rule_version', -1) >= 0;
@@ -1568,6 +1823,20 @@ function parseJson(filePath) {
 
 function main() {
   const args = process.argv.slice(2);
+  if (args[0] === '--apply-verified-variants') {
+    const [, databasePath, variantsPath] = args;
+    if (!databasePath || !variantsPath) {
+      throw new Error('Aufruf: build-print-reference.js --apply-verified-variants <print-reference.sqlite> <verified-variants.json>');
+    }
+    const payload = parseJson(variantsPath);
+    const report = applyVerifiedCardmarketVariantLayer({
+      databasePath,
+      variants: payload.variants || payload,
+      variantsPath
+    });
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
   if (args[0] === '--remap-existing') {
     const [, databasePath, cardmarketPath] = args;
     if (!databasePath || !cardmarketPath) {
@@ -1581,19 +1850,21 @@ function main() {
     console.log(JSON.stringify(report, null, 2));
     return;
   }
-  const [englishPath, germanPath, cardmarketPath, versionPath, outputPath] = args;
+  const [englishPath, germanPath, cardmarketPath, versionPath, outputPath, verifiedVariantsPath] = args;
   if (![englishPath, germanPath, cardmarketPath, versionPath, outputPath].every(Boolean)) {
-    throw new Error('Aufruf: build-print-reference.js <ygoprodeck-en.json> <ygoprodeck-de.json> <products_singles_3.json> <ygoprodeck-version.json> <output.sqlite>');
+    throw new Error('Aufruf: build-print-reference.js <ygoprodeck-en.json> <ygoprodeck-de.json> <products_singles_3.json> <ygoprodeck-version.json> <output.sqlite> [verified-variants.json]');
   }
   const englishPayload = parseJson(englishPath);
   const germanPayload = parseJson(germanPath);
   const cardmarketCatalog = parseJson(cardmarketPath);
   const versionInfo = parseJson(versionPath);
+  const verifiedVariantsPayload = verifiedVariantsPath ? parseJson(verifiedVariantsPath) : [];
   const report = buildPrintReferenceDatabase({
     englishCards: englishPayload.data || englishPayload,
     germanCards: germanPayload.data || germanPayload,
     cardmarketCatalog,
     versionInfo,
+    verifiedVariants: verifiedVariantsPayload.variants || verifiedVariantsPayload,
     outputPath,
     sourceMetadata: {
       ygoprodeck_en_sha256: sha256File(englishPath),
@@ -1601,6 +1872,7 @@ function main() {
       cardmarket_catalog_sha256: sha256File(cardmarketPath),
       cardmarket_catalog_version: String(cardmarketCatalog?.version || ''),
       cardmarket_catalog_created_at: String(cardmarketCatalog?.createdAt || ''),
+      verified_cardmarket_variant_source_sha256: verifiedVariantsPath ? sha256File(verifiedVariantsPath) : '',
       ygoprodeck_url: 'https://db.ygoprodeck.com/api/v7/cardinfo.php',
       ygoprodeck_de_url: 'https://db.ygoprodeck.com/api/v7/cardinfo.php?language=de'
     }
@@ -1613,6 +1885,8 @@ if (require.main === module) main();
 module.exports = {
   AUDITED_UNRESOLVED_METACARD_MAPPINGS,
   DATA_SOURCE,
+  REFERENCE_SCHEMA_VERSION,
+  applyVerifiedCardmarketVariantLayer,
   applyAuditedUnresolvedMetacardMappings,
   applySafeUnresolvedMetacardMappings,
   applySafeContextualCardmarketProductMappings,
@@ -1625,6 +1899,8 @@ module.exports = {
   cardmarketIndex,
   findSetCodeRarityCollisions,
   mappingStatusCounts,
+  insertVerifiedCardmarketVariants,
+  normalizeVerifiedVariant,
   remapExistingPrintReference,
   sourceTreatment,
   uniquePrintRows

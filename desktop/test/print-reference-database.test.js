@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 const { TcgDatabase } = require('../app/main/database');
 const {
@@ -13,6 +14,7 @@ const {
 const {
   buildPrintReferenceDatabase,
   findSetCodeRarityCollisions,
+  applyVerifiedCardmarketVariantLayer,
   remapExistingPrintReference
 } = require('../scripts/build-print-reference');
 
@@ -305,6 +307,90 @@ test('eindeutiger Setcode liefert genau den zugehörigen Print', t => {
   assert.equal(result[0].englishName, 'Example Dragon');
   assert.equal(result[0].cardmarketProductId, '900001');
   assert.equal(result[0].matchStatus, 'exact');
+});
+
+test('extern belegte Cardmarket-Varianten liegen separat und veraendern keine Printzeile', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-variants-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  buildPrintReferenceDatabase({ ...fixturePayload(), outputPath: databasePath });
+
+  const coreRows = database => JSON.stringify({
+    metacards: database.prepare('SELECT * FROM reference_metacards ORDER BY 1').all(),
+    positions: database.prepare('SELECT * FROM reference_set_positions ORDER BY 1').all(),
+    prints: database.prepare('SELECT * FROM reference_prints ORDER BY 1').all()
+  });
+  let raw = new DatabaseSync(databasePath, { readOnly: true });
+  const before = crypto.createHash('sha256').update(coreRows(raw)).digest('hex');
+  raw.close();
+
+  const verifiedVariant = {
+    setCode: 'EOJ-EN033',
+    cardmarketProductId: '990001',
+    version: 'V.1',
+    rarity: 'Rare',
+    cardmarketProductName: 'Example Dragon (V.1 - Rare)',
+    productUrl: 'https://www.cardmarket.com/en/YuGiOh/Products/Singles/Enemy-of-Justice/Example-Dragon-V1-Rare',
+    productSlug: 'Example-Dragon-V1-Rare',
+    expansion: 'Enemy of Justice',
+    source: 'https://www.cardmarket.com/en/YuGiOh/Products?idProduct=990001',
+    verifiedAt: '2026-09-25T19:48:42+02:00',
+    verificationStatus: 'verified'
+  };
+  const report = applyVerifiedCardmarketVariantLayer({
+    databasePath,
+    variants: [verifiedVariant]
+  });
+  assert.equal(report.inserted, 1);
+  assert.equal(report.integrity, 'ok');
+  assert.equal(report.foreignKeyErrors, 0);
+
+  raw = new DatabaseSync(databasePath, { readOnly: true });
+  const after = crypto.createHash('sha256').update(coreRows(raw)).digest('hex');
+  raw.close();
+  assert.equal(after, before);
+
+  const reference = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => {
+    reference.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const variants = reference.findCardmarketVariants({ setCode: 'EOJ-DE033', rarity: 'Rare' });
+  assert.equal(variants.length, 1);
+  assert.equal(variants[0].cardmarketProductId, '990001');
+  assert.equal(variants[0].version, 'V.1');
+  assert.equal(variants[0].verificationStatus, 'verified');
+  assert.equal(variants[0].setCodeMatch, 'collector_fallback');
+  assert.equal(variants[0].treatment, null);
+  assert.equal(variants[0].artwork, null);
+  assert.equal(reference.findPrintCandidates({ setCode: 'EOJ-EN033' })[0].cardmarketProductId, '900001');
+  assert.equal(reference.getStats().verifiedCardmarketVariantCount, 1);
+});
+
+test('unbelegte Variantendaten und erfundene Treatments werden abgewiesen', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-print-variant-reject-'));
+  const databasePath = path.join(root, 'print-reference.sqlite');
+  buildPrintReferenceDatabase({ ...fixturePayload(), outputPath: databasePath });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = {
+    setCode: 'EOJ-EN033',
+    cardmarketProductId: '990002',
+    version: 'V.1',
+    rarity: 'Rare',
+    cardmarketProductName: 'Example Dragon (V.1 - Rare)',
+    productUrl: 'https://www.cardmarket.com/en/YuGiOh/Products/Singles/Enemy-of-Justice/Example-Dragon-V1-Rare',
+    productSlug: 'Example-Dragon-V1-Rare',
+    expansion: 'Enemy of Justice',
+    source: 'https://www.cardmarket.com/en/YuGiOh/Products?idProduct=990002',
+    verifiedAt: '2026-09-25T19:48:42+02:00'
+  };
+  assert.throws(() => applyVerifiedCardmarketVariantLayer({
+    databasePath,
+    variants: [{ ...base, verificationStatus: 'unverified' }]
+  }), /nicht extern als verified belegt/);
+  assert.throws(() => applyVerifiedCardmarketVariantLayer({
+    databasePath,
+    variants: [{ ...base, verificationStatus: 'verified', treatment: 'overframe' }]
+  }), /keinen ausdruecklichen Beleg/);
 });
 
 test('deutscher und englischer Setcode derselben Position liefern denselben Print', t => {
@@ -688,4 +774,134 @@ test('gebündelte Referenz dokumentiert die neun bekannten Setcode-Raritäts-Kol
   assert.equal(collisions.length, 9);
   assert.ok(collisions.some(row => row.setCode === 'BLCR-EN012'));
   assert.ok(collisions.every(row => row.candidateCount === 2));
+});
+
+test('gebündelte Referenz enthält nur die extern belegten Pilotvarianten im separaten Layer', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+  const stats = database.getStats();
+  assert.equal(stats.schemaVersion, 3);
+  assert.equal(stats.cardmarketVariantCount, 10);
+  assert.equal(stats.verifiedCardmarketVariantCount, 10);
+
+  const witness = database.findCardmarketVariants({ setCode: 'CORI-EN081' });
+  assert.deepEqual(witness.map(row => [row.version, row.rarity, row.cardmarketProductId]), [
+    ['V.1', 'Ultra Rare', '894816'],
+    ['V.2', 'Ultra Rare', '894817'],
+    ['V.3', 'Starlight Rare', '894818']
+  ]);
+  const mamo = database.findCardmarketVariants({ setCode: 'MAMO-EN004' });
+  assert.deepEqual(mamo.map(row => [row.version, row.rarity, row.cardmarketProductId]), [
+    ['V.1', 'Ultra Rare', '904546'],
+    ['V.2', 'Ultra Rare', '904547'],
+    ['V.3', 'Starlight Rare', '904548'],
+    ['V.4', 'Grand Master Rare', '904549']
+  ]);
+  assert.equal(mamo.some(row => row.rarity === 'New'), false);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'CORI-EN004' })
+    .map(row => row.cardmarketProductId), ['894691', '894692']);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'RA01-EN019' })
+    .map(row => row.cardmarketProductId), ['741301']);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'RA02-EN001' }), []);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'DLCS-EN006' }), []);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'LDS2-EN001' }), []);
+});
+
+test('Sammlungsankauf löst eindeutige, mehrdeutige und historische Setcodes konservativ auf', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+
+  const exact = database.resolveCollectionRecognition({ setCode: 'RA01-EN019', setCodeConfidence: 91.28, rarity: 'Super Rare' });
+  assert.equal(exact.mappingStatus, 'exact');
+  assert.equal(exact.resolutionStatus, 'unique_candidate');
+  assert.equal(exact.setCodeConfidence, 91.3);
+  assert.equal(exact.variantCandidates[0].cardmarketProductId, '741301');
+  assert.equal(exact.suggestedCandidateId, exact.variantCandidates[0].id);
+
+  const multipleRarities = database.resolveCollectionRecognition({ setCode: 'CORI-EN081', setCodeConfidence: 82 });
+  assert.equal(multipleRarities.requiresRaritySelection, true);
+  assert.deepEqual(multipleRarities.rarityOptions.map(row => row.value), ['Starlight Rare', 'Ultra Rare']);
+  assert.deepEqual(multipleRarities.variantCandidates, []);
+
+  const witnessUltra = database.resolveCollectionRecognition({ setCode: 'CORI-EN081', rarity: 'Ultra Rare' });
+  assert.equal(witnessUltra.requiresVersionSelection, true);
+  assert.deepEqual(witnessUltra.variantCandidates.map(row => [row.version, row.cardmarketProductId]), [['V.1', '894816'], ['V.2', '894817']]);
+  const witnessStarlight = database.resolveCollectionRecognition({ setCode: 'CORI-EN081', rarity: 'Starlight Rare' });
+  assert.deepEqual(witnessStarlight.variantCandidates.map(row => row.version), ['V.3']);
+  assert.equal(witnessStarlight.resolutionStatus, 'unique_candidate');
+
+  const legacy = database.resolveCollectionRecognition({ setCode: 'LON-G006', rarity: 'Super Rare' });
+  assert.equal(legacy.referenceCandidates[0].setCodeMatch, 'legacy_alias');
+  assert.notEqual(legacy.mappingStatus, 'exact');
+
+  const unreadable = database.resolveCollectionRecognition({ setCode: 'nicht lesbar', setCodeConfidence: 12 });
+  assert.equal(unreadable.resolutionStatus, 'unreadable_set_code');
+  assert.deepEqual(unreadable.referenceCandidates, []);
+});
+
+test('MAMO New wird keiner der vier verifizierten Versionen zugeordnet', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+
+  const all = database.resolveCollectionRecognition({ setCode: 'MAMO-EN004' });
+  assert.equal(all.requiresRaritySelection, true);
+  assert.deepEqual(database.findCardmarketVariants({ setCode: 'MAMO-EN004' }).map(row => row.version), ['V.1', 'V.2', 'V.3', 'V.4']);
+  const unknown = database.resolveCollectionRecognition({ setCode: 'MAMO-EN004', rarity: 'New' });
+  assert.equal(unknown.resolutionStatus, 'unverified_rarity');
+  assert.equal(unknown.mappingStatus, 'unresolved');
+  assert.deepEqual(unknown.variantCandidates, []);
+  assert.equal(unknown.suggestedCandidateId, '');
+});
+
+test('Setcode-OCR akzeptiert nur exakte oder eindeutig referenzkorrigierte Codes', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+
+  const exact = database.validateOcrSetCodeReadings([
+    { text: 'CORI-EN081', confidence: 87.3, variant: 'standard-original' }
+  ]);
+  assert.equal(exact.accepted, true);
+  assert.equal(exact.status, 'setcode_exact');
+  assert.equal(exact.setCode, 'CORI-EN081');
+  assert.equal(exact.method, 'exact_known_set_code');
+
+  const physicalGermanAlias = database.validateOcrSetCodeReadings([
+    { text: 'CORI-DE081', confidence: 81, variant: 'standard-grayscale' }
+  ]);
+  assert.equal(physicalGermanAlias.accepted, true);
+  assert.equal(physicalGermanAlias.setCode, 'CORI-DE081');
+  assert.equal(physicalGermanAlias.method, 'exact_reference_position');
+
+  const corrected = database.validateOcrSetCodeReadings([
+    { text: 'CORI-EN08I', confidence: 73, variant: 'standard-sharpened' }
+  ]);
+  assert.equal(corrected.accepted, true);
+  assert.equal(corrected.status, 'setcode_normalized_unique');
+  assert.equal(corrected.setCode, 'CORI-EN081');
+  assert.match(corrected.method, /^single_confusion_/);
+
+  const unknown = database.validateOcrSetCodeReadings([
+    { text: 'ZZZZ-EN999', confidence: 99, variant: 'standard-original' }
+  ]);
+  assert.equal(unknown.accepted, false);
+  assert.equal(unknown.status, 'setcode_unreadable');
+  assert.deepEqual(unknown.signals, []);
+});
+
+test('widersprüchliche bekannte OCR-Codes bleiben ungelöst', t => {
+  const databasePath = path.join(__dirname, '..', 'resources', 'print-reference.sqlite');
+  const database = new PrintReferenceDatabase({ databasePath }).open();
+  t.after(() => database.close());
+  const result = database.validateOcrSetCodeReadings([
+    { text: 'CORI-EN081', confidence: 82, variant: 'standard-original' },
+    { text: 'CORI-EN004', confidence: 79, variant: 'lower-contrast' }
+  ]);
+  assert.equal(result.accepted, false);
+  assert.equal(result.status, 'setcode_ambiguous');
+  assert.deepEqual(result.candidates, ['CORI-EN004', 'CORI-EN081']);
+  assert.deepEqual(result.signals, []);
 });

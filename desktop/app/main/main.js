@@ -11,7 +11,7 @@ const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
 const { PrintReferenceDatabase, resolveBundledPrintReferencePath } = require('./print-reference-database');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.5';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.6';
 const STARTUP_DIAGNOSTICS_ENABLED = process.env.TCG_STARTUP_DIAGNOSTICS === '1';
 const startupProcessStartedAt = performance.now();
 const startupTimings = [];
@@ -53,6 +53,19 @@ const scannerServer = new ScannerServer({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
   }
 });
+
+function ensurePrintReferenceDatabase() {
+  if (printReferenceDatabase) return printReferenceDatabase;
+  const referenceStartedAt = performance.now();
+  printReferenceDatabase = new PrintReferenceDatabase({
+    databasePath: resolveBundledPrintReferencePath({
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath
+    })
+  }).open();
+  recordStartupTiming({ name: 'print_reference_database_ready', durationMs: performance.now() - referenceStartedAt });
+  return printReferenceDatabase;
+}
 
 function ensureUserFolders() {
   // Der optionale Pfad ist ausschließlich für isolierte QA-/Entwicklungsstarts.
@@ -162,21 +175,79 @@ function setupIpcHandlers() {
         titleReadings.push({ text, confidence: recognition.confidence, variant: 'full-text-fallback' });
       }
     }
+    let setCodeValidation;
+    try {
+      setCodeValidation = ensurePrintReferenceDatabase().validateOcrSetCodeReadings(recognition.setCodeReadings || []);
+    } catch (error) {
+      setCodeValidation = {
+        accepted: false,
+        status: 'reference_unavailable',
+        setCode: '',
+        confidence: null,
+        method: '',
+        candidates: [],
+        signals: [],
+        error: error.message
+      };
+    }
+    const validatedSetCodes = setCodeValidation.accepted ? [setCodeValidation.setCode] : [];
+    const setCodeSignals = Array.isArray(setCodeValidation.signals) ? setCodeValidation.signals : [];
     const ranked = database.recognizeCardNames({
       readings: titleReadings,
-      setCodes: recognition.setCodes || [],
+      setCodes: validatedSetCodes,
       passcodes: recognition.passcodes || [],
       artworkFingerprints: payload.artworkFingerprints || [],
       limit: payload?.candidateLimit || 5
     });
+    const primarySetCodeSignal = setCodeSignals[0] || null;
+    let printRecognition;
+    try {
+      printRecognition = primarySetCodeSignal
+        ? ensurePrintReferenceDatabase().resolveCollectionRecognition({
+            setCode: primarySetCodeSignal.setCode,
+            setCodeConfidence: primarySetCodeSignal.confidence
+          })
+        : {
+            ...ensurePrintReferenceDatabase().resolveCollectionRecognition({}),
+            resolutionStatus: setCodeValidation.status === 'setcode_ambiguous' ? 'ambiguous_ocr_set_code' : 'unreadable_set_code',
+            detailPhotoStatus: 'detail-photo-needed',
+            detailPhotoReason: 'setcode_unreadable'
+          };
+    } catch (error) {
+      printRecognition = {
+        setCode: primarySetCodeSignal?.setCode || '',
+        setCodeConfidence: primarySetCodeSignal?.confidence ?? null,
+        mappingStatus: 'unresolved',
+        resolutionStatus: 'reference_unavailable',
+        rarityOptions: [],
+        referenceCandidates: [],
+        variantCandidates: [],
+        requiresRaritySelection: false,
+        requiresVersionSelection: false,
+        suggestedCandidateId: '',
+        error: error.message
+      };
+    }
     return {
       ...ranked,
+      printRecognition: {
+        ...printRecognition,
+        setCodeSignals,
+        setCodeValidationStatus: setCodeValidation.status,
+        setCodeValidationMethod: setCodeValidation.method,
+        setCodeValidationCandidates: setCodeValidation.candidates || [],
+        detailPhotoStatus: primarySetCodeSignal ? '' : (printRecognition.detailPhotoStatus || 'detail-photo-needed'),
+        detailPhotoReason: primarySetCodeSignal ? '' : (printRecognition.detailPhotoReason || 'setcode_unreadable')
+      },
       ocr: {
         engine: recognition.engine,
         durationMs: recognition.durationMs,
         confidence: recognition.confidence,
         titleReadings,
-        setCodes: recognition.setCodes || [],
+        setCodes: validatedSetCodes,
+        setCodeSignals,
+        setCodeReadings: recognition.setCodeReadings || [],
+        setCodeValidation,
         passcodes: recognition.passcodes || [],
         artworkFingerprints: payload.artworkFingerprints || [],
         regionResults: recognition.regionResults || []
@@ -214,16 +285,7 @@ function setupIpcHandlers() {
   ipcMain.handle('data:record-import-run', (_event, run) => database.recordImportRun(run));
   ipcMain.handle('print-reference:find-candidates', (_event, payload = {}) => {
     try {
-      if (!printReferenceDatabase) {
-        const referenceStartedAt = performance.now();
-        printReferenceDatabase = new PrintReferenceDatabase({
-          databasePath: resolveBundledPrintReferencePath({
-            packaged: app.isPackaged,
-            resourcesPath: process.resourcesPath
-          })
-        }).open();
-        recordStartupTiming({ name: 'print_reference_database_ready', durationMs: performance.now() - referenceStartedAt });
-      }
+      ensurePrintReferenceDatabase();
       const setCode = String(payload.setCode || '').trim().slice(0, 40);
       const rarity = String(payload.rarity || '').trim().slice(0, 120);
       const treatment = String(payload.treatment || '').trim().slice(0, 120);
@@ -236,6 +298,19 @@ function setupIpcHandlers() {
       };
     } catch (error) {
       return { ok: false, candidates: [], unique: false, error: error.message };
+    }
+  });
+  ipcMain.handle('print-reference:resolve-collection-recognition', (_event, payload = {}) => {
+    try {
+      const setCode = String(payload.setCode || '').trim().slice(0, 40);
+      const rarity = String(payload.rarity || '').trim().slice(0, 120);
+      const setCodeConfidence = payload.setCodeConfidence == null ? null : Number(payload.setCodeConfidence);
+      return {
+        ok: true,
+        recognition: ensurePrintReferenceDatabase().resolveCollectionRecognition({ setCode, setCodeConfidence, rarity })
+      };
+    } catch (error) {
+      return { ok: false, recognition: null, error: error.message };
     }
   });
   ipcMain.handle('import:parse-purchase-price-file', (_event, payload) => parseSpreadsheetFile(payload));

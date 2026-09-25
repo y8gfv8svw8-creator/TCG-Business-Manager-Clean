@@ -32,3 +32,19 @@ test('findet eine hochkant fotografierte Kartenfläche und berechnet wichtige Te
   assert.ok(setCode.top < footer.top);
   assert.ok(setCode.left > title.left);
 });
+
+test('entzerrt die erkannte Kartenfläche vollständig vor den Setcode-ROIs', () => {
+  const image = syntheticCardImage();
+  const corners = [
+    { x: image.card.left, y: image.card.top },
+    { x: image.card.left + image.card.width, y: image.card.top + 8 },
+    { x: image.card.left + image.card.width - 12, y: image.card.top + image.card.height },
+    { x: image.card.left + 6, y: image.card.top + image.card.height - 5 }
+  ];
+  const card = imageProcessing.rectifyObservationCard(image, corners, 0, 600);
+  assert.equal(card.height, 600);
+  assert.equal(card.width, Math.round(600 * imageProcessing.CARD_ASPECT));
+  assert.equal(card.data.length, card.width * card.height * 4);
+  assert.equal(imageProcessing.SET_CODE_REGION_LAYOUTS.length, 3);
+  assert.deepEqual(imageProcessing.SET_CODE_REGION_LAYOUTS.map(row => row.id), ['standard', 'upper', 'lower']);
+});

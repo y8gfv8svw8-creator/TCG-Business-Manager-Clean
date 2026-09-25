@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.13.5</title>
+  <title>TCG Business Manager 6.13.6</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.13.5 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.13.6 · SQLite</div>
         </div>
       </div>
 
@@ -629,11 +629,25 @@
                 <div id="collectionObservationNameCandidates" class="collection-candidate-list"></div>
                 <label>Sicherheit Kartenname<select id="collectionObservationNameConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
                 <hr />
+                <div class="collection-print-reference">
+                  <h4>Lokale Print-Referenz</h4>
+                  <div class="bbox-grid">
+                    <label>Erkannter Setcode<input id="collectionObservationSetCode" readonly placeholder="nicht lesbar" /></label>
+                    <label>Setcode-Confidence<input id="collectionObservationSetCodeConfidence" readonly placeholder="–" /></label>
+                    <label>Rarität<select id="collectionObservationReferenceRarity"><option value="">Noch nicht bestimmbar</option></select></label>
+                    <label>Version<select id="collectionObservationReferenceVersion"><option value="">Keine verifizierte Version gewählt</option></select></label>
+                    <label>Treatment<input id="collectionObservationReferenceTreatment" readonly placeholder="nicht belegt" /></label>
+                    <label>Cardmarket-ID<input id="collectionObservationReferenceProductId" readonly placeholder="nicht verifiziert" /></label>
+                  </div>
+                  <div id="collectionObservationPrintMappingStatus" class="collection-name-recognition-status muted">Noch kein Setcode geprüft.</div>
+                  <div id="collectionObservationReferenceCandidates" class="collection-candidate-list"></div>
+                </div>
+                <hr />
                 <label>Print suchen<input id="collectionObservationPrintSearch" placeholder="Set, Setnummer oder Produkt-ID …" autocomplete="off" /></label>
                 <div id="collectionObservationPrintResults" class="collection-candidate-results"></div>
                 <div id="collectionObservationPrintCandidates" class="collection-candidate-list"></div>
                 <label>Sicherheit Print<select id="collectionObservationPrintConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
-                <p class="muted">Ein gelesener Setcode ist nur ein Signal. Erst „Diesen Print bestätigen“ setzt einen Print ausdrücklich auf bestätigt.</p>
+                <p class="muted">Setcode, Rarität und Version bleiben Vorschläge. Erst „Diesen Print bestätigen“ setzt eine verifizierte Cardmarket-ID ausdrücklich auf bestätigt. Likely/unresolved: Ungeprüft - bitte selbst prüfen.</p>
                 <label>Erkennungssignale<textarea id="collectionObservationSignals" rows="2" placeholder="z. B. Setcode teilweise lesbar, Artwork passt"></textarea></label>
                 <label>Prüfstatus<select id="collectionObservationReviewStatus"><option value="unreviewed">Ungeprüft</option><option value="in_review">In Prüfung</option><option value="reviewed">Geprüft</option><option value="rejected">Verworfen</option></select></label>
                 <label class="switch-label"><input id="collectionObservationEconomicRelevant" type="checkbox" /> Wirtschaftlich relevant</label>

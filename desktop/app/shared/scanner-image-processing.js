@@ -12,11 +12,17 @@
     titleLower: { x: 0.020, y: 0.105, width: 0.92, height: 0.145, targetHeight: 220 },
     titleWide: { x: 0.010, y: 0.020, width: 0.96, height: 0.300, targetHeight: 260 },
     setCode: { x: 0.664, y: 0.6614, width: 0.222, height: 0.0369, targetHeight: 100 },
+    setCodeWide: { x: 0.48, y: 0.61, width: 0.48, height: 0.105, targetHeight: 150 },
     footer: { x: 0.014, y: 0.920, width: 0.359, height: 0.037, targetHeight: 100 },
     passcode: { x: 0.012, y: 0.862, width: 0.62, height: 0.118, targetHeight: 180 },
     artwork: { x: 0.10, y: 0.18, width: 0.80, height: 0.48, targetHeight: 420 },
     artworkWide: { x: 0.065, y: 0.145, width: 0.87, height: 0.545, targetHeight: 420 }
   });
+  const SET_CODE_REGION_LAYOUTS = Object.freeze([
+    Object.freeze({ id: "standard", x: 0.60, y: 0.650, width: 0.37, height: 0.045, targetHeight: 180 }),
+    Object.freeze({ id: "upper", x: 0.48, y: 0.620, width: 0.49, height: 0.060, targetHeight: 190 }),
+    Object.freeze({ id: "lower", x: 0.60, y: 0.665, width: 0.36, height: 0.045, targetHeight: 180 })
+  ]);
 
   const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 
@@ -2079,19 +2085,59 @@
     let height = box.height * imageHeight;
     const aspect = width / Math.max(1, height);
     if (aspect > CARD_ASPECT * 1.08) {
-      const expectedHeight = Math.min(imageHeight, width / CARD_ASPECT);
-      if (box.y + box.height >= 0.90) top = Math.max(0, top + height - expectedHeight);
-      else if (box.y <= 0.10) top = 0;
-      else top = Math.max(0, top - (expectedHeight - height) / 2);
-      height = Math.min(expectedHeight, imageHeight - top);
+      const expectedWidth = Math.min(width, height * CARD_ASPECT);
+      if (box.x <= 0.10) left += width - expectedWidth;
+      else if (box.x + box.width < 0.90) left += (width - expectedWidth) / 2;
+      width = expectedWidth;
     } else if (aspect < CARD_ASPECT * 0.90) {
-      const expectedWidth = Math.min(imageWidth, height * CARD_ASPECT);
-      if (box.x + box.width >= 0.90) left = Math.max(0, left + width - expectedWidth);
-      else if (box.x <= 0.10) left = 0;
-      else left = Math.max(0, left - (expectedWidth - width) / 2);
-      width = Math.min(expectedWidth, imageWidth - left);
+      const expectedHeight = Math.min(height, width / CARD_ASPECT);
+      if (box.y <= 0.10) top += height - expectedHeight;
+      else if (box.y + box.height < 0.90) top += (height - expectedHeight) / 2;
+      height = expectedHeight;
     }
     return axisAlignedCorners({ left, top, width, height });
+  }
+
+  function refinedObservationCorners(source, observation) {
+    const quadrilateral = normalizedQuadrilateral(observation?.quadrilateral);
+    if (quadrilateral) return quadrilateral.map(point => ({ x: point.x * source.width, y: point.y * source.height }));
+    const box = normalizedBoundingBox(observation?.boundingBox || observation);
+    if (!box) return [];
+    const initial = {
+      left: Math.round(box.x * source.width),
+      top: Math.round(box.y * source.height),
+      width: Math.max(1, Math.round(box.width * source.width)),
+      height: Math.max(1, Math.round(box.height * source.height))
+    };
+    if (initial.width < 100 || initial.height < 140 || box.width * box.height > 0.72) {
+      return observationCorners(observation, source.width, source.height);
+    }
+    const crop = new Uint8ClampedArray(initial.width * initial.height * 4);
+    for (let y = 0; y < initial.height; y += 1) {
+      const sourceY = clamp(initial.top + y, 0, source.height - 1);
+      for (let x = 0; x < initial.width; x += 1) {
+        const sourceX = clamp(initial.left + x, 0, source.width - 1);
+        const sourceOffset = (sourceY * source.width + sourceX) * 4;
+        const targetOffset = (y * initial.width + x) * 4;
+        crop[targetOffset] = source.data[sourceOffset];
+        crop[targetOffset + 1] = source.data[sourceOffset + 1];
+        crop[targetOffset + 2] = source.data[sourceOffset + 2];
+        crop[targetOffset + 3] = 255;
+      }
+    }
+    const detected = detectCardBoundsFromRgba(crop, initial.width, initial.height);
+    const areaRatio = detected.width * detected.height / Math.max(1, initial.width * initial.height);
+    const aspect = detected.width / Math.max(1, detected.height);
+    if (areaRatio < 0.42 || aspect < 0.54 || aspect > 0.82
+      || (areaRatio > 0.94 && Math.abs(aspect - CARD_ASPECT) > 0.055)) {
+      return observationCorners(observation, source.width, source.height);
+    }
+    return axisAlignedCorners(boundedRect({
+      left: initial.left + detected.left,
+      top: initial.top + detected.top,
+      width: detected.width,
+      height: detected.height
+    }, source.width, source.height));
   }
 
   function orientedCardPoint(u, v, orientation) {
@@ -2149,6 +2195,91 @@
       }
     }
     return { width: targetWidth, height: targetHeight, data: values };
+  }
+
+  function rectifyObservationCard(source, corners, orientation = 0, targetHeight = 1200) {
+    const height = Math.max(600, Math.round(Number(targetHeight) || 1200));
+    const width = Math.max(408, Math.round(height * CARD_ASPECT));
+    const values = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const oriented = orientedCardPoint((x + 0.5) / width, (y + 0.5) / height, orientation);
+        const point = quadrilateralPoint(corners, oriented.u, oriented.v);
+        const sourceX = clamp(point.x, 0, source.width - 1);
+        const sourceY = clamp(point.y, 0, source.height - 1);
+        const left = Math.floor(sourceX);
+        const top = Math.floor(sourceY);
+        const right = Math.min(source.width - 1, left + 1);
+        const bottom = Math.min(source.height - 1, top + 1);
+        const mixX = sourceX - left;
+        const mixY = sourceY - top;
+        const offsets = [
+          (top * source.width + left) * 4,
+          (top * source.width + right) * 4,
+          (bottom * source.width + left) * 4,
+          (bottom * source.width + right) * 4
+        ];
+        const targetOffset = (y * width + x) * 4;
+        for (let channel = 0; channel < 3; channel += 1) {
+          const topValue = source.data[offsets[0] + channel] * (1 - mixX) + source.data[offsets[1] + channel] * mixX;
+          const bottomValue = source.data[offsets[2] + channel] * (1 - mixX) + source.data[offsets[3] + channel] * mixX;
+          values[targetOffset + channel] = Math.round(topValue * (1 - mixY) + bottomValue * mixY);
+        }
+        values[targetOffset + 3] = 255;
+      }
+    }
+    return { width, height, data: values };
+  }
+
+  function sampleRectifiedCardRegion(card, layout) {
+    const targetHeight = Math.max(80, Math.round(Number(layout?.targetHeight) || 140));
+    const targetWidth = clamp(Math.round(targetHeight * Number(layout?.width || 0.4) * CARD_ASPECT / Math.max(0.001, Number(layout?.height || 0.08))), 220, 1200);
+    const values = new Uint8ClampedArray(targetWidth * targetHeight * 4);
+    for (let y = 0; y < targetHeight; y += 1) {
+      for (let x = 0; x < targetWidth; x += 1) {
+        const sourceX = clamp((Number(layout.x || 0) + ((x + 0.5) / targetWidth) * Number(layout.width || 1)) * card.width, 0, card.width - 1);
+        const sourceY = clamp((Number(layout.y || 0) + ((y + 0.5) / targetHeight) * Number(layout.height || 1)) * card.height, 0, card.height - 1);
+        const left = Math.floor(sourceX);
+        const top = Math.floor(sourceY);
+        const right = Math.min(card.width - 1, left + 1);
+        const bottom = Math.min(card.height - 1, top + 1);
+        const mixX = sourceX - left;
+        const mixY = sourceY - top;
+        const offsets = [
+          (top * card.width + left) * 4,
+          (top * card.width + right) * 4,
+          (bottom * card.width + left) * 4,
+          (bottom * card.width + right) * 4
+        ];
+        const targetOffset = (y * targetWidth + x) * 4;
+        for (let channel = 0; channel < 3; channel += 1) {
+          const topValue = card.data[offsets[0] + channel] * (1 - mixX) + card.data[offsets[1] + channel] * mixX;
+          const bottomValue = card.data[offsets[2] + channel] * (1 - mixX) + card.data[offsets[3] + channel] * mixX;
+          values[targetOffset + channel] = Math.round(topValue * (1 - mixY) + bottomValue * mixY);
+        }
+        values[targetOffset + 3] = 255;
+      }
+    }
+    return { width: targetWidth, height: targetHeight, data: values };
+  }
+
+  function regionOriginalDataUrl(region, scale = 1) {
+    const source = document.createElement("canvas");
+    source.width = region.width;
+    source.height = region.height;
+    const sourceContext = source.getContext("2d", { willReadFrequently: true });
+    const pixels = sourceContext.createImageData(region.width, region.height);
+    pixels.data.set(region.data);
+    sourceContext.putImageData(pixels, 0, 0);
+    if (scale <= 1) return source.toDataURL("image/png");
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(region.width * scale);
+    canvas.height = Math.round(region.height * scale);
+    const context = canvas.getContext("2d");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
   }
 
   function regionVariantCanvas(region, channel = "luma", thresholded = false, inverted = false) {
@@ -2289,6 +2420,130 @@
     return canvas.toDataURL("image/png");
   }
 
+  function regionSharpenedDataUrl(region) {
+    const base = regionVariantCanvas(region, "luma");
+    const context = base.getContext("2d", { willReadFrequently: true });
+    const source = context.getImageData(0, 0, base.width, base.height);
+    const output = context.createImageData(base.width, base.height);
+    for (let y = 0; y < base.height; y += 1) {
+      for (let x = 0; x < base.width; x += 1) {
+        const center = source.data[(y * base.width + x) * 4];
+        const left = source.data[(y * base.width + Math.max(0, x - 1)) * 4];
+        const right = source.data[(y * base.width + Math.min(base.width - 1, x + 1)) * 4];
+        const top = source.data[(Math.max(0, y - 1) * base.width + x) * 4];
+        const bottom = source.data[(Math.min(base.height - 1, y + 1) * base.width + x) * 4];
+        const sharpened = clamp(Math.round(center * 3 - (left + right + top + bottom) * 0.5), 0, 255);
+        const offset = (y * base.width + x) * 4;
+        output.data[offset] = sharpened;
+        output.data[offset + 1] = sharpened;
+        output.data[offset + 2] = sharpened;
+        output.data[offset + 3] = 255;
+      }
+    }
+    context.putImageData(output, 0, 0);
+    return base.toDataURL("image/png");
+  }
+
+  function regionAdaptiveThresholdDataUrl(region) {
+    const width = region.width;
+    const height = region.height;
+    const values = new Float32Array(width * height);
+    const integral = new Float64Array((width + 1) * (height + 1));
+    for (let y = 0; y < height; y += 1) {
+      let rowSum = 0;
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        const value = region.data[offset] * 0.299 + region.data[offset + 1] * 0.587 + region.data[offset + 2] * 0.114;
+        values[y * width + x] = value;
+        rowSum += value;
+        integral[(y + 1) * (width + 1) + x + 1] = integral[y * (width + 1) + x + 1] + rowSum;
+      }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const output = context.createImageData(width, height);
+    const radius = Math.max(7, Math.round(height * 0.12));
+    for (let y = 0; y < height; y += 1) {
+      const top = Math.max(0, y - radius);
+      const bottom = Math.min(height, y + radius + 1);
+      for (let x = 0; x < width; x += 1) {
+        const left = Math.max(0, x - radius);
+        const right = Math.min(width, x + radius + 1);
+        const sum = integral[bottom * (width + 1) + right] - integral[top * (width + 1) + right]
+          - integral[bottom * (width + 1) + left] + integral[top * (width + 1) + left];
+        const mean = sum / Math.max(1, (right - left) * (bottom - top));
+        const value = values[y * width + x] < mean - 7 ? 0 : 255;
+        const offset = (y * width + x) * 4;
+        output.data[offset] = value;
+        output.data[offset + 1] = value;
+        output.data[offset + 2] = value;
+        output.data[offset + 3] = 255;
+      }
+    }
+    context.putImageData(output, 0, 0);
+    return canvas.toDataURL("image/png");
+  }
+
+  function regionLocalEdgeThresholdDataUrl(region) {
+    const width = region.width;
+    const height = region.height;
+    const values = new Float32Array(width * height);
+    const integral = new Float64Array((width + 1) * (height + 1));
+    for (let y = 0; y < height; y += 1) {
+      let rowSum = 0;
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        const value = region.data[offset] * 0.299 + region.data[offset + 1] * 0.587 + region.data[offset + 2] * 0.114;
+        values[y * width + x] = value;
+        rowSum += value;
+        integral[(y + 1) * (width + 1) + x + 1] = integral[y * (width + 1) + x + 1] + rowSum;
+      }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const output = context.createImageData(width, height);
+    const radius = Math.max(5, Math.round(height * 0.09));
+    for (let y = 0; y < height; y += 1) {
+      const top = Math.max(0, y - radius);
+      const bottom = Math.min(height, y + radius + 1);
+      for (let x = 0; x < width; x += 1) {
+        const left = Math.max(0, x - radius);
+        const right = Math.min(width, x + radius + 1);
+        const sum = integral[bottom * (width + 1) + right] - integral[top * (width + 1) + right]
+          - integral[bottom * (width + 1) + left] + integral[top * (width + 1) + left];
+        const mean = sum / Math.max(1, (right - left) * (bottom - top));
+        const value = Math.abs(values[y * width + x] - mean) >= 8 ? 0 : 255;
+        const offset = (y * width + x) * 4;
+        output.data[offset] = value;
+        output.data[offset + 1] = value;
+        output.data[offset + 2] = value;
+        output.data[offset + 3] = 255;
+      }
+    }
+    context.putImageData(output, 0, 0);
+    return canvas.toDataURL("image/png");
+  }
+
+  function setCodeRegionPasses(rectifiedCard, orientation) {
+    const passes = [];
+    for (const layout of SET_CODE_REGION_LAYOUTS) {
+      const region = sampleRectifiedCardRegion(rectifiedCard, layout);
+      const prefix = `observation-${orientation}-setcode-${layout.id}`;
+      passes.push({ kind: "setCode", variant: `${prefix}-original`, segmentation: "raw-line", imageDataUrl: regionOriginalDataUrl(region) });
+      passes.push({ kind: "setCode", variant: `${prefix}-enlarged`, segmentation: "raw-line", imageDataUrl: regionOriginalDataUrl(region, 2) });
+      passes.push({ kind: "setCode", variant: `${prefix}-grayscale`, segmentation: "raw-line", imageDataUrl: regionVariantDataUrl(region, "luma") });
+      passes.push({ kind: "setCode", variant: `${prefix}-contrast`, segmentation: "raw-line", imageDataUrl: regionLocalContrastDataUrl(region) });
+      passes.push({ kind: "setCode", variant: `${prefix}-edge-threshold`, segmentation: "raw-line", imageDataUrl: regionLocalEdgeThresholdDataUrl(region) });
+      passes.push({ kind: "setCode", variant: `${prefix}-sharpened`, segmentation: "raw-line", imageDataUrl: regionSharpenedDataUrl(region) });
+      passes.push({ kind: "setCode", variant: `${prefix}-adaptive-threshold`, segmentation: "raw-line", imageDataUrl: regionAdaptiveThresholdDataUrl(region) });
+    }
+    return passes;
+  }
+
   function sampledLuma(region, targetWidth, targetHeight) {
     const values = [];
     for (let y = 0; y < targetHeight; y += 1) {
@@ -2351,7 +2606,7 @@
     const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
     sourceContext.drawImage(image, 0, 0);
     const source = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
-    const corners = observationCorners(observation, source.width, source.height);
+    const corners = refinedObservationCorners(source, observation);
     if (corners.length !== 4) throw new Error("Für diese Kartenbeobachtung fehlt ein gültiger Bildausschnitt.");
     const box = normalizedBoundingBox(observation?.boundingBox || observation);
     const hasPerspectiveGeometry = Boolean(normalizedQuadrilateral(observation?.quadrilateral));
@@ -2361,6 +2616,7 @@
     const orientations = probablySideways ? [90, 270] : [0, 180];
     const passes = [];
     for (const orientation of orientations) {
+      const rectifiedCard = rectifyObservationCard(source, corners, orientation);
       const title = sampleObservationRegion(source, corners, "title", orientation);
       passes.push({ kind: "title", variant: `observation-${orientation}-luma`, segmentation: "raw-line", imageDataUrl: regionVariantDataUrl(title, "luma") });
       passes.push({ kind: "title", variant: `observation-${orientation}-sparse-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(title, "luma") });
@@ -2373,21 +2629,24 @@
       passes.push({ kind: "title", variant: `observation-${orientation}-wide-luma`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleWide, "luma") });
       passes.push({ kind: "title", variant: `observation-${orientation}-wide-threshold`, segmentation: "sparse", imageDataUrl: regionVariantDataUrl(titleWide, "luma", true) });
       passes.push({ kind: "title", variant: `observation-${orientation}-wide-deskew`, segmentation: "sparse", imageDataUrl: deskewedRegionDataUrl(titleWide, "luma") });
-      const setCode = sampleObservationRegion(source, corners, "setCode", orientation);
-      passes.push({ kind: "setCode", variant: `observation-${orientation}-luma`, imageDataUrl: regionVariantDataUrl(setCode, "luma", true) });
+      passes.push(...setCodeRegionPasses(rectifiedCard, orientation));
       const passcode = sampleObservationRegion(source, corners, "passcode", orientation);
       passes.push({ kind: "passcode", variant: `observation-${orientation}-local-contrast`, segmentation: "sparse", imageDataUrl: regionLocalContrastDataUrl(passcode) });
     }
     const artworkFingerprints = ["artwork", "artworkWide"].map(kind => artworkFingerprint(sampleObservationRegion(source, corners, kind, orientations[0]), kind));
     return {
       imageDataUrl: passes[0]?.imageDataUrl || imageDataUrl,
-      passes: passes.slice(0, 20),
+      passes: passes.slice(0, 60),
       candidateLimit: 5,
       artworkFingerprints,
       cropInfo: {
         sourceWidth: source.width,
         sourceHeight: source.height,
         perspectiveCorrected: hasPerspectiveGeometry,
+        rectifiedCardWidth: Math.round(1200 * CARD_ASPECT),
+        rectifiedCardHeight: 1200,
+        setCodeRoiCount: SET_CODE_REGION_LAYOUTS.length,
+        corners: corners.map(point => ({ x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 })),
         orientations
       }
     };
@@ -2424,6 +2683,7 @@
   return Object.freeze({
     CARD_ASPECT,
     REGION_LAYOUTS,
+    SET_CODE_REGION_LAYOUTS,
     boundedRect,
     boundingBoxIoU,
     boundingBoxOverlap,
@@ -2437,6 +2697,7 @@
     detectCollectionCardsFromDataUrl,
     evaluateCollectionDetections,
     regionRect,
+    rectifyObservationCard,
     artworkFingerprint,
     prepareCollectionObservationRecognitionPayload,
     prepareRecognitionPayload

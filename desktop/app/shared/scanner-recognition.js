@@ -6,6 +6,7 @@
   "use strict";
 
   const LANGUAGE_MARKERS = new Set(["EN", "DE", "FR", "IT", "ES", "SP", "PT", "PL", "NL"]);
+  const LEGACY_LANGUAGE_MARKERS = new Set(["E", "G", "F", "I", "P", "S"]);
   const IGNORED_LINE_PARTS = ["ATK/", "DEF/", "ATK ", "DEF "];
 
   function compact(value = "") {
@@ -38,9 +39,10 @@
 
   function normalizeSetCode(value = "") {
     const text = cleanLine(value).toUpperCase().replace(/\s+/g, "");
-    const match = text.match(/^([A-Z0-9]{2,12})-?([A-Z]{2})?([0-9OIL]{2,4}[A-Z]?)$/);
+    const match = text.match(/^([A-Z0-9]{2,12})-?([A-Z]{1,2})?([0-9OIL]{2,4}[A-Z]?)$/);
     if (!match) return "";
-    const language = LANGUAGE_MARKERS.has(match[2]) ? match[2] : "";
+    const language = LANGUAGE_MARKERS.has(match[2]) || LEGACY_LANGUAGE_MARKERS.has(match[2]) ? match[2] : "";
+    if (match[2] && !language) return "";
     const number = match[3].replace(/O/g, "0").replace(/[IL]/g, "1");
     return `${match[1]}-${language}${number}`;
   }
@@ -67,6 +69,7 @@
     const candidates = [];
     const patterns = [
       /\b[A-Z0-9]{2,12}\s*-\s*(?:EN|DE|FR|IT|ES|SP|PT|PL|NL)\s*[0-9OIL]{2,4}[A-Z]?\b/g,
+      /\b[A-Z0-9]{2,12}\s*-\s*(?:E|G|F|I|P|S)\s*[0-9OIL]{2,4}[A-Z]?\b/g,
       /\b[A-Z0-9]{2,12}\s*-\s*[0-9OIL]{2,4}[A-Z]?\b/g
     ];
     for (const pattern of patterns) {

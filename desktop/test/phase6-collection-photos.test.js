@@ -53,6 +53,79 @@ test('Setcode-Signal allein bestätigt niemals einen Print', () => {
   assert.equal(model.isPrintExplicitlyConfirmed(observation), false);
 });
 
+test('Setcode-OCR und lokale Referenzkandidaten bleiben als unbestätigte Signale gespeichert', () => {
+  const observation = model.normalizeObservation({
+    photoId: 'p1', boundingBox: { x: 0, y: 0, width: .5, height: .5 },
+    printRecognition: {
+      setCode: 'CORI-EN081', setCodeConfidence: 87.66,
+      setCodeSignals: [{ setCode: 'CORI-EN081', confidence: 87.66, rawText: 'CORI-EN081', variant: 'red' }],
+      mappingStatus: 'unresolved', resolutionStatus: 'rarity_selection_required',
+      rarityOptions: [{ value: 'Ultra Rare', count: 1 }, { value: 'Starlight Rare', count: 1 }],
+      referenceCandidates: [{ id: 'reference:1', englishName: 'Witness of the Ancient', setCode: 'CORI-EN081', rarity: 'Ultra Rare', mappingStatus: 'likely' }]
+    }
+  }, 'a1');
+  assert.equal(observation.printRecognition.setCode, 'CORI-EN081');
+  assert.equal(observation.printRecognition.setCodeConfidence, 87.7);
+  assert.equal(observation.printRecognition.setCodeSignals[0].confidence, 87.7);
+  assert.equal(observation.printRecognition.referenceCandidates[0].mappingStatus, 'likely');
+  assert.equal(observation.selectedProductId, '');
+  assert.equal(observation.printConfidence, 'unknown');
+});
+
+test('erneute automatische Printprüfung schützt einen manuell bestätigten Namen und Print', () => {
+  const observation = model.normalizeObservation({
+    photoId: 'p1', boundingBox: { x: 0, y: 0, width: .5, height: .5 },
+    selectedName: 'Manuell bestätigt', nameConfidence: 'confirmed', selectedProductId: '894816', printConfidence: 'confirmed',
+    printRecognition: { setCode: 'CORI-EN081', selectedRarity: 'Ultra Rare', selectedVersion: 'V.1', selectedCandidateId: 'variant:v1' }
+  }, 'a1');
+  model.mergeAutomaticPrintRecognition(observation, {
+    setCode: 'MAMO-EN004', selectedRarity: 'Starlight Rare', selectedVersion: 'V.3', selectedCandidateId: 'variant:v3',
+    mappingStatus: 'exact', resolutionStatus: 'unique_candidate'
+  });
+  assert.equal(observation.selectedName, 'Manuell bestätigt');
+  assert.equal(observation.selectedProductId, '894816');
+  assert.equal(observation.printConfidence, 'confirmed');
+  assert.equal(observation.printRecognition.selectedRarity, 'Ultra Rare');
+  assert.equal(observation.printRecognition.selectedVersion, 'V.1');
+  assert.equal(observation.printRecognition.selectedCandidateId, 'variant:v1');
+  assert.equal(observation.printRecognition.manualSelectionProtected, true);
+});
+
+test('unlesbarer Setcode speichert den Detailfoto-Status ohne einen Print zu bestätigen', () => {
+  const observation = model.normalizeObservation({
+    photoId: 'p1', boundingBox: { x: .1, y: .1, width: .3, height: .4 },
+    detailPhotoRequired: true, detailPhotoStatus: 'detail-photo-needed', detailPhotoReason: 'setcode_unreadable',
+    printRecognition: {
+      mappingStatus: 'unresolved', resolutionStatus: 'unreadable_set_code',
+      detailPhotoStatus: 'detail-photo-needed', detailPhotoReason: 'setcode_unreadable',
+      setCodeValidationStatus: 'setcode_unreadable', setCodeValidationCandidates: []
+    }
+  }, 'a1');
+  assert.equal(observation.detailPhotoRequired, true);
+  assert.equal(observation.detailPhotoStatus, 'detail-photo-needed');
+  assert.equal(observation.detailPhotoReason, 'setcode_unreadable');
+  assert.equal(observation.printRecognition.detailPhotoStatus, 'detail-photo-needed');
+  assert.equal(observation.printRecognition.setCodeValidationStatus, 'setcode_unreadable');
+  assert.equal(observation.selectedProductId, '');
+});
+
+test('verknüpftes Detailfoto wird für die erneute OCR bevorzugt', () => {
+  const analysis = {
+    photos: [
+      { id: 'overview', width: 2400, height: 1800 },
+      { id: 'detail', width: 1600, height: 2400, photoType: 'detail' }
+    ],
+    photoObservations: [
+      { id: 'overview-card', photoId: 'overview', physicalCardId: 'physical-1', boundingBox: { x: .1, y: .1, width: .12, height: .25 } },
+      { id: 'detail-card', photoId: 'detail', physicalCardId: 'physical-1', boundingBox: { x: .05, y: .04, width: .9, height: .92 } }
+    ]
+  };
+  const source = model.choosePreferredRecognitionSource(analysis, analysis.photoObservations[0]);
+  assert.equal(source.photo.id, 'detail');
+  assert.equal(source.observation.id, 'detail-card');
+  assert.equal(source.explicitDetail, true);
+});
+
 test('eine physische Karte auf zwei Fotos wird in der Evidenz nur einmal gezählt', () => {
   const analysis = {
     id: 'a1', photos: [{ id: 'p1' }, { id: 'p2' }],
@@ -188,7 +261,7 @@ test('Foto-Metadaten, Kandidaten und physische Verknüpfung werden normalisiert 
     photos: [{ id: 'p1', sequence: 1, binderPage: '4', relativePath: 'Daten/Sammlungsfotos/test/bild.png', originalFileName: 'bild.png', mimeType: 'image/png', fileSize: 50, width: 100, height: 200, sha256: 'abc', createdAt: '2026-08-20', lastDetectionAt: '2026-08-22T12:00:00.000Z', detectionQuality: { brightness: 120, contrast: 35, sharpness: 14, warnings: [] } }],
     physicalCards: [{ id: 'physical-1', label: 'Blitzsturm Exemplar', linkedCollectionItemId: 'i1', productId: '123', name: 'Blitzsturm', createdAt: '2026-08-20' }],
     photoObservations: [
-      { id: 'o1', photoId: 'p1', boundingBox: { x: .1, y: .2, width: .3, height: .4 }, observationSource: 'manual', detectionReviewState: 'manual', row: '2', column: '3', selectedName: 'Blitzsturm', nameCandidates: [{ name: 'Blitzsturm' }], nameConfidence: 'high', selectedProductId: '123', printCandidates: [{ productId: '123' }], printConfidence: 'confirmed', physicalCardId: 'physical-1', linkedCollectionItemId: 'i1', createdAt: '2026-08-20' },
+      { id: 'o1', photoId: 'p1', boundingBox: { x: .1, y: .2, width: .3, height: .4 }, observationSource: 'manual', detectionReviewState: 'manual', row: '2', column: '3', selectedName: 'Blitzsturm', nameCandidates: [{ name: 'Blitzsturm' }], nameConfidence: 'high', selectedProductId: '123', printCandidates: [{ productId: '123' }], printConfidence: 'confirmed', printRecognition: { setCode: 'KICO-EN057', setCodeConfidence: 84.26, setCodeSignals: [{ setCode: 'KICO-EN057', confidence: 84.26 }], mappingStatus: 'exact', resolutionStatus: 'exact_candidate_selected', selectedRarity: 'Ultra Rare', selectedVersion: 'V.1' }, physicalCardId: 'physical-1', linkedCollectionItemId: 'i1', createdAt: '2026-08-20' },
       { id: 'auto-suggested', photoId: 'p1', boundingBox: { x: .45, y: .05, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'medium', detectionScore: .72, detectionSignals: { edgeStrength: .84, gridSupport: true }, detectionReviewState: 'suggested', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' },
       { id: 'auto-confirmed', photoId: 'p1', boundingBox: { x: .7, y: .05, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'high', detectionScore: .88, detectionSignals: { edgeStrength: .91 }, detectionReviewState: 'confirmed', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' },
       { id: 'auto-rejected', photoId: 'p1', boundingBox: { x: .45, y: .55, width: .2, height: .3 }, observationSource: 'automatic', detectionConfidence: 'low', detectionScore: .61, detectionSignals: { possiblePerspective: true }, detectionReviewState: 'rejected', nameConfidence: 'unknown', printConfidence: 'unknown', createdAt: '2026-08-22' }
@@ -198,7 +271,7 @@ test('Foto-Metadaten, Kandidaten und physische Verknüpfung werden normalisiert 
   const observation = database.db.prepare("SELECT * FROM collection_card_observations WHERE observation_id='o1' AND archived=0").get();
   const physicalCount = database.db.prepare('SELECT COUNT(*) count FROM collection_physical_cards WHERE archived=0').get().count;
   const loaded=database.loadState().state.collectionPurchaseAnalyses[0];
-  assert.equal(photoCount, 1);assert.equal(physicalCount, 1);assert.equal(observation.selected_product_id, '123');assert.equal(observation.name_confidence, 'high');assert.equal(observation.print_confidence, 'confirmed');assert.equal(loaded.photos[0].binderPage,'4');assert.equal(loaded.photos[0].detectionQuality.contrast,35);assert.deepEqual(loaded.photoObservations[0].boundingBox,{x:.1,y:.2,width:.3,height:.4});
+  assert.equal(photoCount, 1);assert.equal(physicalCount, 1);assert.equal(observation.selected_product_id, '123');assert.equal(observation.name_confidence, 'high');assert.equal(observation.print_confidence, 'confirmed');assert.equal(loaded.photos[0].binderPage,'4');assert.equal(loaded.photos[0].detectionQuality.contrast,35);assert.deepEqual(loaded.photoObservations[0].boundingBox,{x:.1,y:.2,width:.3,height:.4});assert.equal(loaded.photoObservations[0].printRecognition.setCode,'KICO-EN057');assert.equal(loaded.photoObservations[0].printRecognition.setCodeConfidence,84.3);assert.equal(loaded.photoObservations[0].printRecognition.selectedRarity,'Ultra Rare');
   const suggested=loaded.photoObservations.find(row=>row.id==='auto-suggested'),confirmed=loaded.photoObservations.find(row=>row.id==='auto-confirmed'),rejected=loaded.photoObservations.find(row=>row.id==='auto-rejected');
   assert.equal(suggested.observationSource,'automatic');assert.equal(suggested.detectionConfidence,'medium');assert.equal(suggested.detectionScore,.72);assert.equal(suggested.nameConfidence,'unknown');assert.equal(suggested.printConfidence,'unknown');assert.equal(confirmed.detectionReviewState,'confirmed');assert.equal(rejected.detectionReviewState,'rejected');
   const rescan=model.mergeDetectionSuggestions(loaded.photoObservations,'p1',[{boundingBox:rejected.boundingBox,detectionConfidence:'high',detectionScore:.9}],{analysisId:'a1'});assert.equal(rescan.added.length,0);database.close();

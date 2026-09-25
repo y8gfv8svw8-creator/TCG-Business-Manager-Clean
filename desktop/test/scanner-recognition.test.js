@@ -8,6 +8,12 @@ test('liest typische Yu-Gi-Oh!-Setnummern aus OCR-Text', () => {
   assert.equal(recognition.buildQueries({ text })[0], 'BLCR-EN042');
 });
 
+test('liest historische einbuchstabige Sprachcodes ohne sie sprachneutral zu machen', () => {
+  assert.equal(recognition.normalizeSetCode('SDK-G038'), 'SDK-G038');
+  assert.equal(recognition.normalizeSetCode('LON-E006'), 'LON-E006');
+  assert.deepEqual(recognition.extractSetCodes('SDK-G038 und LON-E006'), ['SDK-G038', 'LON-E006']);
+});
+
 test('korrigiert häufige OCR-Verwechslungen im Zahlenteil', () => {
   assert.equal(recognition.normalizeSetCode('RA01-ENO08'), 'RA01-EN008');
   assert.equal(recognition.normalizeSetCode('BLGG-ENO17'), 'BLGG-EN017');

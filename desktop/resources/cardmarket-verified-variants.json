@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-09-25T19:48:42+02:00",
+  "verificationMethod": "The official Cardmarket idProduct URL was opened and its redirect target, product heading, rarity, collector number and expansion were checked on the resulting Cardmarket product page.",
+  "variants": [
+    {
+      "setCode": "CORI-EN081",
+      "cardmarketProductId": "894816",
+      "version": "V.1",
+      "rarity": "Ultra Rare",
+      "cardmarketProductName": "Witness of the Ancient (V.1 - Ultra Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Chaos-Origins/Witness-of-the-Ancient-V1-Ultra-Rare",
+      "productSlug": "Witness-of-the-Ancient-V1-Ultra-Rare",
+      "expansion": "Chaos Origins",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=894816",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "CORI-EN081",
+      "cardmarketProductId": "894817",
+      "version": "V.2",
+      "rarity": "Ultra Rare",
+      "cardmarketProductName": "Witness of the Ancient (V.2 - Ultra Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Chaos-Origins/Witness-of-the-Ancient-V2-Ultra-Rare",
+      "productSlug": "Witness-of-the-Ancient-V2-Ultra-Rare",
+      "expansion": "Chaos Origins",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=894817",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "CORI-EN081",
+      "cardmarketProductId": "894818",
+      "version": "V.3",
+      "rarity": "Starlight Rare",
+      "cardmarketProductName": "Witness of the Ancient (V.3 - Starlight Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Chaos-Origins/Witness-of-the-Ancient-V3-Starlight-Rare",
+      "productSlug": "Witness-of-the-Ancient-V3-Starlight-Rare",
+      "expansion": "Chaos Origins",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=894818",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "CORI-EN004",
+      "cardmarketProductId": "894691",
+      "version": "V.1",
+      "rarity": "Ultra Rare",
+      "cardmarketProductName": "Griffoh (V.1 - Ultra Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Chaos-Origins/Griffoh-V1-Ultra-Rare",
+      "productSlug": "Griffoh-V1-Ultra-Rare",
+      "expansion": "Chaos Origins",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=894691",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "CORI-EN004",
+      "cardmarketProductId": "894692",
+      "version": "V.2",
+      "rarity": "Starlight Rare",
+      "cardmarketProductName": "Griffoh (V.2 - Starlight Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Chaos-Origins/Griffoh-V2-Starlight-Rare",
+      "productSlug": "Griffoh-V2-Starlight-Rare",
+      "expansion": "Chaos Origins",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=894692",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "MAMO-EN004",
+      "cardmarketProductId": "904546",
+      "version": "V.1",
+      "rarity": "Ultra Rare",
+      "cardmarketProductName": "Favorite HERO Shining Flare Wingman (V.1 - Ultra Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Magnificent-Monsters/Favorite-HERO-Shining-Flare-Wingman-V1-Ultra-Rare",
+      "productSlug": "Favorite-HERO-Shining-Flare-Wingman-V1-Ultra-Rare",
+      "expansion": "Magnificent Monsters",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=904546",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "MAMO-EN004",
+      "cardmarketProductId": "904547",
+      "version": "V.2",
+      "rarity": "Ultra Rare",
+      "cardmarketProductName": "Favorite HERO Shining Flare Wingman (V.2 - Ultra Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Magnificent-Monsters/Favorite-HERO-Shining-Flare-Wingman-V2-Ultra-Rare",
+      "productSlug": "Favorite-HERO-Shining-Flare-Wingman-V2-Ultra-Rare",
+      "expansion": "Magnificent Monsters",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=904547",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "MAMO-EN004",
+      "cardmarketProductId": "904548",
+      "version": "V.3",
+      "rarity": "Starlight Rare",
+      "cardmarketProductName": "Favorite HERO Shining Flare Wingman (V.3 - Starlight Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Magnificent-Monsters/Favorite-HERO-Shining-Flare-Wingman-V3-Starlight-Rare",
+      "productSlug": "Favorite-HERO-Shining-Flare-Wingman-V3-Starlight-Rare",
+      "expansion": "Magnificent Monsters",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=904548",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "MAMO-EN004",
+      "cardmarketProductId": "904549",
+      "version": "V.4",
+      "rarity": "Grand Master Rare",
+      "cardmarketProductName": "Favorite HERO Shining Flare Wingman (V.4 - Grand Master Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/Magnificent-Monsters/Favorite-HERO-Shining-Flare-Wingman-V4-Special",
+      "productSlug": "Favorite-HERO-Shining-Flare-Wingman-V4-Special",
+      "expansion": "Magnificent Monsters",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=904549",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    },
+    {
+      "setCode": "RA01-EN019",
+      "cardmarketProductId": "741301",
+      "version": "V.1",
+      "rarity": "Super Rare",
+      "cardmarketProductName": "Eldlich the Golden Lord (V.1 - Super Rare)",
+      "productUrl": "https://www.cardmarket.com/en/YuGiOh/Products/Singles/25th-Anniversary-Rarity-Collection/Eldlich-the-Golden-Lord-V1-Super-Rare",
+      "productSlug": "Eldlich-the-Golden-Lord-V1-Super-Rare",
+      "expansion": "25th Anniversary Rarity Collection",
+      "source": "https://www.cardmarket.com/en/YuGiOh/Products?idProduct=741301",
+      "verifiedAt": "2026-09-25T19:48:42+02:00",
+      "verificationStatus": "verified"
+    }
+  ],
+  "auditNotes": [
+    "CORI product 894704 is collector number SP1, not CORI-EN004, and is intentionally excluded.",
+    "The MAMO source reference rarity 'New' does not identify a Cardmarket version; Cardmarket exposes V.1 and V.2 as Ultra Rare, V.3 as Starlight Rare and V.4 as Grand Master Rare.",
+    "No treatment or artwork label is stored because none was explicitly stated on the verified product pages."
+  ]
+}

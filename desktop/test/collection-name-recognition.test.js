@@ -312,6 +312,25 @@ test('lokaler OCR-Worker wird für mehrere Region-Pässe wiederverwendet', async
   assert.equal(calls.filter(row => row[0] === 'recognize').length, 2);
 });
 
+test('Setcode-Region liefert Setcode, OCR-Confidence und Rohsignal getrennt zurück', async t => {
+  const worker = {
+    setParameters: async () => {},
+    recognize: async () => ({ data: { text: 'CORI-EN081', confidence: 88.84 } }),
+    terminate: async () => {}
+  };
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-setcode-signal-'));
+  const recognizer = new CardScannerRecognizer({ cacheRoot, workerFactory: async () => worker });
+  t.after(async () => { await recognizer.terminate();fs.rmSync(cacheRoot, { recursive: true, force: true }); });
+  const imageDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=';
+  const result = await recognizer.recognize({ imageDataUrl, passes: [{ kind: 'setCode', variant: 'observation-0-red', imageDataUrl }] });
+  assert.equal(result.setCodes[0], 'CORI-EN081');
+  assert.equal(result.setCodeSignals[0].setCode, 'CORI-EN081');
+  assert.equal(result.setCodeSignals[0].confidence, 88.84);
+  assert.equal(result.setCodeSignals[0].rawText, 'CORI-EN081');
+  assert.equal(result.setCodeSignals[0].source, 'set_code_region');
+  assert.deepEqual(result.setCodeReadings, [{ text: 'CORI-EN081', confidence: 88.84, variant: 'observation-0-red' }]);
+});
+
 test('SQLite-Katalog liefert OCR-Namenskandidaten aus deutschen, englischen und Alias-Namen', t => {
   const database = sandboxDatabase(t);
   database.upsertProducts([

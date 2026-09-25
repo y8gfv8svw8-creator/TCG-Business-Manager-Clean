@@ -2,7 +2,7 @@ LOKALE PRINT-REFERENZ
 ====================
 
 Datei: print-reference.sqlite
-Referenzschema: 2 (separat vom Manager-Schema 12)
+Referenzschema: 3 (separat vom Manager-Schema 12)
 
 Quellen:
 - YGOPRODeck Card Information API v7, Englisch und Deutsch
@@ -16,6 +16,23 @@ Enthalten:
 - 20.453 eindeutig zugeordnete Cardmarket-Produkt-IDs
 - 24.043 wahrscheinliche Metakarten-Zuordnungen ohne behauptete Produkt-ID
 - 49 vollständig ungelöste Zuordnungen
+
+Separater, extern belegter Cardmarket-Variant-Layer:
+- 10 verifizierte Pilotvarianten
+- bestehende Metakarten-, Setpositions- und Printzeilen bleiben unverändert
+- gespeichert werden Produkt-ID, V.-Version, Rarität, Cardmarket-Produktname,
+  Produkt-URL/Slug, Expansion, Quelle und Prüfzeitpunkt
+- Treatment/Artwork bleiben leer, solange die externe Produktseite sie nicht
+  ausdrücklich bezeichnet
+- Pilotnachweise: CORI-EN081 (3), CORI-EN004 (2), MAMO-EN004 (4),
+  RA01-EN019 (1)
+- RA02-EN001, DLCS-EN006 und LDS2-EN001 bleiben im Layer offen, weil die
+  konkrete Produkt-ID/Variantenbeziehung noch nicht vollständig extern belegt ist
+
+Bei MAMO-EN004 ist "New" keine sicher zuordenbare Cardmarket-Version. Cardmarket
+belegt V.1/V.2 als Ultra Rare, V.3 als Starlight Rare und V.4 als Grand Master
+Rare; der YGOPRODeck-Eintrag "New" wird deshalb nicht in den Variant-Layer
+übernommen.
 
 Wichtig:
 Die Cardmarket-Produktdatei enthält keine Setnamen oder Raritäten. Eine konkrete

@@ -2,6 +2,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   isElectron: true,
+  startupDiagnosticsEnabled: process.env.TCG_STARTUP_DIAGNOSTICS === '1',
+  reportStartupTiming: entry => ipcRenderer.send('startup:timing', entry),
+  getStartupDiagnostics: () => ipcRenderer.invoke('startup:get-diagnostics'),
+  notifyUiReady: () => ipcRenderer.send('startup:ui-ready'),
+  onMarketSummariesRefreshed: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, summary) => callback(summary);
+    ipcRenderer.on('data:market-summaries-refreshed', listener);
+    return () => ipcRenderer.removeListener('data:market-summaries-refreshed', listener);
+  },
   getInfo: () => ipcRenderer.invoke('app:get-info'),
   openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
   startScanner: payload => ipcRenderer.invoke('scanner:start', payload),

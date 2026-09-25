@@ -1,3 +1,4 @@
+const startupAppExecutionStartedAt = performance.now();
 const DB_KEY = "tcgWawiState_v31";
 const LEGACY_DB_KEYS = ["tcgWawiState_v28","tcgWawiState_v30"];
 const DESKTOP_UPDATED_KEY = "tcgWawiState_v31_updatedAt";
@@ -55,7 +56,13 @@ const defaultState = {
   productCatalog: structuredClone(BUILTIN_PRODUCT_CATALOG)
 };
 
+const startupStateMigrationStartedAt = performance.now();
 let state = loadState();
+window.__TCG_RECORD_STARTUP_TIMING__?.("renderer_state_migrated", startupStateMigrationStartedAt, {
+  inventory: state.inventory?.length || 0,
+  purchases: state.purchases?.length || 0,
+  sales: state.sales?.length || 0
+});
 let systemThemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") || null;
 let modalHandler = null;
 let cardNameLookup = new Map();
@@ -208,7 +215,7 @@ function scheduleCardNameLookupRefresh() {
   clearTimeout(scheduleCardNameLookupRefresh.timer);
   scheduleCardNameLookupRefresh.timer = setTimeout(() => {
     refreshCardNameLookup(false).then(count => {
-      if (count) renderAll();
+      if (count) renderAllPreservingUserInput();
     }).catch(error => console.error("Zweisprachige Kartennamen konnten nicht geladen werden:", error));
   }, 0);
 }
@@ -737,14 +744,14 @@ function ownSalesExperienceFor(productId){
   return ownSalesExperienceByProduct.get(cleanProductId(productId)) || null;
 }
 
-function refreshOwnSalesExperience(force=false){
+function refreshOwnSalesExperience(force=false,{render=true}={}){
   if(!window.desktopApp?.getOwnSalesExperience)return Promise.resolve(ownSalesExperienceCache);
   if(ownSalesExperiencePromise)return ownSalesExperiencePromise;
   if(!force&&ownSalesExperienceCache.calculatedAt)return Promise.resolve(ownSalesExperienceCache);
   ownSalesExperiencePromise=window.desktopApp.getOwnSalesExperience({asOf:new Date().toISOString()}).then(result=>{
     ownSalesExperienceCache=result||{calculatedAt:'',summary:{},records:[]};
     ownSalesExperienceByProduct=new Map((ownSalesExperienceCache.records||[]).map(row=>[cleanProductId(row.productId),row]));
-    renderAll();
+    if(render)renderAllPreservingUserInput();
     return ownSalesExperienceCache;
   }).catch(error=>{
     console.error('Eigene Verkaufserfahrung konnte nicht geladen werden:',error);
@@ -773,7 +780,7 @@ function marketDecisionHistoryRequest() {
   return { productIds: [...new Set(productIds)], targetDates, recentDays: 45 };
 }
 
-function refreshMarketDecisionHistory(force = false) {
+function refreshMarketDecisionHistory(force = false, { render = true } = {}) {
   if (!window.desktopApp?.getMarketDecisionHistory || marketDecisionHistoryPromise) return marketDecisionHistoryPromise;
   const request = marketDecisionHistoryRequest();
   const signature = JSON.stringify(request);
@@ -781,7 +788,7 @@ function refreshMarketDecisionHistory(force = false) {
   marketDecisionHistoryPromise = window.desktopApp.getMarketDecisionHistory(request).then(result => {
     marketDecisionHistoryByProduct = result?.histories || {};
     marketDecisionHistorySignature = signature;
-    renderAll();
+    if(render)renderAllPreservingUserInput();
     return marketDecisionHistoryByProduct;
   }).catch(error => {
     console.error('Price-Guide-Historie für PHASE 3 konnte nicht geladen werden:', error);
@@ -1219,8 +1226,34 @@ function renderCurrentView(name = currentViewName || document.querySelector(".vi
 // Bestehende Aufrufer behalten den Namen. Tatsächlich wird bewusst nur noch
 // die sichtbare Seite aktualisiert; andere Seiten werden beim Öffnen frisch
 // aus demselben Programmstand aufgebaut.
+let startupDiagnosticRenderCount=0;
 function renderAll() {
+  if (!window.desktopApp?.startupDiagnosticsEnabled) {
+    renderCurrentView();
+    return;
+  }
+  const startedAt = performance.now();
+  const focusedBefore = document.activeElement;
   renderCurrentView();
+  const count = ++startupDiagnosticRenderCount;
+  const durationMs = performance.now() - startedAt;
+  if (count <= 20 || durationMs >= 50 || (focusedBefore && !focusedBefore.isConnected)) {
+    window.__TCG_RECORD_STARTUP_TIMING__?.("active_view_rendered", startedAt, {
+      count,
+      view: currentViewName || "unknown",
+      focusedElementReplaced: Boolean(focusedBefore && focusedBefore !== document.body && !focusedBefore.isConnected),
+      focusedElement: focusedBefore?.id || focusedBefore?.getAttribute?.("name") || focusedBefore?.tagName || ""
+    });
+  }
+}
+
+// Nachlaufende Datenabfragen dürfen die aktuelle Bearbeitung nicht verwerfen.
+// Der Schutz gilt generisch für Input-, Textarea- und Select-Felder und stellt
+// auch Fokus sowie Textauswahl nach dem gezielten UI-Refresh wieder her.
+function renderAllPreservingUserInput() {
+  const preserve = window.TcgRendererFieldState?.renderPreservingFields;
+  if (typeof preserve !== "function") return renderAll();
+  return preserve(renderAll,{root:document});
 }
 
 function initializeUiDisclosures(){
@@ -6879,7 +6912,13 @@ function updateAutomationUi(){
 }
 
 async function initAutomation(){
-  try{syncDirectoryHandle=await loadDirectoryHandle();}catch{}
+  const startedAt=performance.now();
+  try{
+    syncDirectoryHandle=await loadDirectoryHandle();
+    window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_sync_handle_ready",startedAt,{found:Boolean(syncDirectoryHandle)});
+  }catch(error){
+    window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_sync_handle_failed",startedAt,{error:String(error?.message||error)});
+  }
   updateAutomationUi();startFolderSyncTimer();
   if(syncDirectoryHandle&&state.sync.autoFolder) setTimeout(()=>scanSyncFolder(false),1200);
   // Der taegliche Price-Guide-Lauf wird zentral im Cardmarket-Datencenter
@@ -7487,22 +7526,29 @@ if (purchaseImportDateField && !purchaseImportDateField.value) purchaseImportDat
 
 window.desktopApp?.onScannerSubmission?.(submission=>queueScannerSubmission(submission));
 
+const startupUiInitializationStartedAt=performance.now();
 applyAppearanceSettings();
 initializeUiDisclosures();
 installTextFieldErgonomics();
 systemThemeQuery?.addEventListener?.("change",()=>{if((state.settings.themeMode||"system")==="system")applyAppearanceSettings();});
 showView(state.settings.startView||"dashboard");
 initAutomation();
+window.__TCG_RECORD_STARTUP_TIMING__?.("ui_initialized",startupUiInitializationStartedAt,{view:currentViewName});
+window.__TCG_RECORD_STARTUP_TIMING__?.("app_script_executed",startupAppExecutionStartedAt);
 const scheduleStartupBackgroundWork = callback => {
   if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(callback,{timeout:1200});
   else setTimeout(callback,250);
 };
 scheduleStartupBackgroundWork(()=>{
-  refreshCardNameLookup(true).then(() => renderAll()).catch(error => {
-    console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:", error);
-  });
-  refreshMarketDecisionHistory(true);
-  refreshOwnSalesExperience(true);
+  const backgroundRefreshes=[
+    refreshCardNameLookup(true).catch(error=>{
+      console.error("Zweisprachiger SQLite-Namensindex konnte beim Start nicht geladen werden:",error);
+      return 0;
+    }),
+    refreshMarketDecisionHistory(true,{render:false}),
+    refreshOwnSalesExperience(true,{render:false})
+  ];
+  Promise.allSettled(backgroundRefreshes).then(()=>renderAllPreservingUserInput());
 });
 
 // Eine alte Browserinstallation wird bereits vor dem Laden von app.js einmalig

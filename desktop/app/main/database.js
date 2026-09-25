@@ -1,4 +1,5 @@
 const { DatabaseSync } = require('node:sqlite');
+const { performance } = require('node:perf_hooks');
 const fs = require('fs');
 const path = require('path');
 const cardSearch = require('../shared/card-search');
@@ -205,7 +206,7 @@ function coreBusinessRecordCount(state = {}) {
 }
 
 class TcgDatabase {
-  constructor({ databasePath, schemaPath, backupRoot, photoStore = null }) {
+  constructor({ databasePath, schemaPath, backupRoot, photoStore = null, onTiming = null }) {
     this.databasePath = databasePath;
     this.schemaPath = schemaPath;
     this.backupRoot = backupRoot;
@@ -216,10 +217,18 @@ class TcgDatabase {
     this.databaseExistenceChecked = false;
     this.startupValidation = null;
     this.cardmarketImportSession = null;
+    this.onTiming = typeof onTiming === 'function' ? onTiming : null;
+  }
+
+  recordTiming(name, startedAt, detail = {}) {
+    if (!this.onTiming) return;
+    this.onTiming({ name, durationMs: performance.now() - startedAt, detail });
   }
 
   open() {
     if (this.db) return this;
+
+    const openStartedAt = performance.now();
 
     ensureDirectory(path.dirname(this.databasePath));
     ensureDirectory(this.backupRoot);
@@ -230,11 +239,15 @@ class TcgDatabase {
       this.databaseExistenceChecked = true;
     }
 
+    let stepStartedAt = performance.now();
     this.db = new DatabaseSync(this.databasePath);
+    this.recordTiming('sqlite_connection_opened', stepStartedAt, { databasePath: this.databasePath });
+    stepStartedAt = performance.now();
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA busy_timeout = 5000;');
+    this.recordTiming('sqlite_pragmas_applied', stepStartedAt);
 
     const existingVersion = this.existingSchemaVersion();
     let migrationBackupPrepared = false;
@@ -243,18 +256,24 @@ class TcgDatabase {
       migrationBackupPrepared = true;
     }
 
+    stepStartedAt = performance.now();
     const schema = fs.readFileSync(this.schemaPath, 'utf8');
     this.db.exec(schema);
+    this.recordTiming('sqlite_schema_ensured', stepStartedAt);
+    stepStartedAt = performance.now();
     this.runMigrations(migrationBackupPrepared);
+    this.recordTiming('sqlite_migrations_checked', stepStartedAt, { existingVersion });
+    stepStartedAt = performance.now();
     this.ensureDataSources();
-    this.ensureSnapshotSummaries();
-    this.ensureObservationSummaries();
+    this.recordTiming('sqlite_data_sources_ensured', stepStartedAt);
 
     this.db.prepare(`
       INSERT INTO schema_version (version, applied_at)
       VALUES (?, ?)
       ON CONFLICT(version) DO NOTHING
     `).run(CURRENT_SCHEMA_VERSION, isoNow());
+
+    this.recordTiming('sqlite_open_total', openStartedAt, { databasePath: this.databasePath });
 
     return this;
   }
@@ -533,14 +552,23 @@ class TcgDatabase {
   }
 
   ensureSnapshotSummaries() {
+    const totalStartedAt = performance.now();
+    let stepStartedAt = performance.now();
     const expected = Number(this.db.prepare(`
       SELECT COUNT(DISTINCT captured_date) AS count FROM market_prices
     `).get()?.count || 0);
+    this.recordTiming('snapshot_summary_expected_count', stepStartedAt, { expected });
+    stepStartedAt = performance.now();
     const existing = Number(this.db.prepare(`
       SELECT COUNT(*) AS count FROM market_snapshot_summary
     `).get()?.count || 0);
-    if (expected === existing) return;
+    this.recordTiming('snapshot_summary_existing_count', stepStartedAt, { existing });
+    if (expected === existing) {
+      this.recordTiming('snapshot_summary_check_total', totalStartedAt, { expected, existing, rebuilt: false });
+      return { expected, existing, rebuilt: false };
+    }
 
+    stepStartedAt = performance.now();
     this.db.exec('BEGIN IMMEDIATE;');
     try {
       this.db.exec('DELETE FROM market_snapshot_summary;');
@@ -558,10 +586,13 @@ class TcgDatabase {
         GROUP BY captured_date
       `);
       this.db.exec('COMMIT;');
+      this.recordTiming('snapshot_summary_rebuilt', stepStartedAt, { expected, existing });
     } catch (error) {
       this.db.exec('ROLLBACK;');
       throw error;
     }
+    this.recordTiming('snapshot_summary_check_total', totalStartedAt, { expected, existing, rebuilt: true });
+    return { expected, existing, rebuilt: true };
   }
 
   refreshObservationSummaries() {
@@ -577,13 +608,24 @@ class TcgDatabase {
   }
 
   ensureObservationSummaries() {
+    const totalStartedAt = performance.now();
+    let stepStartedAt = performance.now();
     const expected = Number(this.db.prepare(`
       SELECT COUNT(*) AS count FROM (
         SELECT source_id, observed_date FROM market_observations GROUP BY source_id, observed_date
       )
     `).get()?.count || 0);
+    this.recordTiming('observation_summary_expected_count', stepStartedAt, { expected });
+    stepStartedAt = performance.now();
     const existing = Number(this.db.prepare('SELECT COUNT(*) AS count FROM market_observation_summary').get()?.count || 0);
-    if (expected !== existing) this.refreshObservationSummaries();
+    this.recordTiming('observation_summary_existing_count', stepStartedAt, { existing });
+    if (expected !== existing) {
+      stepStartedAt = performance.now();
+      this.refreshObservationSummaries();
+      this.recordTiming('observation_summary_rebuilt', stepStartedAt, { expected, existing });
+    }
+    this.recordTiming('observation_summary_check_total', totalStartedAt, { expected, existing, rebuilt: expected !== existing });
+    return { expected, existing, rebuilt: expected !== existing };
   }
 
   getStatus() {
@@ -591,7 +633,7 @@ class TcgDatabase {
     const stateRow = this.db.prepare('SELECT updated_at FROM app_state WHERE id = 1').get();
     const productRow = this.db.prepare('SELECT COUNT(*) AS count FROM products').get();
     const priceRow = this.db.prepare('SELECT COUNT(*) AS count FROM market_prices').get();
-    const snapshotRow = this.db.prepare('SELECT COUNT(DISTINCT captured_date) AS count FROM market_prices').get();
+    const snapshotRow = this.db.prepare('SELECT COUNT(*) AS count FROM market_snapshot_summary').get();
     const lastSnapshot = this.db.prepare('SELECT MAX(captured_date) AS date FROM market_prices').get();
     const eventRow = this.db.prepare('SELECT COUNT(*) AS count FROM business_events').get();
     const tradeLineRow = this.db.prepare('SELECT COUNT(*) AS count FROM trade_lines WHERE archived = 0').get();
@@ -638,6 +680,7 @@ class TcgDatabase {
   }
 
   validateStartup() {
+    const validationStartedAt = performance.now();
     this.open();
     const requiredTables = [
       'schema_version', 'app_state', 'products', 'market_prices',
@@ -671,14 +714,18 @@ class TcgDatabase {
     ];
     for (const tableName of businessCriticalTables) {
       if (!presentTables.has(tableName)) continue;
+      let stepStartedAt = performance.now();
       const quickCheckRows = this.db.prepare(`PRAGMA quick_check(${tableName});`).all();
+      this.recordTiming('startup_table_quick_check', stepStartedAt, { tableName });
       const quickCheckMessages = quickCheckRows
         .map(row => String(row.quick_check ?? Object.values(row)[0] ?? ''))
         .filter(Boolean);
       if (quickCheckMessages.length !== 1 || quickCheckMessages[0].toLowerCase() !== 'ok') {
         throw new Error(`SQLite-Integritätsprüfung fehlgeschlagen (${tableName}): ${quickCheckMessages.join('; ') || 'kein Ergebnis'}.`);
       }
+      stepStartedAt = performance.now();
       const foreignKeyErrors = this.db.prepare(`PRAGMA foreign_key_check(${tableName});`).all();
+      this.recordTiming('startup_table_foreign_key_check', stepStartedAt, { tableName });
       if (foreignKeyErrors.length) {
         throw new Error(`SQLite-Konsistenzprüfung fehlgeschlagen (${tableName}): ${foreignKeyErrors.length} ungültige Fremdschlüssel.`);
       }
@@ -688,7 +735,9 @@ class TcgDatabase {
     let state = null;
     if (row?.state_json) {
       try {
+        const parseStartedAt = performance.now();
         state = JSON.parse(row.state_json);
+        this.recordTiming('startup_validation_state_json_parsed', parseStartedAt, { bytes: this.onTiming ? Buffer.byteLength(row.state_json, 'utf8') : 0 });
       } catch (error) {
         throw new Error(`SQLite-Startprüfung fehlgeschlagen: Der gespeicherte Programmstand ist beschädigt (${error.message}).`);
       }
@@ -735,17 +784,23 @@ class TcgDatabase {
       databaseExistedBeforeOpen: this.databaseExistedBeforeOpen,
       counts: { ...expectedCounts }
     });
+    this.recordTiming('startup_validation_total', validationStartedAt, { coreRecordCount });
     return this.startupValidation;
   }
 
   loadState() {
     this.open();
+    let stepStartedAt = performance.now();
     const row = this.db.prepare('SELECT state_json, updated_at FROM app_state WHERE id = 1').get();
+    this.recordTiming('app_state_loaded', stepStartedAt, { hasState: Boolean(row?.state_json), bytes: this.onTiming && row?.state_json ? Buffer.byteLength(row.state_json, 'utf8') : 0 });
     if (!row?.state_json) return { state: null, updatedAt: '', validation: this.startupValidation };
 
     try {
+      stepStartedAt = performance.now();
+      const state = JSON.parse(row.state_json);
+      this.recordTiming('state_json_parsed', stepStartedAt, { bytes: this.onTiming ? Buffer.byteLength(row.state_json, 'utf8') : 0 });
       return {
-        state: JSON.parse(row.state_json),
+        state,
         updatedAt: row.updated_at || '',
         validation: this.startupValidation
       };
@@ -755,6 +810,7 @@ class TcgDatabase {
   }
 
   saveState(state, { allowDestructiveReset = false } = {}) {
+    const saveStartedAt = performance.now();
     this.open();
     if (!state || typeof state !== 'object' || Array.isArray(state)) {
       throw new TypeError('Der Programmstand ist ungültig.');
@@ -762,12 +818,18 @@ class TcgDatabase {
 
     state = upgradeStateToVersion12(state);
     const updatedAt = isoNow();
+    let stepStartedAt = performance.now();
     const json = JSON.stringify(state);
+    this.recordTiming('save_state_json_stringified', stepStartedAt, { bytes: this.onTiming ? Buffer.byteLength(json, 'utf8') : 0 });
+    stepStartedAt = performance.now();
     const previousRow = this.db.prepare('SELECT state_json FROM app_state WHERE id = 1').get();
+    this.recordTiming('save_previous_state_loaded', stepStartedAt, { bytes: this.onTiming && previousRow?.state_json ? Buffer.byteLength(previousRow.state_json, 'utf8') : 0 });
     let previousState = null;
     if (previousRow?.state_json) {
       try {
+        stepStartedAt = performance.now();
         previousState = JSON.parse(previousRow.state_json);
+        this.recordTiming('save_previous_state_parsed', stepStartedAt);
       } catch {
         previousState = null;
       }
@@ -783,8 +845,13 @@ class TcgDatabase {
 
     this.db.exec('BEGIN IMMEDIATE;');
     try {
+      stepStartedAt = performance.now();
       this.recordStateEvents(previousState, state, updatedAt, !previousState);
+      this.recordTiming('save_state_events_recorded', stepStartedAt);
+      stepStartedAt = performance.now();
       this.materializeState(state, updatedAt);
+      this.recordTiming('save_state_materialized', stepStartedAt);
+      stepStartedAt = performance.now();
       this.db.prepare(`
         INSERT INTO app_state (id, state_json, updated_at)
         VALUES (1, ?, ?)
@@ -793,6 +860,7 @@ class TcgDatabase {
           updated_at = excluded.updated_at
       `).run(json, updatedAt);
       this.db.exec('COMMIT;');
+      this.recordTiming('save_state_committed', stepStartedAt);
     } catch (error) {
       this.db.exec('ROLLBACK;');
       throw error;
@@ -807,6 +875,7 @@ class TcgDatabase {
       );
     }
     this.cardNameRecognitionIndex = null;
+    this.recordTiming('save_state_total', saveStartedAt, { bytes: this.onTiming ? Buffer.byteLength(json, 'utf8') : 0 });
     return {
       ok: true,
       updatedAt,

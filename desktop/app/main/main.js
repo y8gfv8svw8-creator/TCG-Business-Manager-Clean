@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { performance } = require('node:perf_hooks');
 const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
@@ -11,6 +12,30 @@ const { PrintReferenceDatabase, resolveBundledPrintReferencePath } = require('./
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.5';
+const STARTUP_DIAGNOSTICS_ENABLED = process.env.TCG_STARTUP_DIAGNOSTICS === '1';
+const startupProcessStartedAt = performance.now();
+const startupTimings = [];
+function recordStartupTiming(entry = {}) {
+  if (!STARTUP_DIAGNOSTICS_ENABLED) return;
+  const normalized = {
+    thread: String(entry.thread || 'main'),
+    name: String(entry.name || 'unknown'),
+    atMs: Number((performance.now() - startupProcessStartedAt).toFixed(2)),
+    durationMs: Number(Number(entry.durationMs || 0).toFixed(2)),
+    detail: entry.detail && typeof entry.detail === 'object' ? entry.detail : {}
+  };
+  startupTimings.push(normalized);
+  console.info(`[startup-diagnostic] ${JSON.stringify(normalized)}`);
+}
+
+let eventLoopExpectedAt = performance.now() + 50;
+const startupEventLoopMonitor = STARTUP_DIAGNOSTICS_ENABLED ? setInterval(() => {
+  const now = performance.now();
+  const lagMs = now - eventLoopExpectedAt;
+  eventLoopExpectedAt = now + 50;
+  if (lagMs >= 50) recordStartupTiming({ name: 'main_event_loop_blocked', durationMs: lagMs, detail: { thresholdMs: 50 } });
+}, 50) : null;
+startupEventLoopMonitor?.unref?.();
 // Der isolierte Oberflächentest läuft ohne Hardwarebeschleunigung, damit seine
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
@@ -21,6 +46,8 @@ let scannerRecognizer = null;
 let collectionPhotoStore = null;
 let printReferenceDatabase = null;
 let startupValidation = null;
+let deferredMarketSummaryRefreshStarted = false;
+let deferredMarketSummaryPayload = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
@@ -39,6 +66,7 @@ function ensureUserFolders() {
 }
 
 function initializeDatabase() {
+  const initializeStartedAt = performance.now();
   dataRoot = ensureUserFolders();
   scannerRecognizer = new CardScannerRecognizer({
     cacheRoot: path.join(dataRoot, 'Cache', 'OCR'),
@@ -54,16 +82,61 @@ function initializeDatabase() {
     databasePath: path.join(dataRoot, 'Daten', 'tcg_business_manager.sqlite'),
     schemaPath: path.join(__dirname, '..', '..', 'database', 'schema.sql'),
     backupRoot: path.join(dataRoot, 'Backups'),
-    photoStore: collectionPhotoStore
+    photoStore: collectionPhotoStore,
+    onTiming: STARTUP_DIAGNOSTICS_ENABLED
+      ? entry => recordStartupTiming({ ...entry, thread: 'main' })
+      : null
   }).open();
   startupValidation = database.validateStartup();
   if (!startupValidation?.valid) {
     throw new Error('SQLite wurde beim Start nicht vollständig validiert.');
   }
+  recordStartupTiming({ name: 'database_initialized_and_validated', durationMs: performance.now() - initializeStartedAt });
   return startupValidation;
 }
 
 function setupIpcHandlers() {
+  ipcMain.on('startup:timing', (_event, entry) => recordStartupTiming({ ...entry, thread: 'renderer' }));
+  ipcMain.handle('startup:get-diagnostics', () => ({ enabled: STARTUP_DIAGNOSTICS_ENABLED, timings: [...startupTimings] }));
+  ipcMain.on('startup:ui-ready', event => {
+    const sender = event.sender;
+    if (deferredMarketSummaryPayload) {
+      sender.send('data:market-summaries-refreshed', deferredMarketSummaryPayload);
+      return;
+    }
+    if (deferredMarketSummaryRefreshStarted) return;
+    deferredMarketSummaryRefreshStarted = true;
+    // Die UI ist bereits sichtbar und hat zwei Frames gezeichnet. Die beiden
+    // großen Konsistenzzählungen laufen getrennt und nachgelagert, damit sie
+    // den ersten benutzbaren Start nicht blockieren.
+    setTimeout(() => {
+      let snapshot;
+      try {
+        const snapshotStartedAt = performance.now();
+        snapshot = database.ensureSnapshotSummaries();
+        recordStartupTiming({ name: 'deferred_snapshot_summary_ready', durationMs: performance.now() - snapshotStartedAt, detail: snapshot });
+      } catch (error) {
+        console.error('Nachgelagerte Markt-Zusammenfassung fehlgeschlagen:', error);
+        return;
+      }
+      setTimeout(() => {
+        try {
+          const observationStartedAt = performance.now();
+          const observation = database.ensureObservationSummaries();
+          recordStartupTiming({ name: 'deferred_observation_summary_ready', durationMs: performance.now() - observationStartedAt, detail: observation });
+          deferredMarketSummaryPayload = {
+            status: database.getStatus(),
+            snapshotDates: database.getSnapshotDates({ limit: 365 }),
+            snapshot,
+            observation
+          };
+          if (!sender.isDestroyed()) sender.send('data:market-summaries-refreshed', deferredMarketSummaryPayload);
+        } catch (error) {
+          console.error('Nachgelagerte Beobachtungs-Zusammenfassung fehlgeschlagen:', error);
+        }
+      }, 0);
+    }, 750);
+  });
   ipcMain.handle('app:get-info', () => ({
     version: app.getVersion(),
     platform: process.platform,
@@ -142,12 +215,14 @@ function setupIpcHandlers() {
   ipcMain.handle('print-reference:find-candidates', (_event, payload = {}) => {
     try {
       if (!printReferenceDatabase) {
+        const referenceStartedAt = performance.now();
         printReferenceDatabase = new PrintReferenceDatabase({
           databasePath: resolveBundledPrintReferencePath({
             packaged: app.isPackaged,
             resourcesPath: process.resourcesPath
           })
         }).open();
+        recordStartupTiming({ name: 'print_reference_database_ready', durationMs: performance.now() - referenceStartedAt });
       }
       const setCode = String(payload.setCode || '').trim().slice(0, 40);
       const rarity = String(payload.rarity || '').trim().slice(0, 120);
@@ -217,6 +292,7 @@ function setupIpcHandlers() {
 }
 
 function createWindow() {
+  const windowStartedAt = performance.now();
   mainWindow = new BrowserWindow({
     width: 1540,
     height: 980,
@@ -234,6 +310,7 @@ function createWindow() {
       spellcheck: false
     }
   });
+  recordStartupTiming({ name: 'window_created', durationMs: performance.now() - windowStartedAt });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -252,7 +329,12 @@ function createWindow() {
     }
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.webContents.once('dom-ready', () => recordStartupTiming({ name: 'window_dom_ready' }));
+  mainWindow.webContents.once('did-finish-load', () => recordStartupTiming({ name: 'window_did_finish_load' }));
+  mainWindow.once('ready-to-show', () => {
+    recordStartupTiming({ name: 'window_ready_to_show' });
+    mainWindow.show();
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
@@ -260,6 +342,7 @@ function createWindow() {
 app.setName('TCG Business Manager');
 
 app.whenReady().then(() => {
+  recordStartupTiming({ name: 'app_ready' });
   initializeDatabase();
   setupIpcHandlers();
   createWindow();

@@ -4,6 +4,7 @@
  */
 (() => {
   "use strict";
+  const startupCardmarketExecutionStartedAt = performance.now();
 
   const CM_DB_NAME = "tcgBusinessManagerCardmarket";
   const CM_DB_VERSION = 3;
@@ -306,7 +307,17 @@
     return cmCacheManager;
   }
 
-  function cmOpenDb() { return cmCache().open(); }
+  function cmOpenDb() {
+    if(!window.desktopApp?.startupDiagnosticsEnabled)return cmCache().open();
+    const startedAt=performance.now();
+    return cmCache().open().then(database=>{
+      window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_cardmarket_cache_ready",startedAt);
+      return database;
+    },error=>{
+      window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_cardmarket_cache_failed",startedAt,{error:String(error?.message||error)});
+      throw error;
+    });
+  }
 
   function cmRequest(request) {
     return new Promise((resolve, reject) => {
@@ -346,8 +357,23 @@
     });
   }
 
+  let cmStartupCacheTimingReported=false;
   function cmWithCacheRecovery(operation) {
-    return cmCache().withRecovery(operation,{rebuild:cmRebuildCacheFromSqlite});
+    if(!window.desktopApp?.startupDiagnosticsEnabled)return cmCache().withRecovery(operation,{rebuild:cmRebuildCacheFromSqlite});
+    const startedAt=performance.now();
+    return cmCache().withRecovery(operation,{rebuild:cmRebuildCacheFromSqlite}).then(result=>{
+      if(!cmStartupCacheTimingReported){
+        cmStartupCacheTimingReported=true;
+        window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_cardmarket_cache_ready",startedAt);
+      }
+      return result;
+    },error=>{
+      if(!cmStartupCacheTimingReported){
+        cmStartupCacheTimingReported=true;
+        window.__TCG_RECORD_STARTUP_TIMING__?.("indexeddb_cardmarket_cache_failed",startedAt,{error:String(error?.message||error)});
+      }
+      throw error;
+    });
   }
 
   async function cmGetAll(storeName) {
@@ -814,7 +840,7 @@
     cmProductByIdCache = new Map(products.map(row => [String(row.productId), row]));
     cmMergedCache = products.map(product => ({...product, ...(cmLatestByIdCache.get(String(product.productId)) || {})}));
     const businessChanges=window.tcgApplyBusinessProductMetadata?.(products)||0;
-    if(businessChanges){saveState();window.setTimeout(()=>renderAll(),0);}
+    if(businessChanges){saveState();window.setTimeout(()=>renderAllPreservingUserInput(),0);}
     return cmMergedCache;
   }
 
@@ -2227,14 +2253,20 @@
     }
   }
 
-  async function cmRefreshMetadataFromDb() {
+  function cmRenderDataCenterPreservingInput(){
+    const preserve=window.TcgRendererFieldState?.renderPreservingFields;
+    if(typeof preserve!=="function")return renderCardmarketDataCenter();
+    return preserve(renderCardmarketDataCenter,{root:document});
+  }
+
+  async function cmRefreshMetadataFromDb({includeSqlite=true}={}) {
     try {
       const [products, latest, history, sqliteStatus, snapshotRows, cardNameStatus] = await Promise.all([
         cmCount("products"),
         cmCount("latestPrices"),
         cmCount("priceHistory"),
-        window.desktopApp?.getDatabaseStatus ? window.desktopApp.getDatabaseStatus() : null,
-        window.desktopApp?.getSnapshotDates ? window.desktopApp.getSnapshotDates({limit:365}) : [],
+        includeSqlite && window.desktopApp?.getDatabaseStatus ? window.desktopApp.getDatabaseStatus() : null,
+        includeSqlite && window.desktopApp?.getSnapshotDates ? window.desktopApp.getSnapshotDates({limit:365}) : [],
         window.desktopApp?.getCardNameStatus ? window.desktopApp.getCardNameStatus() : null
       ]);
       let changed = false;
@@ -2267,11 +2299,30 @@
         };
         for (const [key,value] of Object.entries(nameFields)) if (state.cardmarket[key] !== value) { state.cardmarket[key]=value; changed=true; }
       }
-      if (changed) saveState();
-      renderCardmarketDataCenter();
+      cmRenderDataCenterPreservingInput();
     } catch (error) {
       console.error("Cardmarket-Metadaten konnten nicht gelesen werden",error);
     }
+  }
+
+  function cmApplyDeferredMarketSummary(payload={}) {
+    const sqliteStatus=payload.status;
+    const snapshotRows=Array.isArray(payload.snapshotDates)?payload.snapshotDates:[];
+    if(sqliteStatus?.ready){
+      state.cardmarket.sqlitePriceRowCount=Number(sqliteStatus.marketPriceCount||0);
+      state.cardmarket.sqliteSnapshotCount=Number(sqliteStatus.snapshotCount||0);
+      state.cardmarket.historyRowCount=Number(sqliteStatus.marketPriceCount||0);
+      state.cardmarket.lastSuccessfulImport=sqliteStatus.lastSuccessfulImport||null;
+      state.cardmarket.recentImportRuns=Array.isArray(sqliteStatus.recentCardmarketImports)?sqliteStatus.recentCardmarketImports:[];
+    }
+    if(snapshotRows.length){
+      const dates=snapshotRows.map(row=>String(row.date||"")).filter(Boolean);
+      state.cardmarket.snapshotDates=dates;
+      if(dates[0])state.cardmarket.priceDate=dates[0];
+    }
+    // Abgeleitete Anzeigeinformationen werden bewusst nicht in den kompletten
+    // App-State zurückgeschrieben. Nur das Datencenter wird gezielt erneuert.
+    cmRenderDataCenterPreservingInput();
   }
 
   async function cmExportBackup() {
@@ -2772,9 +2823,8 @@
     saveState();
   }
 
-  saveState();
-  renderAll();
-  cmRefreshMetadataFromDb().then(async () => {
+  window.desktopApp?.onMarketSummariesRefreshed?.(cmApplyDeferredMarketSummary);
+  cmRefreshMetadataFromDb({includeSqlite:false}).then(async () => {
     try {
       await cmLoadMergedCache();
       await cmRepairKnownGermanNames();
@@ -2786,4 +2836,5 @@
     }
     window.setTimeout(cmRunDailyAutoUpdate, 1200);
   });
+  window.__TCG_RECORD_STARTUP_TIMING__?.("cardmarket_script_executed",startupCardmarketExecutionStartedAt);
 })();

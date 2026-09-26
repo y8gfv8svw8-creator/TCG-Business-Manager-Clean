@@ -2894,6 +2894,126 @@
     };
   }
 
+  function allocateCollectionOriginalCostComponents(lines = [], originalCostCents = 0) {
+    const units = [];
+    lines.forEach(line => (line.unitCostsCents || []).forEach((fullCents, unitIndex) => units.push({
+      line, unitIndex, fullCents: Number(fullCents || 0), originalCents: 0, fraction: 0
+    })));
+    const fullTotal = units.reduce((sum, unit) => sum + unit.fullCents, 0);
+    if (originalCostCents < 0 || originalCostCents > fullTotal) throw new Error('Die Kostenbestandteile des Sammlungsankaufs sind widersprüchlich.');
+    let floorTotal = 0;
+    units.forEach(unit => {
+      const exact = fullTotal > 0 ? originalCostCents * unit.fullCents / fullTotal : 0;
+      unit.originalCents = Math.floor(exact);
+      unit.fraction = exact - unit.originalCents;
+      floorTotal += unit.originalCents;
+    });
+    let remainder = originalCostCents - floorTotal;
+    units.slice().sort((left, right) => right.fraction - left.fraction
+      || String(left.line.observationId).localeCompare(String(right.line.observationId))
+      || left.unitIndex - right.unitIndex).forEach(unit => {
+      if (remainder > 0) { unit.originalCents += 1; remainder -= 1; }
+    });
+    const byLine = new Map();
+    units.forEach(unit => {
+      if (!byLine.has(unit.line.observationId)) byLine.set(unit.line.observationId, { original: [], direct: [] });
+      const target = byLine.get(unit.line.observationId);
+      target.original[unit.unitIndex] = unit.originalCents;
+      target.direct[unit.unitIndex] = unit.fullCents - unit.originalCents;
+    });
+    return byLine;
+  }
+
+  function applyCollectionInventoryTransfer(state = {}, analysisId = '', options = {}) {
+    const next = JSON.parse(JSON.stringify(state || {}));
+    next.inventory = Array.isArray(next.inventory) ? next.inventory : [];
+    next.movements = Array.isArray(next.movements) ? next.movements : [];
+    next.collectionPurchaseAnalyses = Array.isArray(next.collectionPurchaseAnalyses) ? next.collectionPurchaseAnalyses : [];
+    const collection = next.collectionPurchaseAnalyses.find(row => String(row.id) === String(analysisId));
+    if (!collection) throw new Error('Der Sammlungsankauf wurde nicht gefunden.');
+    const previousTransfer = collection.inventoryTransfer;
+    if (previousTransfer?.status === 'completed' || collection.captureStatus === 'transferred') {
+      return { state: next, transferred: false, idempotent: true, summary: { ...(previousTransfer || {}) } };
+    }
+    if (next.inventory.some(item => String(item.sourceCollectionPurchaseId || '') === String(collection.id))) {
+      throw new Error('Zu diesem Sammlungsankauf existieren bereits Bestandskarten. Die Übernahme wurde zum Schutz vor Duplikaten abgebrochen.');
+    }
+    const review = collection.economicReview || {}, allocation = review.allocation || {};
+    if (collection.captureStatus !== 'economic_ready' || review.status !== 'ready_for_transfer') throw new Error('Der Sammlungsankauf ist noch nicht wirtschaftlich geprüft.');
+    const observations = (Array.isArray(collection.photoObservations) ? collection.photoObservations : []).filter(row => row.detectionReviewState !== 'rejected');
+    const lines = Array.isArray(allocation.lines) ? allocation.lines : [];
+    const linesById = new Map(lines.map(line => [String(line.observationId || ''), line]));
+    const totalCents = Math.round((Math.max(0, asNumber(collection.sellerPrice)) + Math.max(0, asNumber(review.directCosts))) * 100);
+    const allocatedCents = lines.reduce((sum, line) => sum + (Array.isArray(line.unitCostsCents) ? line.unitCostsCents.reduce((part, value) => part + Number(value || 0), 0) : 0), 0);
+    if (!observations.length || lines.length !== observations.length || Number(allocation.totalCents) !== totalCents || allocatedCents !== totalCents) throw new Error('Die EK-Verteilung ist nicht mehr vollständig oder stimmt nicht mit dem Gesamt-EK überein.');
+
+    for (const observation of observations) {
+      const capture = observation.manualCapture || {}, quantity = Number(capture.quantity), productId = String(observation.selectedProductId || '').replace(/\D/g, ''), line = linesById.get(String(observation.id));
+      const privateQuantity = Number(line?.privateQuantity || 0);
+      if (!capture.completedAt || observation.printConfidence !== 'confirmed' || !productId) throw new Error('Mindestens eine Karte ist nicht vollständig und eindeutig bestätigt.');
+      if (!Number.isInteger(quantity) || quantity < 1 || !line || Number(line.quantity) !== quantity || !Number.isInteger(privateQuantity) || privateQuantity < 0 || privateQuantity > quantity) throw new Error('Mindestens eine Menge oder Privatentnahme ist ungültig.');
+      if (!Array.isArray(line.unitCostsCents) || line.unitCostsCents.length !== quantity || line.unitCostsCents.some(value => !Number.isInteger(value) || value < 0)) throw new Error('Mindestens eine Karte besitzt keine gültige EK-Zuteilung.');
+      if (Number(line.businessQuantity) !== quantity - privateQuantity) throw new Error('Privat- und Geschäftsmenge sind widersprüchlich.');
+    }
+    if (lines.some(line => !observations.some(observation => String(observation.id) === String(line.observationId)))) throw new Error('Die EK-Verteilung enthält eine unbekannte Ankaufposition.');
+
+    const originalCostCents = Math.round(Math.max(0, asNumber(collection.sellerPrice)) * 100);
+    const components = allocateCollectionOriginalCostComponents(lines, originalCostCents);
+    const now = String(options.now || new Date().toISOString()), transferId = String(options.transferId || `collection-transfer-${String(collection.id)}-${now.replace(/[^0-9]/g, '')}`);
+    const makeId = typeof options.makeId === 'function' ? options.makeId : (() => globalThis.crypto?.randomUUID?.() || `collection-asset-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const catalog = next.productCatalog || {};
+    const createdIds = [], transferPositions = [];
+    let businessQuantity = 0, privateQuantityTotal = 0, businessCostCents = 0, privateCostCents = 0;
+
+    for (const observation of observations) {
+      const capture = observation.manualCapture || {}, recognition = observation.printRecognition || {}, line = linesById.get(String(observation.id)), quantity = Number(capture.quantity), privateQuantity = Number(line.privateQuantity || 0), business = quantity - privateQuantity;
+      const productId = String(observation.selectedProductId || '').replace(/\D/g, ''), product = catalog[productId] || {};
+      const candidates = [...(observation.printCandidates || []), ...(recognition.variantCandidates || []), ...(recognition.referenceCandidates || [])];
+      const candidate = candidates.find(row => String(row.productId || row.cardmarketProductId || '').replace(/\D/g, '') === productId) || {};
+      const setCode = String(capture.setCode || recognition.setCode || candidate.setCode || candidate.collectorNumber || product.collectorNumber || '');
+      const component = components.get(String(observation.id)) || { original: [], direct: [] };
+      const name = String(observation.selectedName || candidate.germanName || candidate.name || product.germanName || product.name || `CM ${productId}`);
+      const edition = capture.edition === '1st' ? '1st Edition' : capture.edition === 'Unlimited' ? 'Unlimited' : 'Unbekannt';
+      const condition = String(capture.condition || 'UNBEKANNT');
+      const source = `Sammlungsankauf · ${String(collection.title || collection.id)}`;
+      const lineKey = `COLLECTION:${String(collection.id)}:${String(observation.id)}`;
+      const base = {
+        productId, metacardId:String(candidate.metacardId || product.metacardId || ''), name,
+        germanName:String(candidate.germanName || product.germanName || name), englishName:String(candidate.englishName || product.englishName || ''),
+        set:String(product.set || candidate.setPrefix || ''), setName:String(candidate.setName || product.setName || product.set || ''),
+        collectorNumber:setCode, rarity:String(recognition.selectedRarity || candidate.rarity || product.rarity || product.variant || ''),
+        version:String(recognition.selectedVersion || candidate.version || ''), treatment:String(candidate.treatment || ''),
+        language:collectorNumberLanguage(setCode) || normalizeCardLanguage(candidate.language || product.language), condition, edition,
+        productUrl:String(candidate.productUrl || product.productUrl || ''), purchaseDate:String(collection.date || now.slice(0, 10)), receivedDate:now.slice(0, 10),
+        source, lotId:`SAMMLUNG:${String(collection.id)}`, importKey:`COLLECTION:${String(collection.id)}`, purchaseLineKey:lineKey,
+        ownership:'business', holdingProfile:'UNKLASSIFIZIERT', longTermHold:false, originalTargetSell:null, targetSell:null,
+        listed:false, listingPrice:0, listingHistory:[], location:'', status:'Im Bestand', costConfirmed:true,movementRecorded:true,
+        sourceCollectionPurchaseId:String(collection.id), sourceCollectionPositionId:String(observation.id), sourceCollectionTransferId:transferId,
+        sourceCollectionSplit:privateQuantity > 0 && business > 0
+      };
+      for (let unitIndex = privateQuantity; unitIndex < quantity; unitIndex += 1) {
+        const fullCents = Number(line.unitCostsCents[unitIndex] || 0), cardCents = Number(component.original[unitIndex] || 0), directCents = Number(component.direct[unitIndex] || 0), id = String(makeId());
+        const asset = {
+          ...base,id,sourceCollectionUnitIndex:unitIndex + 1,cardPrice:cardCents / 100,originalAcquisitionCost:cardCents / 100,
+          allocatedPurchaseExtra:directCents / 100,fullAcquisitionCost:fullCents / 100,cost:fullCents / 100,costStatus:fullCents > 0 ? 'known' : 'confirmed_zero',
+          acquisitionCostOrigin:{type:'collection_purchase_allocation',collectionPurchaseId:String(collection.id),collectionPositionId:String(observation.id),transferId,allocationMethod:'manual_fixed_plus_reference_remainder',originalCostCents:cardCents,directCostCents:directCents,fullCostCents:fullCents}
+        };
+        next.inventory.push(asset);createdIds.push(id);businessQuantity += 1;businessCostCents += fullCents;
+        if (options.failAfterAssets && createdIds.length >= Number(options.failAfterAssets)) throw new Error('Simulierter Fehler während der Bestandsübernahme.');
+      }
+      const privateLineCostCents = line.unitCostsCents.slice(0, privateQuantity).reduce((sum, value) => sum + Number(value || 0), 0);
+      privateQuantityTotal += privateQuantity;privateCostCents += privateLineCostCents;
+      line.unitOriginalCostCents = [...component.original];line.unitDirectCostCents = [...component.direct];
+      line.businessInventoryIds = createdIds.slice(createdIds.length - business);line.privateRetainedQuantity = privateQuantity;
+      transferPositions.push({observationId:String(observation.id),purchaseLineKey:lineKey,productId,quantity,businessQuantity:business,privateQuantity,businessCostCents:line.unitCostsCents.slice(privateQuantity).reduce((sum,value)=>sum+Number(value||0),0),privateCostCents:privateLineCostCents,inventoryIds:[...line.businessInventoryIds]});
+      if (business > 0) next.movements.push({id:String(makeId()),timestamp:now,type:'Sammlungsankauf / Geschäftsbestand',quantity:business,productId,inventoryIds:[...line.businessInventoryIds],reference:String(collection.title || collection.id),note:`Ankaufposition ${String(observation.id)} · ${name}`,sourceCollectionPurchaseId:String(collection.id),sourceCollectionPositionId:String(observation.id),movementRecorded:true});
+    }
+    if (businessCostCents + privateCostCents !== totalCents) throw new Error('Geschäftlicher und privater EK ergeben nicht den Gesamt-EK des Ankaufs.');
+    const summary = {status:'completed',transferId,transferredAt:now,businessQuantity,privateQuantity:privateQuantityTotal,businessCostCents,privateCostCents,totalCostCents:totalCents,inventoryItemIds:createdIds,positions:transferPositions};
+    collection.inventoryTransfer = summary;collection.captureStatus = 'transferred';collection.updatedAt = now;review.status = 'transferred';review.transferredAt = now;review.transferId = transferId;
+    return {state:next,transferred:true,idempotent:false,summary};
+  }
+
   function buildCapitalOverview(state = {}, marketByProduct = {}) {
     const accounts = (state.capitalAccounts || []).filter(row => !row.archived);
     const balances = new Map(accounts.map(row => [row.id, 0]));
@@ -3028,6 +3148,7 @@
     analyzeCollectionPurchase,
     buildCollectionDecisionSnapshot,
     buildCollectionPurchaseDraft,
+    applyCollectionInventoryTransfer,
     buildCapitalOverview,
     buildAgingSummary,
     matchesSlowMoverFilters,

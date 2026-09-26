@@ -902,6 +902,18 @@ class TcgDatabase {
     };
   }
 
+  transferCollectionPurchaseToInventory(payload = {}, options = {}) {
+    this.open();
+    const loaded = this.loadState();
+    const result = businessAutomation.applyCollectionInventoryTransfer(
+      loaded.state || {},
+      String(payload.analysisId || ''),
+      options
+    );
+    if (!result.idempotent) result.persistence = this.saveState(result.state);
+    return result;
+  }
+
   recordStateEvents(previousState, nextState, savedAt, baseline = false) {
     const collections = [
       ['purchase', 'purchases'],

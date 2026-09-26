@@ -1124,6 +1124,7 @@ function showView(name,options={}) {
   document.getElementById("pageTitle").textContent = views[name][0];
   document.getElementById("pageSubtitle").textContent = views[name][1];
   currentViewName=name;
+  if(name==="collectionpurchases"&&activeCollectionObservationId)collectionManualSetCodeFocusPending=true;
   updateNavigationButtons();
   renderAll();
   if(name==="buying")setTimeout(()=>refreshActivePurchaseDraftPrices(false),0);
@@ -2030,11 +2031,13 @@ function openInventoryDetails(groupKey){
   const detailPurchase=state.purchases.find(row=>row.id===detailItem.purchaseId);
   const lotRows=[...stats.items].sort((a,b)=>String(a.purchaseDate||"").localeCompare(String(b.purchaseDate||""))).map((item,index)=>{
     const lot=inventoryLotDetail(item);
-    const purchaseReference=lot.purchase?`#${lot.purchase.orderNo||"-"}`:(item.source||item.lotId||"Manuelle Erfassung");
+    const sourceCollection=(state.collectionPurchaseAnalyses||[]).find(row=>String(row.id)===String(item.sourceCollectionPurchaseId||""));
+    const purchaseReference=lot.purchase?`#${lot.purchase.orderNo||"-"}`:sourceCollection?`Sammlungsankauf · ${sourceCollection.title||sourceCollection.id}`:(item.source||item.lotId||"Manuelle Erfassung");
+    const collectionPosition=item.sourceCollectionPositionId?`<br><small>Ankaufposition ${escapeHtml(item.sourceCollectionPositionId)}${item.sourceCollectionSplit?" · getrennte Teilmenge":""}</small>`:"";
     const history=lot.sale?`Verkauf #${lot.sale.orderNo||"-"}${lot.salePrice?` · VK ${money(lot.salePrice)}`:""}`:item.status;
     const costText=lot.costStatus==="unknown"?'<span class="muted">unbekannt</span>':`<strong>${money(lot.cost)}</strong>${lot.costStatus==="confirmed_zero"?'<br><small>0 € bestätigt</small>':""}`;
     const resultText=lot.salePrice?(lot.profitKnown?`<br><small class="${lot.profit>=0?"money-positive":"money-negative"}">${lot.profit>=0?"+":""}${money(lot.profit)} · ${pct(lot.roi)}</small>`:'<br><small class="muted">Gewinn unbekannt: EK fehlt</small>'):"";
-    return `<tr><td>${index+1}</td><td>${fmtDate(item.purchaseDate)||"–"}</td><td>${lot.purchase?`<button type="button" class="link-button" data-show-purchase="${escapeHtml(lot.purchase.id)}">${escapeHtml(purchaseReference)}</button>`:escapeHtml(purchaseReference)}${lot.purchase?.seller?`<br><small>${escapeHtml(lot.purchase.seller)}</small>`:""}</td><td>${lot.decision.cardPrice==null?"unbekannt":money(lot.decision.cardPrice)}${lot.allocation?`<br><small>+ ${money(lot.allocation.allocatedShipping)} Versand · ${money(lot.allocation.allocatedExtra)} Zusatz</small>`:""}</td><td>${costText}</td><td>${lot.decision.decisionCost==null?'<span class="muted">unbekannt</span>':`<strong>${money(lot.decision.decisionCost)}</strong><br><small>${lot.decision.cartFiller?"Warenkorbfüller":"kein Warenkorbfüller"} · + ${money(lot.decision.incrementalShipping)} Versand · ${money(lot.decision.incrementalDirect)} direkt</small>`}</td><td>${item.targetSell!=null?`<strong>${money(item.targetSell)}</strong>`:"Ziel fehlt"}${item.originalTargetSell!=null?`<br><small>ursprünglich ${money(item.originalTargetSell)}</small>`:""}<br><small>VK ${item.listed&&Number(item.listingPrice||0)>0?money(item.listingPrice):"nicht inseriert"}</small></td><td>${escapeHtml(history)}${resultText}<br><small>${item.longTermHold?"Langfristig halten":escapeHtml(item.holdingProfile||"Standard")}</small></td></tr>`;
+    return `<tr><td>${index+1}</td><td>${fmtDate(item.purchaseDate)||"–"}</td><td>${lot.purchase?`<button type="button" class="link-button" data-show-purchase="${escapeHtml(lot.purchase.id)}">${escapeHtml(purchaseReference)}</button>`:escapeHtml(purchaseReference)}${collectionPosition}${lot.purchase?.seller?`<br><small>${escapeHtml(lot.purchase.seller)}</small>`:""}</td><td>${lot.decision.cardPrice==null?"unbekannt":money(lot.decision.cardPrice)}${lot.allocation?`<br><small>+ ${money(lot.allocation.allocatedShipping)} Versand · ${money(lot.allocation.allocatedExtra)} Zusatz</small>`:item.allocatedPurchaseExtra!=null?`<br><small>+ ${money(item.allocatedPurchaseExtra)} direkte Ankaufskosten</small>`:""}</td><td>${costText}</td><td>${lot.decision.decisionCost==null?'<span class="muted">unbekannt</span>':`<strong>${money(lot.decision.decisionCost)}</strong><br><small>${lot.decision.cartFiller?"Warenkorbfüller":"kein Warenkorbfüller"} · + ${money(lot.decision.incrementalShipping)} Versand · ${money(lot.decision.incrementalDirect)} direkt</small>`}</td><td>${item.targetSell!=null?`<strong>${money(item.targetSell)}</strong>`:"Ziel fehlt"}${item.originalTargetSell!=null?`<br><small>ursprünglich ${money(item.originalTargetSell)}</small>`:""}<br><small>VK ${item.listed&&Number(item.listingPrice||0)>0?money(item.listingPrice):"nicht inseriert"}</small></td><td>${escapeHtml(history)}${resultText}<br><small>${item.longTermHold?"Langfristig halten":escapeHtml(item.holdingProfile||"Standard")}</small></td></tr>`;
   }).join("");
   const dialog=document.getElementById("orderDetailDialog");
   document.getElementById("orderDetailTitle").textContent="Bestand & Bewegungen";
@@ -3334,13 +3337,16 @@ let collectionObservationPrintSearchProducts=new Map();
 const collectionPhotoDataUrls=new Map();
 let collectionNameRecognitionBatchToken=0;
 const collectionNameRecognitionRunningIds=new Set();
+let collectionManualSetCodeTimer=null;
+let collectionManualSetCodeSequence=0;
+let collectionManualSetCodeFocusPending=false;
 
 function activeCollectionAnalysis(){
   return (state.collectionPurchaseAnalyses||[]).find(row=>row.id===state.activeCollectionAnalysisId)||null;
 }
 
 function createCollectionAnalysis(){
-  const analysis={id:uid(),title:`Sammlungsanalyse ${new Date().toLocaleString("de-DE")}`,sourceType:"Kleinanzeigen",sellerName:"",url:"",date:todayISO(),sellerPrice:0,shipping:0,extra:0,notes:"",items:[],decisionSnapshots:[],photos:[],photoObservations:[],physicalCards:[],createdAt:new Date().toISOString()};
+  const analysis={id:uid(),title:`Sammlungsankauf ${new Date().toLocaleString("de-DE")}`,captureStatus:"active",sourceType:"Kleinanzeigen",sellerName:"",url:"",date:todayISO(),sellerPrice:0,shipping:0,extra:0,notes:"",items:[],decisionSnapshots:[],photos:[],photoObservations:[],physicalCards:[],createdAt:new Date().toISOString()};
   state.collectionPurchaseAnalyses.unshift(analysis);state.activeCollectionAnalysisId=analysis.id;return analysis;
 }
 
@@ -3363,6 +3369,31 @@ function activeCollectionObservation(analysis=activeCollectionAnalysis()){
   const photo=activeCollectionPhoto(analysis);if(!photo)return null;
   let observation=analysis.photoObservations.find(row=>row.id===activeCollectionObservationId&&row.photoId===photo.id&&row.detectionReviewState!=="rejected")||null;
   activeCollectionObservationId=observation?.id||"";return observation;
+}
+
+function ensureCollectionManualCapture(observation){
+  if(!observation)return null;
+  observation.manualCapture=window.TcgCollectionPhotoModel?.normalizeManualCapture?.(observation.manualCapture)||{setCode:"",setCodeConfirmed:false,condition:"UNBEKANNT",edition:"",quantity:1,completedAt:"",updatedAt:""};
+  return observation.manualCapture;
+}
+
+function orderedCollectionObservations(analysis){
+  if(!analysis)return [];
+  const photoOrder=new Map((analysis.photos||[]).slice().sort((a,b)=>Number(a.sequence||0)-Number(b.sequence||0)).map((photo,index)=>[photo.id,index]));
+  return (analysis.photoObservations||[]).filter(row=>row.detectionReviewState!=="rejected").slice().sort((left,right)=>{
+    const photoDifference=Number(photoOrder.get(left.photoId)??9999)-Number(photoOrder.get(right.photoId)??9999);if(photoDifference)return photoDifference;
+    const leftRow=Number(left.row),rightRow=Number(right.row);if(Number.isFinite(leftRow)&&Number.isFinite(rightRow)&&leftRow!==rightRow)return leftRow-rightRow;
+    const leftColumn=Number(left.column),rightColumn=Number(right.column);if(Number.isFinite(leftColumn)&&Number.isFinite(rightColumn)&&leftColumn!==rightColumn)return leftColumn-rightColumn;
+    return Number(left.boundingBox?.y||0)-Number(right.boundingBox?.y||0)||Number(left.boundingBox?.x||0)-Number(right.boundingBox?.x||0);
+  });
+}
+
+function focusCollectionManualField(id,{select=false}={}){
+  requestAnimationFrame(()=>{const field=document.getElementById(id);if(!field||field.disabled||field.hidden)return;field.focus();if(select&&typeof field.select==="function")field.select();});
+}
+
+function normalizeManualSetCode(value){
+  return String(value||"").toUpperCase().replace(/\s+/g,"").replace(/[^A-Z0-9-]/g,"").slice(0,40);
 }
 
 async function loadCollectionPhotoData(photo){
@@ -3418,8 +3449,9 @@ function collectionReferenceCandidateLabel(candidate={}){
 
 function renderCollectionPrintRecognition(observation){
   const recognition=observation.printRecognition||{},setCode=document.getElementById("collectionObservationSetCode"),confidence=document.getElementById("collectionObservationSetCodeConfidence"),rarity=document.getElementById("collectionObservationReferenceRarity"),version=document.getElementById("collectionObservationReferenceVersion"),treatment=document.getElementById("collectionObservationReferenceTreatment"),productId=document.getElementById("collectionObservationReferenceProductId"),status=document.getElementById("collectionObservationPrintMappingStatus"),candidatesElement=document.getElementById("collectionObservationReferenceCandidates");
+  const manualCapture=ensureCollectionManualCapture(observation);
   const protectedPrint=observation.printConfidence==="confirmed"&&Boolean(cleanProductId(observation.selectedProductId));
-  setCode.value=recognition.setCode||"";confidence.value=recognition.setCodeConfidence==null?"":`${Number(recognition.setCodeConfidence).toFixed(1)} %`;
+  setCode.value=manualCapture.setCode||recognition.setCode||"";confidence.value=manualCapture.setCode?(manualCapture.setCodeConfirmed?"Manuell bestätigt":"Manuelle Eingabe"):recognition.setCodeConfidence==null?"":`${Number(recognition.setCodeConfidence).toFixed(1)} %`;
   const selectedRarity=recognition.selectedRarity||recognition.suggestedRarity||"";
   rarity.innerHTML=`<option value="">${recognition.requiresRaritySelection?"Bitte Rarität auswählen":"Noch nicht bestimmbar"}</option>${(recognition.rarityOptions||[]).map(option=>`<option value="${escapeHtml(option.value)}" ${option.value===selectedRarity?"selected":""}>${escapeHtml(option.value)}${option.count>1?` (${option.count} Prints)`:""}</option>`).join("")}`;
   rarity.disabled=protectedPrint||!(recognition.rarityOptions||[]).length;
@@ -3435,6 +3467,11 @@ function renderCollectionPrintRecognition(observation){
     const warning=safe?"Extern/eindeutig verifiziert – noch nicht manuell bestätigt":"Ungeprüft - bitte selbst prüfen";
     return `<div class="collection-candidate-row ${selected?"selected":""}"><span><strong>${escapeHtml(candidate.germanName||candidate.englishName||"Print-Kandidat")}</strong>${candidate.englishName&&candidate.englishName!==candidate.germanName?`<small>Englisch: ${escapeHtml(candidate.englishName)}</small>`:""}<small>${escapeHtml(collectionReferenceCandidateLabel(candidate)||"Druckdaten unvollständig")}</small><small>${escapeHtml(candidate.mappingStatus||"unresolved")} · ${escapeHtml(warning)}${safe?` · CM ${escapeHtml(candidate.cardmarketProductId)}`:""}</small></span><span class="collection-candidate-actions"><button type="button" class="secondary" data-${safe?"confirm":"mark"}-reference-print="${escapeHtml(candidate.id)}">${safe?(confirmed?"Bestätigt":"Diesen Print bestätigen"):(selected?"Vorgemerkt":"Kandidat vormerken")}</button></span></div>`;
   }).join(""):'<div class="muted">Keine lokalen Print-Kandidaten. Ungeprüft - bitte selbst prüfen.</div>';
+  document.getElementById("collectionObservationManualCondition").value=manualCapture.condition||"UNBEKANNT";
+  document.getElementById("collectionObservationManualEdition").value=manualCapture.edition||"";
+  document.getElementById("collectionObservationManualQuantity").value=Math.max(1,Number(manualCapture.quantity||1));
+  const captureStatus=document.getElementById("collectionObservationManualCaptureStatus");
+  captureStatus.innerHTML=manualCapture.completedAt?`<strong>Erfasst</strong> · ${escapeHtml(manualCapture.condition)}${manualCapture.edition?` · ${escapeHtml(manualCapture.edition)}`:""} · ${manualCapture.quantity}× · ${escapeHtml(new Date(manualCapture.completedAt).toLocaleString("de-DE"))}`:"Noch nicht abgeschlossen. Die Angaben bleiben nur in diesem Sammlungsankauf und werden nicht in Bestand oder Einkauf übernommen.";
 }
 
 function renderCollectionPhotoPreviews(analysis){
@@ -3475,16 +3512,17 @@ function renderCollectionObservationEditor(analysis,observation){
   const physical=(analysis.physicalCards||[]).find(card=>card.id===observation.physicalCardId)||null;
   const itemSelect=document.getElementById("collectionPhysicalCardItem");itemSelect.disabled=!physical;
   itemSelect.innerHTML=`<option value="">Keine wirtschaftliche Position verknüpft</option>${(analysis.items||[]).map(item=>`<option value="${escapeHtml(item.id)}" ${item.id===physical?.linkedCollectionItemId?"selected":""}>${escapeHtml(item.name||`CM ${item.productId||"?"}`)} · ${escapeHtml(item.collectorNumber||item.set||"")}</option>`).join("")}`;
+  if(collectionManualSetCodeFocusPending){collectionManualSetCodeFocusPending=false;focusCollectionManualField("collectionObservationSetCode",{select:true});}
 }
 
 function renderCollectionPhotoEvidence(analysis){
   const workspace=document.getElementById("collectionPhotoWorkspace"),list=document.getElementById("collectionPhotoList"),summary=document.getElementById("collectionPhotoEvidenceSummary");
-  if(!analysis){workspace.hidden=true;list.innerHTML='<div class="empty">Zuerst eine Sammlungsanalyse anlegen.</div>';summary.innerHTML="";return;}
+  if(!analysis){workspace.hidden=true;list.innerHTML='<div class="empty">Zuerst einen Sammlungsankauf starten oder fortsetzen.</div>';summary.innerHTML="";renderCollectionCaptureProgress(null);renderCollectionCapturedCards(null);renderCollectionEconomics(null);return;}
   normalizeCollectionPhotoEvidence(analysis);const evidence=window.TcgCollectionPhotoModel?.summarizePhotoEvidence?.(analysis)||{};
-  summary.innerHTML=`<div><small>Fotos</small><strong>${evidence.photoCount||0}</strong></div><div><small>Sichtbare Kartenbereiche</small><strong>${evidence.observationCount||0}</strong></div><div><small>Automatische Vorschläge</small><strong>${evidence.automaticSuggestedCount||0}</strong></div><div><small>Bestätigte Vorschläge</small><strong>${evidence.automaticConfirmedCount||0}</strong></div><div><small>Manuell angelegte physische Karten</small><strong>${evidence.physicalCardCount||0}</strong></div><div><small>Detailfoto erforderlich</small><strong>${evidence.detailPhotoRequiredCount||0}</strong></div>`;
+  summary.innerHTML=`<div><small>Fotos</small><strong>${evidence.photoCount||0}</strong></div><div><small>Erkannte Kartenflächen</small><strong>${evidence.observationCount||0}</strong></div><div><small>Automatische Vorschläge</small><strong>${evidence.automaticSuggestedCount||0}</strong></div><div><small>Bestätigte Kartenflächen</small><strong>${evidence.automaticConfirmedCount||0}</strong></div>`;
   const photo=activeCollectionPhoto(analysis);workspace.hidden=!photo;
   list.innerHTML=analysis.photos.length?analysis.photos.map(row=>`<button type="button" class="collection-photo-choice ${row.id===photo?.id?"active":""}" data-select-collection-photo="${escapeHtml(row.id)}"><img data-collection-photo-preview="${escapeHtml(row.id)}" alt=""><span><strong>Bild ${row.sequence}</strong><small>${escapeHtml(row.binderPage||"keine Binder-Seite")}</small><small>${escapeHtml(row.originalFileName||"")}</small></span></button>`).join(""):'<div class="empty">Noch keine Fotos gespeichert.</div>';
-  if(!photo){renderCollectionObservationEditor(analysis,null);return;}
+  if(!photo){renderCollectionObservationEditor(analysis,null);renderCollectionCaptureProgress(analysis);renderCollectionCapturedCards(analysis);renderCollectionEconomics(analysis);return;}
   document.getElementById("collectionPhotoSequence").value=photo.sequence||1;document.getElementById("collectionPhotoBinderPage").value=photo.binderPage||"";
   const status=document.getElementById("collectionPhotoDetectionStatus"),quality=document.getElementById("collectionPhotoQuality"),photoSuggestions=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.observationSource==="automatic"&&row.detectionReviewState!=="rejected");
   status.textContent=photo.lastDetectionAt?`Letzte automatische Analyse: ${new Date(photo.lastDetectionAt).toLocaleString("de-DE")} · ${photoSuggestions.length} sichtbare automatische Vorschläge.`:"Noch keine automatische Flächenerkennung für dieses Foto ausgeführt.";
@@ -3492,7 +3530,7 @@ function renderCollectionPhotoEvidence(analysis){
   const image=document.getElementById("collectionPhotoImage");image.dataset.photoId=photo.id;image.removeAttribute("src");
   const photoObservations=analysis.photoObservations.filter(row=>row.photoId===photo.id&&row.detectionReviewState!=="rejected");const overlay=document.getElementById("collectionPhotoOverlay");
   overlay.innerHTML=photoObservations.map((observation,index)=>{const box=observation.boundingBox,source=observation.observationSource==="automatic"?"automatic":"manual",review=observation.detectionReviewState||"manual";return `<div class="collection-photo-box source-${source} detection-${review} ${observation.id===activeCollectionObservationId?"active":""}" data-observation-box="${escapeHtml(observation.id)}" style="left:${box.x*100}%;top:${box.y*100}%;width:${box.width*100}%;height:${box.height*100}%"><span>${escapeHtml(collectionObservationLabel(observation,index))}</span></div>`;}).join("");
-  renderCollectionObservationEditor(analysis,activeCollectionObservation(analysis));renderCollectionPhotoPreviews(analysis);
+  renderCollectionObservationEditor(analysis,activeCollectionObservation(analysis));renderCollectionPhotoPreviews(analysis);renderCollectionCaptureProgress(analysis);renderCollectionCapturedCards(analysis);renderCollectionEconomics(analysis);
 }
 
 async function addCollectionPhotos(files){
@@ -3514,7 +3552,7 @@ async function deleteActiveCollectionPhoto(){
   if(!confirm(`Foto „${photo.originalFileName||`Bild ${photo.sequence}`}“ und seine Kartenmarkierungen löschen?`))return;
   await window.desktopApp.saveState(state);
   await window.desktopApp.deleteCollectionPhoto({analysisId:analysis.id,photoId:photo.id});
-  collectionPhotoDataUrls.delete(photo.relativePath);Object.assign(analysis,window.TcgCollectionPhotoModel.removePhotoEvidence(analysis,photo.id));activeCollectionPhotoId=analysis.photos[0]?.id||"";activeCollectionObservationId="";saveState();renderCollectionPurchases();
+  invalidateCollectionEconomicReview(analysis);collectionPhotoDataUrls.delete(photo.relativePath);Object.assign(analysis,window.TcgCollectionPhotoModel.removePhotoEvidence(analysis,photo.id));activeCollectionPhotoId=analysis.photos[0]?.id||"";activeCollectionObservationId="";saveState();renderCollectionPurchases();
 }
 
 async function detectActiveCollectionPhoto(){
@@ -3526,8 +3564,8 @@ async function detectActiveCollectionPhoto(){
   try{
     const result=await window.TcgScannerImageProcessing.detectCollectionCardsFromDataUrl(dataUrl);
     const merged=window.TcgCollectionPhotoModel.mergeDetectionSuggestions(analysis.photoObservations,photo.id,result.detections,{analysisId:analysis.id,idFactory:()=>uid()});
-    analysis.photoObservations=merged.observations;const multiCardDiscardedCount=Number(result.parameters?.rejectedMultiCardRegions?.length||0);photo.detectionQuality=result.photoQuality||{};photo.sceneAnalysis=result.sceneAnalysis||{};photo.lastDetectionAt=new Date().toISOString();photo.detectionSummary={detectionCount:Number(result.detections?.length||0),addedCount:merged.added.length,skippedCount:merged.skipped,multiCardDiscardedCount,iouThreshold:Number(result.parameters?.iouThreshold||.45),detectorMode:String(result.parameters?.detectorMode||"")};
-    activeCollectionObservationId=merged.added[0]?.id||activeCollectionObservationId;saveState();renderCollectionPhotoEvidence(analysis);
+    if(merged.added.length)invalidateCollectionEconomicReview(analysis);analysis.photoObservations=merged.observations;const multiCardDiscardedCount=Number(result.parameters?.rejectedMultiCardRegions?.length||0);photo.detectionQuality=result.photoQuality||{};photo.sceneAnalysis=result.sceneAnalysis||{};photo.lastDetectionAt=new Date().toISOString();photo.detectionSummary={detectionCount:Number(result.detections?.length||0),addedCount:merged.added.length,skippedCount:merged.skipped,multiCardDiscardedCount,iouThreshold:Number(result.parameters?.iouThreshold||.45),detectorMode:String(result.parameters?.detectorMode||"")};
+    activeCollectionObservationId=merged.added[0]?.id||activeCollectionObservationId;collectionManualSetCodeFocusPending=Boolean(merged.added[0]);saveState();renderCollectionPhotoEvidence(analysis);
     const qualityWarnings=Array.isArray(result.photoQuality?.warnings)?result.photoQuality.warnings.length:0;
     alert(`${merged.added.length} neue Kartenfläche(n) als prüfbare Vorschläge angelegt.${merged.skipped?` ${merged.skipped} bereits vorhandene oder ignorierte Fläche(n) wurden nicht doppelt angelegt.`:""}${qualityWarnings?" Bitte zusätzlich die Hinweise zur Bildqualität beachten.":""}`);
   }catch(error){console.error("Sammlungsfoto-Erkennung fehlgeschlagen:",error);alert(`Kartenflächen konnten nicht erkannt werden: ${error.message}`);}
@@ -3587,6 +3625,54 @@ async function refreshCollectionPrintRecognition(observation,rarity=""){
   return observation.printRecognition;
 }
 
+async function lookupManualCollectionSetCode(observation,setCode,rarity="",{persist=true}={}){
+  if(!observation||!window.desktopApp?.resolveCollectionPrintRecognition)return null;
+  const normalizedSetCode=normalizeManualSetCode(setCode),capture=ensureCollectionManualCapture(observation),requestId=++collectionManualSetCodeSequence;
+  capture.setCode=normalizedSetCode;capture.setCodeConfirmed=false;capture.completedAt="";capture.updatedAt=new Date().toISOString();
+  const previous=observation.printRecognition||{},result=await window.desktopApp.resolveCollectionPrintRecognition({setCode:normalizedSetCode,setCodeConfidence:null,rarity});
+  if(requestId!==collectionManualSetCodeSequence||activeCollectionObservationId!==observation.id||capture.setCode!==normalizedSetCode)return null;
+  if(!result?.ok)throw new Error(result?.error||"Die lokale Print-Referenz konnte nicht abgefragt werden.");
+  const incoming={...result.recognition,setCodeSignals:previous.setCodeSignals||[],selectedRarity:rarity,updatedAt:new Date().toISOString()};
+  if(observation.printConfidence==="confirmed"&&cleanProductId(observation.selectedProductId))window.TcgCollectionPhotoModel?.mergeAutomaticPrintRecognition?.(observation,incoming);
+  else observation.printRecognition=window.TcgCollectionPhotoModel?.normalizePrintRecognition?.(incoming)||incoming;
+  observation.updatedAt=new Date().toISOString();if(persist)saveState();renderCollectionPrintRecognition(observation);return observation.printRecognition;
+}
+
+function confirmCollectionReferenceCandidate(analysis,observation,candidate){
+  if(!analysis||!observation||!candidate?.verified||!cleanProductId(candidate.cardmarketProductId))return false;
+  invalidateCollectionEconomicReview(analysis);
+  const recognition=observation.printRecognition||{},printCandidate={id:`verified-reference-${candidate.cardmarketProductId}`,productId:candidate.cardmarketProductId,name:candidate.germanName||candidate.englishName||candidate.cardmarketProductName||"",germanName:candidate.germanName||"",englishName:candidate.englishName||"",setName:candidate.setName||"",collectorNumber:candidate.setCode||candidate.collectorNumber||"",rarity:candidate.rarity||"",version:candidate.version||"",treatment:candidate.treatment||"",artwork:candidate.artwork||"",mappingStatus:"exact",verified:true,source:candidate.dataSource||"local_print_reference",signals:[`Setcode ${recognition.setCode||candidate.setCode} manuell bestätigt`]};
+  if(!observation.printCandidates.some(row=>row.productId===printCandidate.productId))observation.printCandidates.push(printCandidate);
+  observation.selectedProductId=printCandidate.productId;observation.printConfidence="confirmed";recognition.selectedCandidateId=candidate.id;recognition.selectedRarity=candidate.rarity||recognition.selectedRarity||"";recognition.selectedVersion=candidate.version||"";recognition.mappingStatus="exact";recognition.resolutionStatus="exact_candidate_selected";recognition.manualSelectionProtected=true;
+  if(!observation.selectedName&&observation.nameConfidence!=="confirmed")observation.selectedName=printCandidate.name;
+  const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=printCandidate.productId;if(!physical.name)physical.name=observation.selectedName||printCandidate.name;physical.updatedAt=new Date().toISOString();}
+  observation.updatedAt=new Date().toISOString();return true;
+}
+
+function focusNextCollectionManualStep(observation){
+  const recognition=observation?.printRecognition||{};
+  if(recognition.requiresRaritySelection&&!recognition.selectedRarity){focusCollectionManualField("collectionObservationReferenceRarity");return;}
+  if(recognition.requiresVersionSelection&&!recognition.selectedCandidateId){focusCollectionManualField("collectionObservationReferenceVersion");return;}
+  const candidates=[...(recognition.variantCandidates||[]),...(recognition.referenceCandidates||[])],candidate=candidates.find(row=>row.id===(recognition.selectedCandidateId||recognition.suggestedCandidateId));
+  if(candidate?.verified&&cleanProductId(candidate.cardmarketProductId)&&observation.printConfidence!=="confirmed"){
+    requestAnimationFrame(()=>document.querySelector(`[data-confirm-reference-print="${CSS.escape(candidate.id)}"]`)?.focus());return;
+  }
+  focusCollectionManualField("collectionObservationManualCondition");
+}
+
+function syncCollectionManualCaptureFromFields(observation){
+  const capture=ensureCollectionManualCapture(observation);if(!capture)return null;
+  capture.setCode=normalizeManualSetCode(document.getElementById("collectionObservationSetCode").value);capture.condition=document.getElementById("collectionObservationManualCondition").value||"UNBEKANNT";capture.edition=document.getElementById("collectionObservationManualEdition").value||"";capture.quantity=Math.max(1,Math.round(Number(document.getElementById("collectionObservationManualQuantity").value||1)));capture.updatedAt=new Date().toISOString();return capture;
+}
+
+function completeCollectionManualCard(){
+  const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;
+  invalidateCollectionEconomicReview(analysis);const capture=syncCollectionManualCaptureFromFields(observation);capture.setCodeConfirmed=Boolean(capture.setCode);capture.completedAt=new Date().toISOString();observation.updatedAt=capture.completedAt;saveState();
+  const sequence=orderedCollectionObservations(analysis),currentIndex=sequence.findIndex(row=>row.id===observation.id),next=[...sequence.slice(currentIndex+1),...sequence.slice(0,currentIndex)].find(row=>!row.manualCapture?.completedAt)||null;
+  if(next){activeCollectionPhotoId=next.photoId;activeCollectionObservationId=next.id;collectionManualSetCodeSequence+=1;collectionManualSetCodeFocusPending=true;renderCollectionPurchases();return;}
+  renderCollectionPurchases();document.getElementById("collectionObservationManualCaptureStatus").innerHTML='<strong>Erfasst.</strong> Keine weitere Kartenfläche vorhanden.';
+}
+
 async function recognizeActiveCollectionObservationName(){
   const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis),observation=activeCollectionObservation(analysis);if(!analysis||!photo||!observation)return;
   try{await recognizeCollectionObservationName(analysis,photo,observation);}
@@ -3619,8 +3705,8 @@ function discardActiveCollectionNameRecognition(){
 
 function createCollectionObservation(boundingBox){
   const analysis=activeCollectionAnalysis(),photo=activeCollectionPhoto(analysis);const normalized=window.TcgCollectionPhotoModel?.normalizeBoundingBox?.(boundingBox);if(!analysis||!photo||!normalized)return null;
-  const now=new Date().toISOString(),observation={id:uid(),analysisId:analysis.id,photoId:photo.id,boundingBox:normalized,observationSource:"manual",detectionConfidence:"unknown",detectionScore:null,detectionSignals:{},detectionReviewState:"manual",row:"",column:"",selectedName:"",nameCandidates:[],nameConfidence:"unknown",selectedProductId:"",printCandidates:[],printConfidence:"unknown",recognitionSignals:[],economicRelevant:false,detailPhotoRequired:false,reviewStatus:"unreviewed",physicalCardId:"",linkedCollectionItemId:"",createdAt:now,updatedAt:now};
-  analysis.photoObservations.push(observation);activeCollectionObservationId=observation.id;saveState();renderCollectionPhotoEvidence(analysis);return observation;
+  const now=new Date().toISOString(),observation={id:uid(),analysisId:analysis.id,photoId:photo.id,boundingBox:normalized,observationSource:"manual",detectionConfidence:"unknown",detectionScore:null,detectionSignals:{},detectionReviewState:"manual",row:"",column:"",selectedName:"",nameCandidates:[],nameConfidence:"unknown",selectedProductId:"",printCandidates:[],printConfidence:"unknown",recognitionSignals:[],manualCapture:{setCode:"",setCodeConfirmed:false,condition:"UNBEKANNT",edition:"",quantity:1,completedAt:"",updatedAt:now},economicRelevant:false,detailPhotoRequired:false,reviewStatus:"unreviewed",physicalCardId:"",linkedCollectionItemId:"",createdAt:now,updatedAt:now};
+  invalidateCollectionEconomicReview(analysis);analysis.photoObservations.push(observation);activeCollectionObservationId=observation.id;collectionManualSetCodeFocusPending=true;saveState();renderCollectionPhotoEvidence(analysis);return observation;
 }
 
 function updateActiveObservationFromFields(){
@@ -3644,7 +3730,9 @@ async function searchCollectionObservationCandidates(query,kind){
 function syncCollectionMetadata(){
   const analysis=activeCollectionAnalysis();if(!analysis)return null;
   const value=id=>document.getElementById(id)?.value??"";
-  Object.assign(analysis,{title:value("collectionTitle").trim(),sourceType:value("collectionSourceType"),sellerName:value("collectionSellerName").trim(),url:value("collectionUrl").trim(),date:value("collectionDate")||todayISO(),sellerPrice:Math.max(0,Number(value("collectionSellerPrice")||0)),shipping:Math.max(0,Number(value("collectionShipping")||0)),extra:Math.max(0,Number(value("collectionExtra")||0)),notes:value("collectionNotes").trim(),updatedAt:new Date().toISOString()});
+  const sellerPrice=Math.max(0,Number(value("collectionSellerPrice")||0)),priceChanged=Math.round(Number(analysis.sellerPrice||0)*100)!==Math.round(sellerPrice*100);if(priceChanged)invalidateCollectionEconomicReview(analysis);
+  let captureStatus=value("collectionCaptureStatus")||analysis.captureStatus||"active";if(priceChanged&&captureStatus==="economic_ready")captureStatus="completed";
+  Object.assign(analysis,{title:value("collectionTitle").trim(),captureStatus,sourceType:value("collectionSourceType"),sellerName:value("collectionSellerName").trim(),url:value("collectionUrl").trim(),date:value("collectionDate")||todayISO(),sellerPrice,shipping:Math.max(0,Number(value("collectionShipping")||0)),extra:Math.max(0,Number(value("collectionExtra")||0)),notes:value("collectionNotes").trim(),updatedAt:new Date().toISOString()});
   return analysis;
 }
 
@@ -3674,7 +3762,169 @@ function collectionDecisionClass(decision){
 
 function collectionRiskShare(value,total){return total>0?`${Math.round(Number(value||0)/total*100)} %`:"0 %";}
 
+function collectionCaptureRow(observation){
+  const capture=window.TcgCollectionPhotoModel?.normalizeManualCapture?.(observation.manualCapture)||{setCode:"",condition:"UNBEKANNT",edition:"",quantity:1,completedAt:""},recognition=observation.printRecognition||{};
+  const candidates=[...(recognition.variantCandidates||[]),...(recognition.referenceCandidates||[])];
+  const candidate=candidates.find(row=>row.id===recognition.selectedCandidateId)||candidates.find(row=>cleanProductId(row.cardmarketProductId)===cleanProductId(observation.selectedProductId))||null;
+  const detailPhotoRequired=Boolean(observation.detailPhotoRequired||observation.detailPhotoStatus==="detail-photo-needed"||recognition.detailPhotoStatus==="detail-photo-needed");
+  const mappingStatus=recognition.mappingStatus||"unresolved",confirmed=observation.printConfidence==="confirmed"&&Boolean(cleanProductId(observation.selectedProductId));
+  let reviewLabel="Noch zu prüfen",reviewClass="muted";
+  if(detailPhotoRequired){reviewLabel="Detailfoto nötig";reviewClass="money-warning";}
+  else if(capture.completedAt&&confirmed){reviewLabel="Bestätigt";reviewClass="money-positive";}
+  else if(capture.completedAt&&mappingStatus==="exact"){reviewLabel="Erfasst · Bestätigung offen";reviewClass="money-warning";}
+  else if(capture.completedAt){reviewLabel="Ungeprüft – bitte selbst prüfen";reviewClass="money-warning";}
+  return {
+    id:observation.id,photoId:observation.photoId,
+    name:observation.selectedName||(observation.nameCandidates||[])[0]?.name||candidate?.germanName||candidate?.englishName||"Unbekannte Karte",
+    setCode:capture.setCode||recognition.setCode||candidate?.setCode||candidate?.collectorNumber||"",
+    rarity:recognition.selectedRarity||candidate?.rarity||recognition.suggestedRarity||"",
+    version:recognition.selectedVersion||candidate?.version||"",
+    condition:capture.condition||"UNBEKANNT",edition:capture.edition||"",quantity:Math.max(1,Number(capture.quantity||1)),
+    mappingStatus,reviewLabel,reviewClass
+  };
+}
+
+function renderCollectionCaptureProgress(analysis){
+  const target=document.getElementById("collectionCaptureProgress");if(!target)return;
+  const progress=window.TcgCollectionPhotoModel?.summarizeCaptureProgress?.(analysis||{})||{};
+  target.innerHTML=`<div><small>Erkannte Kartenflächen</small><strong>${Number(progress.observationCount||0)}</strong></div><div><small>Fertig bestätigt</small><strong>${Number(progress.completedCount||0)}</strong></div><div><small>Noch zu prüfen</small><strong>${Number(progress.pendingCount||0)}</strong></div><div><small>Detailfoto nötig</small><strong>${Number(progress.detailPhotoRequiredCount||0)}</strong></div><div><small>Unresolved</small><strong>${Number(progress.unresolvedCount||0)}</strong></div>`;
+}
+
+function renderCollectionCapturedCards(analysis){
+  const target=document.getElementById("collectionCapturedCardsTable");if(!target)return;
+  const locked=analysis?.inventoryTransfer?.status==="completed",rows=orderedCollectionObservations(analysis).map(collectionCaptureRow);
+  target.innerHTML=rows.length?rows.map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml(row.mappingStatus)}</small></td><td>${escapeHtml(row.setCode||"–")}</td><td>${escapeHtml(row.rarity||"–")}</td><td>${escapeHtml(row.version||"–")}</td><td>${escapeHtml(row.condition)}</td><td>${escapeHtml(row.edition||"–")}</td><td>${row.quantity}</td><td><span class="${row.reviewClass}">${escapeHtml(row.reviewLabel)}</span></td><td>${locked?'<span class="muted">Übernommen</span>':`<button type="button" class="secondary" data-edit-captured-observation="${escapeHtml(row.id)}" data-photo-id="${escapeHtml(row.photoId)}">Bearbeiten</button>`}</td></tr>`).join(""):'<tr><td colspan="9" class="empty">Noch keine Kartenflächen erfasst.</td></tr>';
+}
+
+function collectionEconomicReviewDraft(analysis){
+  const review=analysis?.economicReview||{};
+  return {
+    directCosts:Math.max(0,Number(review.directCosts||0)),
+    manualUnitCosts:review.manualUnitCosts&&typeof review.manualUnitCosts==="object"?review.manualUnitCosts:{},
+    privateQuantities:review.privateQuantities&&typeof review.privateQuantities==="object"?review.privateQuantities:{},
+    allocation:review.allocation&&typeof review.allocation==="object"?review.allocation:null,
+    lastErrors:Array.isArray(review.lastErrors)?review.lastErrors:[],status:review.status||"draft",readyAt:review.readyAt||""
+  };
+}
+
+function ensureCollectionEconomicReview(analysis){
+  if(!analysis)return null;
+  if(!analysis.economicReview||typeof analysis.economicReview!=="object")analysis.economicReview={directCosts:0,manualUnitCosts:{},privateQuantities:{},allocation:null,status:"draft",readyAt:""};
+  if(!analysis.economicReview.manualUnitCosts||typeof analysis.economicReview.manualUnitCosts!=="object")analysis.economicReview.manualUnitCosts={};
+  if(!analysis.economicReview.privateQuantities||typeof analysis.economicReview.privateQuantities!=="object")analysis.economicReview.privateQuantities={};
+  return analysis.economicReview;
+}
+
+function invalidateCollectionEconomicReview(analysis){
+  if(!analysis?.economicReview||analysis.inventoryTransfer?.status==="completed")return;
+  analysis.economicReview.allocation=null;analysis.economicReview.lastErrors=[];analysis.economicReview.status="draft";analysis.economicReview.readyAt="";
+  if(analysis.captureStatus==="economic_ready")analysis.captureStatus="completed";
+}
+
+function collectionEconomicCards(analysis,{confirmedOnly=false}={}){
+  const review=collectionEconomicReviewDraft(analysis);
+  return orderedCollectionObservations(analysis).map(observation=>{
+    const capture=window.TcgCollectionPhotoModel?.normalizeManualCapture?.(observation.manualCapture)||{quantity:1,completedAt:""};
+    const storedQuantity=observation.manualCapture&&Object.prototype.hasOwnProperty.call(observation.manualCapture,"quantity")?Number(observation.manualCapture.quantity):Number(capture.quantity);
+    const display=collectionCaptureRow(observation),productId=cleanProductId(observation.selectedProductId),confirmed=observation.printConfidence==="confirmed"&&Boolean(productId);
+    const market=confirmed?marketRecordForProduct({productId,name:display.name}):{};
+    const pricing=confirmed?window.TcgBusinessAutomation?.calculateAutomaticPriceTargets?.(market,forwardPricingSettings()):null;
+    const hasManual=Object.prototype.hasOwnProperty.call(review.manualUnitCosts,observation.id)&&review.manualUnitCosts[observation.id]!==""&&review.manualUnitCosts[observation.id]!==null;
+    return {
+      observationId:observation.id,productId,name:display.name,print:[display.setCode,display.rarity,display.version].filter(Boolean).join(" · "),
+      quantity:storedQuantity,privateQuantity:Number(review.privateQuantities[observation.id]||0),
+      referenceValue:Math.max(0,Number(pricing?.marketReference||0)),referenceSource:pricing?.marketReferenceSource||"Keine belastbare Preisreferenz",referenceDate:market.priceDate||"",
+      manualUnitCost:hasManual?review.manualUnitCosts[observation.id]:null,completed:Boolean(capture.completedAt),confirmed
+    };
+  }).filter(card=>!confirmedOnly||(card.confirmed&&card.completed));
+}
+
+function collectionEconomicTotal(analysis){
+  const review=collectionEconomicReviewDraft(analysis);return Math.max(0,Number(analysis?.sellerPrice||0))+review.directCosts;
+}
+
+function collectionEconomicSignature(totalCost,cards){
+  return JSON.stringify({totalCents:Math.round(Number(totalCost||0)*100),cards:cards.map(card=>({id:card.observationId,productId:card.productId||"",quantity:card.quantity,privateQuantity:card.privateQuantity,manualUnitCost:card.manualUnitCost===null?null:Math.round(Number(card.manualUnitCost||0)*100),completed:Boolean(card.completed),confirmed:Boolean(card.confirmed)}))});
+}
+
+function collectionEconomicErrorText(error){
+  const labels={invalid_total_cost:"Gesamt-EK ist ungültig.",no_cards:"Es sind noch keine Karten erfasst.",duplicate_or_missing_card:"Eine Kartenfläche fehlt oder ist doppelt enthalten.",card_unconfirmed:"Mindestens eine Karte ist noch nicht vollständig und eindeutig bestätigt.",invalid_quantity:"Eine Menge ist ungültig.",invalid_private_quantity:"Privat- und Geschäftsmenge überschneiden sich oder sind ungültig.",invalid_manual_cost:"Ein manueller EK ist ungültig.",manual_cost_exceeds_total:"Die manuell festgelegten EKs übersteigen den Gesamt-EK.",missing_reference_value:"Für mindestens eine automatisch zu verteilende Karte fehlt ein belastbarer Referenzwert. Bitte EK manuell festlegen.",unallocated_remainder:"Der Restbetrag kann keiner Karte zugeteilt werden.",invalid_or_missing_allocation:"Mindestens eine Karte besitzt keine passende EK-Zuteilung.",allocation_contains_unknown_card:"Die Verteilung enthält eine nicht mehr vorhandene Karte.",allocation_sum_mismatch:"Die EK-Summe stimmt nicht exakt mit dem Gesamt-EK überein."};
+  return labels[error?.code]||"Die wirtschaftliche Prüfung ist noch nicht vollständig.";
+}
+
+function renderCollectionEconomics(analysis){
+  const table=document.getElementById("collectionEconomicTable"),summary=document.getElementById("collectionEconomicSummary"),validationTarget=document.getElementById("collectionEconomicValidation"),distributeButton=document.getElementById("distributeCollectionCostsBtn"),reviewButton=document.getElementById("completeCollectionEconomicReviewBtn"),transferButton=document.getElementById("transferCollectionInventoryBtn");if(!table||!summary||!validationTarget)return;
+  if(!analysis){table.innerHTML='<tr><td colspan="7" class="empty">Noch keine bestätigten Karten vorhanden.</td></tr>';summary.innerHTML="";validationTarget.className="collection-economic-validation muted";validationTarget.textContent="Noch nicht verteilt.";return;}
+  const transfer=analysis.inventoryTransfer?.status==="completed"?analysis.inventoryTransfer:null,locked=Boolean(transfer),review=collectionEconomicReviewDraft(analysis),cards=collectionEconomicCards(analysis,{confirmedOnly:true}),allCards=collectionEconomicCards(analysis),totalCost=collectionEconomicTotal(analysis),signature=collectionEconomicSignature(totalCost,cards);
+  if(distributeButton)distributeButton.disabled=locked;if(reviewButton)reviewButton.disabled=locked;if(transferButton){transferButton.hidden=!(locked||review.status==="ready_for_transfer");transferButton.disabled=locked;transferButton.textContent=locked?"Bereits übernommen":"In Bestand übernehmen";}
+  const allocation=review.allocation?.signature===signature?review.allocation:null,allocationById=new Map((allocation?.lines||[]).map(line=>[line.observationId,line]));
+  table.innerHTML=cards.length?cards.map(card=>{
+    const line=allocationById.get(card.observationId),allocated=line?money(line.allocatedTotalCents/100):"Noch nicht verteilt",unitCosts=[...new Set((line?.unitCostsCents||[]).map(value=>money(value/100)))],referenceValue=line?Number(line.referenceValue||0):card.referenceValue,referenceSource=line?.referenceSource||card.referenceSource,referenceDate=line?.referenceDate||card.referenceDate;
+    return `<tr><td><strong>${escapeHtml(card.name)}</strong><br><small>${escapeHtml(card.print||`CM ${card.productId}`)}</small></td><td>${card.quantity}</td><td>${referenceValue>0?`<strong>${money(referenceValue)}</strong><br><small>${escapeHtml(referenceSource)}${referenceDate?` · ${escapeHtml(referenceDate)}`:""}</small>`:'<span class="money-warning">Kein belastbarer Wert</span>'}</td><td><input class="collection-economic-number" data-collection-private-quantity="${escapeHtml(card.observationId)}" type="number" min="0" max="${card.quantity}" step="1" value="${Math.max(0,Number(card.privateQuantity||0))}" ${locked?"disabled":""}></td><td>${Math.max(0,card.quantity-card.privateQuantity)}</td><td><input class="collection-economic-number" data-collection-manual-ek="${escapeHtml(card.observationId)}" type="number" min="0" step="0.01" value="${card.manualUnitCost===null?"":Number(card.manualUnitCost).toFixed(2)}" placeholder="automatisch" ${locked?"disabled":""}></td><td><strong>${allocated}</strong>${unitCosts.length?`<br><small>${unitCosts.join(" / ")} je Exemplar</small>`:""}${line?.privateQuantity?`<br><small>davon privat ${money(line.privateTotalCents/100)}</small>`:""}</td></tr>`;
+  }).join(""):'<tr><td colspan="7" class="empty">Noch keine eindeutig bestätigten Karten vorhanden.</td></tr>';
+  const allocatedCents=Number(allocation?.allocatedCents||0),privateCents=(allocation?.lines||[]).reduce((sum,line)=>sum+Number(line.privateTotalCents||0),0),businessCents=(allocation?.lines||[]).reduce((sum,line)=>sum+Number(line.businessTotalCents||0),0);
+  summary.innerHTML=`<div><small>Gesamtkaufpreis</small><strong>${money(analysis.sellerPrice||0)}</strong></div><div><small>Direkte Kosten</small><strong>${money(review.directCosts)}</strong></div><div><small>Gesamt-EK</small><strong>${money(totalCost)}</strong></div><div><small>Zugeordnet</small><strong>${money(allocatedCents/100)}</strong></div><div><small>Privater EK-Anteil</small><strong>${money(privateCents/100)}</strong></div><div><small>Geschäftlicher EK-Anteil</small><strong>${money(businessCents/100)}</strong></div>`;
+  if(transfer){validationTarget.className="collection-economic-validation success";validationTarget.innerHTML=`<strong>Abgeschlossen / übernommen am ${escapeHtml(fmtDate(transfer.transferredAt)||transfer.transferredAt||"–")}.</strong><span>${Number(transfer.businessQuantity||0)} geschäftliche Exemplare wurden einmalig in den Bestand übernommen. ${Number(transfer.privateQuantity||0)} private Exemplare bleiben ausschließlich im Ankauf dokumentiert.</span>`;return;}
+  const validation=window.TcgCollectionPhotoModel?.validateCollectionEconomicCompletion?.({totalCost,cards:allCards,allocation});
+  if(review.status==="ready_for_transfer"&&allocation&&validation?.valid){validationTarget.className="collection-economic-validation success";validationTarget.innerHTML="<strong>Wirtschaftlich geprüft / bereit zur Übernahme.</strong><span>Es wurde noch kein Bestand verändert.</span>";return;}
+  const errors=allocation?(validation?.errors||[]):review.allocation&&!allocation?[{code:"allocation_sum_mismatch"}]:review.lastErrors;
+  validationTarget.className=`collection-economic-validation ${errors.length?"warning":"muted"}`;
+  validationTarget.innerHTML=errors.length?`<strong>Abschluss noch blockiert</strong><ul>${[...new Set(errors.map(collectionEconomicErrorText))].map(message=>`<li>${escapeHtml(message)}</li>`).join("")}</ul>`:allocation?"Verteilung ist centgenau. Mit „Wirtschaftlich prüfen“ abschließen.":"Noch nicht verteilt.";
+}
+
+function distributeCollectionCosts(){
+  const analysis=activeCollectionAnalysis();if(!analysis)return;
+  syncCollectionMetadata();const review=ensureCollectionEconomicReview(analysis),cards=collectionEconomicCards(analysis,{confirmedOnly:true}),totalCost=collectionEconomicTotal(analysis);
+  const result=window.TcgCollectionPhotoModel?.allocateCollectionPurchaseCosts?.({totalCost,cards});
+  if(!result?.ok){review.allocation=null;review.lastErrors=result?.errors||[{code:"allocation_sum_mismatch"}];review.status="draft";saveState();renderCollectionPurchases();return;}
+  const cardsById=new Map(cards.map(card=>[card.observationId,card])),lines=result.lines.map(line=>{const card=cardsById.get(line.observationId)||{};return {...line,productId:card.productId||"",name:card.name||"",print:card.print||"",referenceSource:card.referenceSource||"",referenceDate:card.referenceDate||""};});
+  review.allocation={...result,lines,signature:collectionEconomicSignature(totalCost,cards),allocatedAt:new Date().toISOString()};review.lastErrors=[];review.status="allocated";review.readyAt="";if(analysis.captureStatus==="economic_ready")analysis.captureStatus="completed";analysis.updatedAt=new Date().toISOString();saveState();renderCollectionPurchases();
+}
+
+function completeCollectionEconomicReview(){
+  const analysis=activeCollectionAnalysis();if(!analysis)return;
+  syncCollectionMetadata();const review=ensureCollectionEconomicReview(analysis),confirmedCards=collectionEconomicCards(analysis,{confirmedOnly:true}),allCards=collectionEconomicCards(analysis),totalCost=collectionEconomicTotal(analysis),signature=collectionEconomicSignature(totalCost,confirmedCards),allocation=review.allocation?.signature===signature?review.allocation:null;
+  const validation=window.TcgCollectionPhotoModel?.validateCollectionEconomicCompletion?.({totalCost,cards:allCards,allocation});
+  if(!validation?.valid){review.lastErrors=validation?.errors||[{code:"allocation_sum_mismatch"}];renderCollectionEconomics(analysis);return;}
+  review.lastErrors=[];review.status="ready_for_transfer";review.readyAt=new Date().toISOString();analysis.captureStatus="economic_ready";analysis.updatedAt=review.readyAt;saveState();renderCollectionPurchases();
+}
+
+async function transferCollectionInventory(){
+  const analysis=activeCollectionAnalysis();if(!analysis)return;
+  if(analysis.inventoryTransfer?.status==="completed"||analysis.captureStatus==="transferred"){renderCollectionPurchases();return;}
+  if(analysis.captureStatus!=="economic_ready"||analysis.economicReview?.status!=="ready_for_transfer"){alert("Der Sammlungsankauf muss zuerst wirtschaftlich geprüft werden.");return;}
+  if(typeof window.desktopApp?.transferCollectionPurchaseToInventory!=="function"){alert("Die Bestandsübernahme ist in dieser Installation nicht verfügbar.");return;}
+  if(!confirm("Bestätigte geschäftliche Karten jetzt einmalig in den Bestand übernehmen? Private Mengen bleiben außerhalb des Geschäftsbestands."))return;
+  const button=document.getElementById("transferCollectionInventoryBtn");if(button){button.disabled=true;button.textContent="Wird übernommen …";}
+  try{
+    await window.desktopApp.saveState(state);
+    const result=await window.desktopApp.transferCollectionPurchaseToInventory({analysisId:analysis.id});
+    if(!result?.state)throw new Error("Der gespeicherte Zustand wurde nicht zurückgegeben.");
+    state=migrateState(result.state);localStorage.setItem(DESKTOP_UPDATED_KEY,result.persistence?.updatedAt||new Date().toISOString());tradeInsightsCache=null;ownSalesExperienceCache={calculatedAt:"",summary:{},records:[]};ownSalesExperienceByProduct=new Map();marketDecisionHistorySignature="";renderAll();
+    const transfer=result.summary||{};
+    alert(result.idempotent?"Dieser Sammlungsankauf war bereits übernommen. Es wurden keine Duplikate erzeugt.":`${Number(transfer.businessQuantity||0)} geschäftliche Exemplare wurden übernommen. ${Number(transfer.privateQuantity||0)} private Exemplare blieben außerhalb des Geschäftsbestands.`);
+  }catch(error){console.error(error);alert(`Der Sammlungsankauf wurde nicht übernommen: ${error.message}`);renderCollectionPurchases();}
+  finally{if(button&&!button.hidden){button.disabled=activeCollectionAnalysis()?.inventoryTransfer?.status==="completed";button.textContent=button.disabled?"Bereits übernommen":"In Bestand übernehmen";}}
+}
+
 function renderCollectionPurchases(){
+  const select=document.getElementById("collectionAnalysisSelect");if(!select)return;
+  const analyses=state.collectionPurchaseAnalyses||[],current=activeCollectionAnalysis();
+  const openAnalyses=analyses.filter(row=>!["completed","transferred"].includes(row.captureStatus||"active")||row.id===current?.id);
+  select.innerHTML=`<option value="">Kein offener Ankauf ausgewählt</option>${openAnalyses.map(row=>`<option value="${escapeHtml(row.id)}" ${row.id===state.activeCollectionAnalysisId?"selected":""}>${escapeHtml(row.title||"Unbenannter Ankauf")} · ${row.captureStatus==="transferred"?"Abgeschlossen / übernommen":row.captureStatus==="economic_ready"?"Bereit zur Übernahme":row.captureStatus==="completed"?"Erfassung abgeschlossen":row.captureStatus==="paused"?"Pausiert":"In Erfassung"}</option>`).join("")}`;
+  ["collectionActivePurchasePanel","collectionCapturePanel","collectionProgressPanel","collectionCapturedCardsPanel","collectionEconomicsPanel"].forEach(id=>{document.getElementById(id).hidden=!current;});
+  const ids=["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"];
+  if(!current){ids.forEach(id=>{const field=document.getElementById(id);if(field)field.value=id==="collectionDate"?todayISO():"";});document.getElementById("collectionDirectCosts").value="0";renderCollectionPhotoEvidence(null);renderCollectionCaptureProgress(null);renderCollectionCapturedCards(null);renderCollectionEconomics(null);return;}
+  normalizeCollectionPhotoEvidence(current);
+  const transferred=current.inventoryTransfer?.status==="completed"||current.captureStatus==="transferred";
+  if(transferred)document.getElementById("collectionCapturePanel").hidden=true;
+  if(!activeCollectionObservationId){const resume=orderedCollectionObservations(current).find(row=>!row.manualCapture?.completedAt)||orderedCollectionObservations(current)[0];if(resume){activeCollectionPhotoId=resume.photoId;activeCollectionObservationId=resume.id;collectionManualSetCodeFocusPending=true;}}
+  document.getElementById("collectionTitle").value=current.title||"";document.getElementById("collectionCaptureStatus").value=current.captureStatus||"active";document.getElementById("collectionSourceType").value=current.sourceType||"Kleinanzeigen";document.getElementById("collectionSellerName").value=current.sellerName||"";document.getElementById("collectionUrl").value=current.url||"";document.getElementById("collectionDate").value=current.date||todayISO();document.getElementById("collectionSellerPrice").value=Number(current.sellerPrice||0);document.getElementById("collectionDirectCosts").value=Number(collectionEconomicReviewDraft(current).directCosts||0);document.getElementById("collectionShipping").value=Number(current.shipping||0);document.getElementById("collectionExtra").value=Number(current.extra||0);document.getElementById("collectionNotes").value=current.notes||"";
+  ["collectionTitle","collectionCaptureStatus","collectionSellerName","collectionDate","collectionSellerPrice","collectionDirectCosts"].forEach(id=>{const field=document.getElementById(id);if(field)field.disabled=transferred;});
+  renderCollectionPhotoEvidence(current);renderCollectionCaptureProgress(current);renderCollectionCapturedCards(current);renderCollectionEconomics(current);
+}
+
+function renderLegacyCollectionPurchases(){
   const select=document.getElementById("collectionAnalysisSelect");if(!select)return;
   const analyses=state.collectionPurchaseAnalyses||[];
   let current=activeCollectionAnalysis();
@@ -7460,10 +7710,20 @@ document.getElementById("reportPeriodReset").onclick=()=>{document.getElementByI
 document.getElementById("exportReportCsv").onclick=exportFinancialReportCsv;
 const collectionSelect=document.getElementById("collectionAnalysisSelect");
 collectionSelect.onchange=event=>{state.activeCollectionAnalysisId=event.target.value;selectedCollectionProductId="";activeCollectionPhotoId="";activeCollectionObservationId="";renderCollectionPurchases();};
-document.getElementById("newCollectionAnalysisBtn").onclick=()=>{createCollectionAnalysis();activeCollectionPhotoId="";activeCollectionObservationId="";saveState();renderAll();document.getElementById("collectionTitle").focus();};
-["collectionTitle","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"].forEach(id=>{
-  document.getElementById(id).addEventListener("change",()=>{if(!activeCollectionAnalysis())createCollectionAnalysis();syncCollectionMetadata();calculateCollectionAnalysis();saveState();renderCollectionPurchases();});
+document.getElementById("newCollectionAnalysisBtn").onclick=()=>{createCollectionAnalysis();activeCollectionPhotoId="";activeCollectionObservationId="";saveState();renderCollectionPurchases();document.getElementById("collectionTitle").focus();};
+["collectionTitle","collectionCaptureStatus","collectionSourceType","collectionSellerName","collectionUrl","collectionDate","collectionSellerPrice","collectionShipping","collectionExtra","collectionNotes"].forEach(id=>{
+  document.getElementById(id).addEventListener("change",()=>{if(!activeCollectionAnalysis())createCollectionAnalysis();syncCollectionMetadata();saveState();renderCollectionPurchases();});
 });
+document.getElementById("collectionDirectCosts").addEventListener("change",event=>{const analysis=activeCollectionAnalysis();if(!analysis)return;const review=ensureCollectionEconomicReview(analysis),directCosts=Math.max(0,Number(event.target.value||0));if(Math.round(Number(review.directCosts||0)*100)!==Math.round(directCosts*100))invalidateCollectionEconomicReview(analysis);review.directCosts=directCosts;analysis.updatedAt=new Date().toISOString();saveState();renderCollectionPurchases();});
+document.getElementById("collectionEconomicTable").addEventListener("change",event=>{
+  const observationId=event.target.dataset.collectionManualEk||event.target.dataset.collectionPrivateQuantity;if(!observationId)return;const analysis=activeCollectionAnalysis();if(!analysis)return;const review=ensureCollectionEconomicReview(analysis);invalidateCollectionEconomicReview(analysis);
+  if(event.target.dataset.collectionManualEk){if(event.target.value==="")delete review.manualUnitCosts[observationId];else review.manualUnitCosts[observationId]=Number(event.target.value);}
+  if(event.target.dataset.collectionPrivateQuantity)review.privateQuantities[observationId]=Number(event.target.value);
+  analysis.updatedAt=new Date().toISOString();saveState();renderCollectionPurchases();
+});
+document.getElementById("distributeCollectionCostsBtn").onclick=distributeCollectionCosts;
+document.getElementById("completeCollectionEconomicReviewBtn").onclick=completeCollectionEconomicReview;
+document.getElementById("transferCollectionInventoryBtn").onclick=transferCollectionInventory;
 let collectionSearchTimer;
 document.getElementById("collectionCardSearch").addEventListener("input",event=>{clearTimeout(collectionSearchTimer);collectionSearchTimer=setTimeout(()=>searchCollectionCards(event.target.value),180);});
 document.getElementById("collectionCardSearch").addEventListener("keydown",event=>{if(event.key==="Enter"&&selectedCollectionProductId){event.preventDefault();addSelectedCollectionCard();}});
@@ -7485,7 +7745,7 @@ const collectionPhotoStage=document.getElementById("collectionPhotoStage"),colle
 const collectionPhotoPoint=event=>{const rect=collectionPhotoStage.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))};};
 collectionPhotoStage.addEventListener("pointerdown",event=>{
   if(!activeCollectionPhoto())return;const point=collectionPhotoPoint(event),boxElement=event.target.closest("[data-observation-box]");
-  if(boxElement){const analysis=activeCollectionAnalysis(),observation=analysis.photoObservations.find(row=>row.id===boxElement.dataset.observationBox);if(!observation)return;activeCollectionObservationId=observation.id;collectionPhotoPointerAction={type:"move",start:point,original:{...observation.boundingBox},observation};renderCollectionPhotoEvidence(analysis);event.preventDefault();return;}
+  if(boxElement){const analysis=activeCollectionAnalysis(),observation=analysis.photoObservations.find(row=>row.id===boxElement.dataset.observationBox);if(!observation)return;activeCollectionObservationId=observation.id;collectionManualSetCodeSequence+=1;collectionManualSetCodeFocusPending=true;collectionPhotoPointerAction={type:"move",start:point,original:{...observation.boundingBox},observation};renderCollectionPhotoEvidence(analysis);event.preventDefault();return;}
   collectionPhotoPointerAction={type:"draw",start:point,current:point};const draft=document.createElement("div");draft.className="collection-photo-draft";draft.id="collectionPhotoDraft";collectionPhotoOverlay.appendChild(draft);event.preventDefault();
 });
 window.addEventListener("pointermove",event=>{
@@ -7500,30 +7760,48 @@ window.addEventListener("pointerup",()=>{
 });
 
 ["collectionBBoxX","collectionBBoxY","collectionBBoxWidth","collectionBBoxHeight","collectionObservationRow","collectionObservationColumn","collectionObservationNameConfidence","collectionObservationPrintConfidence","collectionObservationReviewStatus","collectionObservationSignals","collectionObservationEconomicRelevant","collectionObservationDetailRequired"].forEach(id=>document.getElementById(id).addEventListener("change",updateActiveObservationFromFields));
-document.getElementById("collectionObservationReferenceRarity").addEventListener("change",async event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;try{await refreshCollectionPrintRecognition(observation,event.target.value);observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);}catch(error){console.error(error);alert(error.message);renderCollectionPhotoEvidence(analysis);}});
-document.getElementById("collectionObservationReferenceVersion").addEventListener("change",event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis),recognition=observation?.printRecognition;if(!analysis||!recognition)return;const candidate=(recognition.variantCandidates||[]).find(row=>row.id===event.target.value);recognition.selectedCandidateId=candidate?.id||"";recognition.selectedVersion=candidate?.version||"";if(candidate){recognition.mappingStatus="exact";recognition.resolutionStatus="exact_candidate_selected";}else if(recognition.variantCandidates?.length>1){recognition.mappingStatus="unresolved";recognition.resolutionStatus="version_selection_required";}recognition.updatedAt=new Date().toISOString();observation.updatedAt=recognition.updatedAt;saveState();renderCollectionPhotoEvidence(analysis);});
+document.getElementById("collectionObservationSetCode").addEventListener("input",event=>{
+  const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;invalidateCollectionEconomicReview(analysis);const value=normalizeManualSetCode(event.target.value);event.target.value=value;const capture=ensureCollectionManualCapture(observation);capture.setCode=value;capture.setCodeConfirmed=false;capture.completedAt="";capture.updatedAt=new Date().toISOString();clearTimeout(collectionManualSetCodeTimer);collectionManualSetCodeTimer=setTimeout(()=>lookupManualCollectionSetCode(observation,value).catch(error=>{console.error(error);document.getElementById("collectionObservationPrintMappingStatus").textContent=`Lokale Suche fehlgeschlagen: ${error.message}`;}),160);
+});
+document.getElementById("collectionObservationSetCode").addEventListener("keydown",async event=>{
+  if(event.key!=="Enter")return;event.preventDefault();clearTimeout(collectionManualSetCodeTimer);const observation=activeCollectionObservation();if(!observation)return;
+  try{await lookupManualCollectionSetCode(observation,event.currentTarget.value);const capture=ensureCollectionManualCapture(observation);capture.setCodeConfirmed=Boolean(capture.setCode);capture.updatedAt=new Date().toISOString();saveState();renderCollectionPrintRecognition(observation);focusNextCollectionManualStep(observation);}catch(error){console.error(error);alert(error.message);}
+});
+document.getElementById("collectionObservationReferenceRarity").addEventListener("change",async event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;invalidateCollectionEconomicReview(analysis);try{await refreshCollectionPrintRecognition(observation,event.target.value);observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);}catch(error){console.error(error);alert(error.message);renderCollectionPhotoEvidence(analysis);}});
+document.getElementById("collectionObservationReferenceVersion").addEventListener("change",event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis),recognition=observation?.printRecognition;if(!analysis||!recognition)return;invalidateCollectionEconomicReview(analysis);const candidate=(recognition.variantCandidates||[]).find(row=>row.id===event.target.value);recognition.selectedCandidateId=candidate?.id||"";recognition.selectedVersion=candidate?.version||"";if(candidate){recognition.mappingStatus="exact";recognition.resolutionStatus="exact_candidate_selected";}else if(recognition.variantCandidates?.length>1){recognition.mappingStatus="unresolved";recognition.resolutionStatus="version_selection_required";}recognition.updatedAt=new Date().toISOString();observation.updatedAt=recognition.updatedAt;saveState();renderCollectionPhotoEvidence(analysis);});
+document.getElementById("collectionObservationReferenceRarity").addEventListener("keydown",async event=>{if(event.key!=="Enter")return;event.preventDefault();const observation=activeCollectionObservation();if(!observation)return;try{await refreshCollectionPrintRecognition(observation,event.currentTarget.value);saveState();renderCollectionPrintRecognition(observation);focusNextCollectionManualStep(observation);}catch(error){console.error(error);alert(error.message);}});
+document.getElementById("collectionObservationReferenceVersion").addEventListener("keydown",event=>{if(event.key!=="Enter")return;event.preventDefault();const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis),recognition=observation?.printRecognition;if(!analysis||!recognition)return;const candidate=(recognition.variantCandidates||[]).find(row=>row.id===event.currentTarget.value)||recognition.variantCandidates?.find(row=>row.id===recognition.suggestedCandidateId);if(candidate&&confirmCollectionReferenceCandidate(analysis,observation,candidate)){saveState();renderCollectionPhotoEvidence(analysis);}focusCollectionManualField("collectionObservationManualCondition");});
+["collectionObservationManualCondition","collectionObservationManualEdition","collectionObservationManualQuantity"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;invalidateCollectionEconomicReview(analysis);syncCollectionManualCaptureFromFields(observation);saveState();}));
+document.getElementById("collectionObservationManualCondition").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();focusCollectionManualField("collectionObservationManualEdition");}});
+document.getElementById("collectionObservationManualEdition").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();focusCollectionManualField("collectionObservationManualQuantity",{select:true});}});
+document.getElementById("collectionObservationManualQuantity").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();completeCollectionManualCard();}});
+document.getElementById("collectionObservationManualSearchBtn").onclick=()=>{const observation=activeCollectionObservation();focusCollectionManualField(observation?.selectedName?"collectionObservationPrintSearch":"collectionObservationNameSearch",{select:true});};
+document.getElementById("completeCollectionManualCardBtn").onclick=completeCollectionManualCard;
 document.getElementById("confirmCollectionDetectionBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation||observation.observationSource!=="automatic")return;observation.detectionReviewState="confirmed";observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);};
-document.getElementById("rejectCollectionDetectionBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation||observation.observationSource!=="automatic")return;observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
-document.getElementById("deleteCollectionObservationBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;if(observation.observationSource==="automatic"){observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();}else analysis.photoObservations=analysis.photoObservations.filter(row=>row.id!==observation.id);activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("rejectCollectionDetectionBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation||observation.observationSource!=="automatic")return;invalidateCollectionEconomicReview(analysis);observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("deleteCollectionObservationBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;invalidateCollectionEconomicReview(analysis);if(observation.observationSource==="automatic"){observation.detectionReviewState="rejected";observation.updatedAt=new Date().toISOString();}else analysis.photoObservations=analysis.photoObservations.filter(row=>row.id!==observation.id);activeCollectionObservationId="";saveState();renderCollectionPhotoEvidence(analysis);};
 let collectionObservationNameTimer,collectionObservationPrintTimer;
 document.getElementById("collectionObservationNameSearch").addEventListener("input",event=>{clearTimeout(collectionObservationNameTimer);collectionObservationNameTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"name"),180);});
 document.getElementById("collectionObservationPrintSearch").addEventListener("input",event=>{clearTimeout(collectionObservationPrintTimer);collectionObservationPrintTimer=setTimeout(()=>searchCollectionObservationCandidates(event.target.value,"print"),180);});
+document.getElementById("collectionObservationNameSearch").addEventListener("keydown",event=>{if(event.key!=="Enter")return;const first=document.querySelector("#collectionObservationNameResults [data-add-observation-name]");if(first){event.preventDefault();first.click();focusCollectionManualField("collectionObservationPrintSearch");}});
+document.getElementById("collectionObservationPrintSearch").addEventListener("keydown",event=>{if(event.key!=="Enter")return;const first=document.querySelector("#collectionObservationPrintResults [data-add-observation-print]");if(first){event.preventDefault();first.click();focusCollectionManualField("collectionObservationManualCondition");}});
 document.getElementById("collectionPhotoWorkspace").addEventListener("click",event=>{
   const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;
   const referenceRecognition=observation.printRecognition||{},referenceCandidates=[...(referenceRecognition.variantCandidates||[]),...(referenceRecognition.referenceCandidates||[])];
-  const confirmReference=event.target.closest("[data-confirm-reference-print]");if(confirmReference){const candidate=referenceCandidates.find(row=>row.id===confirmReference.dataset.confirmReferencePrint);if(!candidate?.verified||!cleanProductId(candidate.cardmarketProductId)){alert("Dieser Kandidat besitzt keine eindeutig verifizierte Cardmarket-ID. Ungeprüft - bitte selbst prüfen.");return;}const printCandidate={id:`verified-reference-${candidate.cardmarketProductId}`,productId:candidate.cardmarketProductId,name:candidate.germanName||candidate.englishName||candidate.cardmarketProductName||"",germanName:candidate.germanName||"",englishName:candidate.englishName||"",setName:candidate.setName||"",collectorNumber:candidate.setCode||candidate.collectorNumber||"",rarity:candidate.rarity||"",version:candidate.version||"",treatment:candidate.treatment||"",artwork:candidate.artwork||"",mappingStatus:"exact",verified:true,source:candidate.dataSource||"local_print_reference",signals:[`Setcode ${referenceRecognition.setCode||candidate.setCode} manuell bestätigt`]};if(!observation.printCandidates.some(row=>row.productId===printCandidate.productId))observation.printCandidates.push(printCandidate);observation.selectedProductId=printCandidate.productId;observation.printConfidence="confirmed";referenceRecognition.selectedCandidateId=candidate.id;referenceRecognition.selectedRarity=candidate.rarity||referenceRecognition.selectedRarity||"";referenceRecognition.selectedVersion=candidate.version||"";referenceRecognition.mappingStatus="exact";referenceRecognition.resolutionStatus="exact_candidate_selected";referenceRecognition.manualSelectionProtected=true;if(!observation.selectedName&&observation.nameConfidence!=="confirmed")observation.selectedName=printCandidate.name;const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=printCandidate.productId;if(!physical.name)physical.name=observation.selectedName||printCandidate.name;physical.updatedAt=new Date().toISOString();}observation.updatedAt=new Date().toISOString();saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const confirmReference=event.target.closest("[data-confirm-reference-print]");if(confirmReference){const candidate=referenceCandidates.find(row=>row.id===confirmReference.dataset.confirmReferencePrint);if(!confirmCollectionReferenceCandidate(analysis,observation,candidate)){alert("Dieser Kandidat besitzt keine eindeutig verifizierte Cardmarket-ID. Ungeprüft - bitte selbst prüfen.");return;}saveState();renderCollectionPhotoEvidence(analysis);focusCollectionManualField("collectionObservationManualCondition");return;}
   const markReference=event.target.closest("[data-mark-reference-print]");if(markReference){const candidate=referenceCandidates.find(row=>row.id===markReference.dataset.markReferencePrint);if(!candidate)return;referenceRecognition.selectedCandidateId=candidate.id;referenceRecognition.selectedRarity=candidate.rarity||referenceRecognition.selectedRarity||"";referenceRecognition.selectedVersion=candidate.version||"";referenceRecognition.mappingStatus=candidate.mappingStatus||"unresolved";referenceRecognition.resolutionStatus=referenceRecognition.mappingStatus==="likely"?"likely_candidate":"unresolved_candidates";referenceRecognition.updatedAt=new Date().toISOString();observation.updatedAt=referenceRecognition.updatedAt;saveState();renderCollectionPhotoEvidence(analysis);return;}
   const addName=event.target.closest("[data-add-observation-name]");if(addName){const product=collectionObservationNameSearchProducts.get(addName.dataset.addObservationName);if(!product)return;const names=cardDisplayNames(product),candidate={id:uid(),name:names.primary,germanName:product.germanName||names.primary,englishName:product.englishName||"",metacardId:product.metacardId||"",source:"catalog_search",confidence:"unknown"};if(!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push(candidate);observation.selectedName=candidate.name;document.getElementById("collectionObservationNameSearch").value="";document.getElementById("collectionObservationNameResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
   const selectName=event.target.closest("[data-select-observation-name]");if(selectName){const candidate=observation.nameCandidates.find(row=>row.id===selectName.dataset.selectObservationName);if(candidate){observation.selectedName=candidate.name;observation.nameConfidence="confirmed";candidate.confidence="confirmed";const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.name=candidate.name;physical.updatedAt=new Date().toISOString();}observation.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}
   const removeName=event.target.closest("[data-remove-observation-name]");if(removeName){const candidate=observation.nameCandidates.find(row=>row.id===removeName.dataset.removeObservationName);observation.nameCandidates=observation.nameCandidates.filter(row=>row.id!==removeName.dataset.removeObservationName);if(candidate&&observation.selectedName===candidate.name){observation.selectedName="";observation.nameConfidence="unknown";}saveState();renderCollectionPhotoEvidence(analysis);return;}
   const addPrint=event.target.closest("[data-add-observation-print]");if(addPrint){const product=collectionObservationPrintSearchProducts.get(addPrint.dataset.addObservationPrint);if(!product)return;const candidate={id:uid(),productId:cleanProductId(product.productId),name:cardDisplayNames(product).primary,germanName:product.germanName||"",englishName:product.englishName||"",setName:product.setName||product.set||"",collectorNumber:product.collectorNumber||product.setCode||"",rarity:product.rarity||product.variant||"",source:"manual_search",signals:[]};if(!observation.printCandidates.some(row=>row.productId===candidate.productId))observation.printCandidates.push(candidate);document.getElementById("collectionObservationPrintSearch").value="";document.getElementById("collectionObservationPrintResults").innerHTML="";saveState();renderCollectionPhotoEvidence(analysis);return;}
-  const confirmPrint=event.target.closest("[data-confirm-observation-print]");if(confirmPrint){const candidate=observation.printCandidates.find(row=>row.id===confirmPrint.dataset.confirmObservationPrint);if(!candidate)return;observation.selectedProductId=candidate.productId;observation.printConfidence="confirmed";if(observation.printRecognition){const reference=[...(observation.printRecognition.variantCandidates||[]),...(observation.printRecognition.referenceCandidates||[])].find(row=>cleanProductId(row.cardmarketProductId)===candidate.productId);if(reference){observation.printRecognition.selectedCandidateId=reference.id;observation.printRecognition.selectedRarity=reference.rarity||"";observation.printRecognition.selectedVersion=reference.version||"";}observation.printRecognition.manualSelectionProtected=true;}if(!observation.selectedName){observation.selectedName=candidate.name;if(candidate.name&&!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push({id:uid(),name:candidate.name,germanName:candidate.germanName||"",englishName:candidate.englishName||"",source:"confirmed_print",confidence:"unknown"});}const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=candidate.productId;physical.name=observation.selectedName||candidate.name;physical.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}
-  const removePrint=event.target.closest("[data-remove-observation-print]");if(removePrint){const candidate=observation.printCandidates.find(row=>row.id===removePrint.dataset.removeObservationPrint);observation.printCandidates=observation.printCandidates.filter(row=>row.id!==removePrint.dataset.removeObservationPrint);if(candidate&&observation.selectedProductId===candidate.productId){observation.selectedProductId="";observation.printConfidence="unknown";if(observation.printRecognition)observation.printRecognition.manualSelectionProtected=false;}saveState();renderCollectionPhotoEvidence(analysis);}
+  const confirmPrint=event.target.closest("[data-confirm-observation-print]");if(confirmPrint){const candidate=observation.printCandidates.find(row=>row.id===confirmPrint.dataset.confirmObservationPrint);if(!candidate)return;invalidateCollectionEconomicReview(analysis);observation.selectedProductId=candidate.productId;observation.printConfidence="confirmed";if(observation.printRecognition){const reference=[...(observation.printRecognition.variantCandidates||[]),...(observation.printRecognition.referenceCandidates||[])].find(row=>cleanProductId(row.cardmarketProductId)===candidate.productId);if(reference){observation.printRecognition.selectedCandidateId=reference.id;observation.printRecognition.selectedRarity=reference.rarity||"";observation.printRecognition.selectedVersion=reference.version||"";}observation.printRecognition.manualSelectionProtected=true;}if(!observation.selectedName){observation.selectedName=candidate.name;if(candidate.name&&!observation.nameCandidates.some(row=>normalizeCardName(row.name)===normalizeCardName(candidate.name)))observation.nameCandidates.push({id:uid(),name:candidate.name,germanName:candidate.germanName||"",englishName:candidate.englishName||"",source:"confirmed_print",confidence:"unknown"});}const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);if(physical){physical.productId=candidate.productId;physical.name=observation.selectedName||candidate.name;physical.updatedAt=new Date().toISOString();}saveState();renderCollectionPhotoEvidence(analysis);return;}
+  const removePrint=event.target.closest("[data-remove-observation-print]");if(removePrint){const candidate=observation.printCandidates.find(row=>row.id===removePrint.dataset.removeObservationPrint);invalidateCollectionEconomicReview(analysis);observation.printCandidates=observation.printCandidates.filter(row=>row.id!==removePrint.dataset.removeObservationPrint);if(candidate&&observation.selectedProductId===candidate.productId){observation.selectedProductId="";observation.printConfidence="unknown";if(observation.printRecognition)observation.printRecognition.manualSelectionProtected=false;}saveState();renderCollectionPhotoEvidence(analysis);}
 });
 document.getElementById("createPhysicalCardBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!analysis||!observation)return;const card={id:uid(),analysisId:analysis.id,label:observation.selectedName||`Physische Karte ${analysis.physicalCards.length+1}`,linkedCollectionItemId:"",productId:observation.selectedProductId||"",name:observation.selectedName||"",reviewStatus:"unreviewed",createdAt:new Date().toISOString()};analysis.physicalCards.push(card);observation.physicalCardId=card.id;saveState();renderCollectionPhotoEvidence(analysis);};
 document.getElementById("unlinkPhysicalCardBtn").onclick=()=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;observation.physicalCardId="";observation.linkedCollectionItemId="";saveState();renderCollectionPhotoEvidence(analysis);};
 document.getElementById("collectionObservationPhysicalCard").onchange=event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis);if(!observation)return;observation.physicalCardId=event.target.value;const physical=analysis.physicalCards.find(row=>row.id===observation.physicalCardId);observation.linkedCollectionItemId=physical?.linkedCollectionItemId||"";saveState();renderCollectionPhotoEvidence(analysis);};
 document.getElementById("collectionPhysicalCardItem").onchange=event=>{const analysis=activeCollectionAnalysis(),observation=activeCollectionObservation(analysis),physical=analysis?.physicalCards?.find(row=>row.id===observation?.physicalCardId);if(!physical)return;physical.linkedCollectionItemId=event.target.value;const item=analysis.items.find(row=>row.id===event.target.value);if(item){physical.productId=cleanProductId(item.productId);physical.name=item.name||physical.name;const calculated=calculateCollectionAnalysis(analysis)?.items?.find(row=>row.id===item.id);if(calculated)observation.economicRelevant=Boolean(calculated.economicRelevant);}observation.linkedCollectionItemId=event.target.value;saveState();renderCollectionPhotoEvidence(analysis);};
+document.getElementById("collectionCapturedCardsTable").addEventListener("click",event=>{const button=event.target.closest("[data-edit-captured-observation]");if(!button)return;const analysis=activeCollectionAnalysis(),observation=analysis?.photoObservations?.find(row=>row.id===button.dataset.editCapturedObservation);if(!analysis||!observation)return;activeCollectionPhotoId=button.dataset.photoId||observation.photoId;activeCollectionObservationId=observation.id;collectionManualSetCodeFocusPending=true;renderCollectionPhotoEvidence(analysis);document.querySelector(".collection-photo-panel")?.scrollIntoView({behavior:"smooth",block:"start"});});
 document.getElementById("collectionItemTable").addEventListener("change",event=>{const id=event.target.dataset.collectionQuantity||event.target.dataset.collectionCondition||event.target.dataset.collectionLanguage||event.target.dataset.collectionConfidence;if(!id)return;const analysis=activeCollectionAnalysis(),item=analysis?.items?.find(row=>row.id===id);if(!item)return;if(event.target.dataset.collectionQuantity)item.quantity=Math.max(1,Math.round(Number(event.target.value||1)));if(event.target.dataset.collectionCondition)item.condition=event.target.value;if(event.target.dataset.collectionLanguage)item.language=event.target.value;if(event.target.dataset.collectionConfidence)item.printConfidence=event.target.value;calculateCollectionAnalysis(analysis);saveState();renderCollectionPurchases();});
 document.getElementById("collectionItemTable").addEventListener("click",event=>{const id=event.target.closest("[data-remove-collection-item]")?.dataset.removeCollectionItem;if(!id)return;const analysis=activeCollectionAnalysis();if(!analysis)return;analysis.items=analysis.items.filter(row=>row.id!==id);(analysis.physicalCards||[]).forEach(card=>{if(card.linkedCollectionItemId===id)card.linkedCollectionItemId="";});(analysis.photoObservations||[]).forEach(row=>{if(row.linkedCollectionItemId===id)row.linkedCollectionItemId="";});calculateCollectionAnalysis(analysis);saveState();renderAll();});
 ["collectionItemFilter","collectionClassFilter","collectionConfidenceFilter","collectionSort"].forEach(id=>document.getElementById(id).addEventListener(id==="collectionItemFilter"?"input":"change",renderCollectionPurchases));

@@ -233,6 +233,22 @@
     };
   }
 
+  function normalizeManualCapture(value = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+    const condition = text(value.condition).toUpperCase();
+    const editionValue = text(value.edition).toLowerCase();
+    const quantity = Math.max(1, Math.round(Number(value.quantity || 1)));
+    return {
+      setCode: text(value.setCode).toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9-]/g, '').slice(0, 40),
+      setCodeConfirmed: Boolean(value.setCodeConfirmed),
+      condition: ['NM', 'EX', 'GD', 'LP', 'PL', 'POOR', 'UNBEKANNT'].includes(condition) ? condition : 'UNBEKANNT',
+      edition: editionValue === '1st' ? '1st' : editionValue === 'unlimited' ? 'Unlimited' : '',
+      quantity: Number.isFinite(quantity) ? quantity : 1,
+      completedAt: text(value.completedAt),
+      updatedAt: text(value.updatedAt)
+    };
+  }
+
   function normalizePhoto(photo, analysisId = '', index = 0) {
     const id = text(photo?.id) || `${analysisId || 'analysis'}:photo:${index}`;
     const normalized = {
@@ -298,6 +314,7 @@
           }
         : undefined,
       printRecognition: normalizePrintRecognition(observation?.printRecognition),
+      manualCapture: normalizeManualCapture(observation?.manualCapture),
       economicRelevant: Boolean(observation?.economicRelevant),
       detailPhotoRequired: Boolean(observation?.detailPhotoRequired),
       detailPhotoStatus: text(observation?.detailPhotoStatus),
@@ -417,6 +434,130 @@
     };
   }
 
+  function summarizeCaptureProgress(analysis = {}) {
+    const normalized = normalizeAnalysisPhotoEvidence(analysis);
+    const observations = normalized.photoObservations.filter(row => row.detectionReviewState !== 'rejected');
+    const completedCount = observations.filter(row => Boolean(row.manualCapture?.completedAt)).length;
+    const detailPhotoRequiredCount = observations.filter(row => Boolean(
+      row.detailPhotoRequired
+      || row.detailPhotoStatus === 'detail-photo-needed'
+      || row.printRecognition?.detailPhotoStatus === 'detail-photo-needed'
+    )).length;
+    const unresolvedCount = observations.filter(row => !row.printRecognition || row.printRecognition.mappingStatus === 'unresolved').length;
+    return {
+      observationCount: observations.length,
+      completedCount,
+      pendingCount: Math.max(0, observations.length - completedCount),
+      detailPhotoRequiredCount,
+      unresolvedCount
+    };
+  }
+
+  function moneyCents(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.round(number * 100) : null;
+  }
+
+  function allocateCollectionPurchaseCosts({ totalCost, cards = [] } = {}) {
+    const totalCents = moneyCents(totalCost);
+    const errors = [];
+    if (totalCents === null || totalCents < 0) errors.push({ code: 'invalid_total_cost' });
+    const seen = new Set();
+    const lines = (Array.isArray(cards) ? cards : []).map((card, index) => {
+      const observationId = text(card?.observationId || card?.id);
+      const quantity = Number(card?.quantity);
+      const privateQuantity = Number(card?.privateQuantity || 0);
+      const hasManualCost = card?.manualUnitCost !== '' && card?.manualUnitCost !== null && card?.manualUnitCost !== undefined;
+      const manualUnitCostCents = hasManualCost ? moneyCents(card.manualUnitCost) : null;
+      const referenceValue = Number(card?.referenceValue || 0);
+      if (!observationId || seen.has(observationId)) errors.push({ code: 'duplicate_or_missing_card', observationId });
+      seen.add(observationId);
+      if (!Number.isInteger(quantity) || quantity < 1) errors.push({ code: 'invalid_quantity', observationId });
+      if (!Number.isInteger(privateQuantity) || privateQuantity < 0 || privateQuantity > quantity) errors.push({ code: 'invalid_private_quantity', observationId });
+      if (hasManualCost && (manualUnitCostCents === null || manualUnitCostCents < 0)) errors.push({ code: 'invalid_manual_cost', observationId });
+      return {
+        observationId: observationId || `card-${index}`,
+        quantity,
+        privateQuantity,
+        businessQuantity: Number.isInteger(quantity) && Number.isInteger(privateQuantity) ? quantity - privateQuantity : 0,
+        referenceValue: Number.isFinite(referenceValue) && referenceValue > 0 ? referenceValue : 0,
+        manualUnitCostCents,
+        unitCostsCents: []
+      };
+    });
+    if (!lines.length) errors.push({ code: 'no_cards' });
+    if (errors.length) return { ok: false, totalCents: totalCents || 0, allocatedCents: 0, remainingCents: totalCents || 0, lines, errors };
+
+    const fixedCents = lines.reduce((sum, line) => sum + (line.manualUnitCostCents === null ? 0 : line.manualUnitCostCents * line.quantity), 0);
+    const remainingCents = totalCents - fixedCents;
+    if (remainingCents < 0) errors.push({ code: 'manual_cost_exceeds_total' });
+    const automaticUnits = [];
+    for (const line of lines) {
+      if (line.manualUnitCostCents !== null) {
+        line.unitCostsCents = Array(line.quantity).fill(line.manualUnitCostCents);
+        continue;
+      }
+      if (remainingCents > 0 && line.referenceValue <= 0) errors.push({ code: 'missing_reference_value', observationId: line.observationId });
+      for (let unitIndex = 0; unitIndex < line.quantity; unitIndex += 1) automaticUnits.push({ line, unitIndex, weight: line.referenceValue });
+    }
+    if (!automaticUnits.length && remainingCents !== 0) errors.push({ code: 'unallocated_remainder' });
+    if (errors.length) return { ok: false, totalCents, allocatedCents: fixedCents, remainingCents, lines, errors };
+
+    if (automaticUnits.length) {
+      const weightSum = automaticUnits.reduce((sum, unit) => sum + unit.weight, 0);
+      if (remainingCents > 0 && weightSum <= 0) return { ok: false, totalCents, allocatedCents: fixedCents, remainingCents, lines, errors: [{ code: 'missing_reference_value' }] };
+      let floorSum = 0;
+      for (const unit of automaticUnits) {
+        const exact = weightSum > 0 ? remainingCents * unit.weight / weightSum : 0;
+        unit.cents = Math.floor(exact);
+        unit.fraction = exact - unit.cents;
+        floorSum += unit.cents;
+      }
+      let remainder = remainingCents - floorSum;
+      automaticUnits.slice().sort((left, right) => right.fraction - left.fraction
+        || left.line.observationId.localeCompare(right.line.observationId)
+        || left.unitIndex - right.unitIndex).forEach(unit => {
+          if (remainder > 0) { unit.cents += 1; remainder -= 1; }
+        });
+      for (const line of lines.filter(row => row.manualUnitCostCents === null)) {
+        line.unitCostsCents = automaticUnits.filter(unit => unit.line === line).sort((a, b) => a.unitIndex - b.unitIndex).map(unit => unit.cents);
+      }
+    }
+
+    for (const line of lines) {
+      line.allocatedTotalCents = line.unitCostsCents.reduce((sum, value) => sum + value, 0);
+      line.privateTotalCents = line.unitCostsCents.slice(0, line.privateQuantity).reduce((sum, value) => sum + value, 0);
+      line.businessTotalCents = line.allocatedTotalCents - line.privateTotalCents;
+    }
+    const allocatedCents = lines.reduce((sum, line) => sum + line.allocatedTotalCents, 0);
+    return { ok: allocatedCents === totalCents, totalCents, allocatedCents, remainingCents: totalCents - allocatedCents, lines, errors: allocatedCents === totalCents ? [] : [{ code: 'allocation_sum_mismatch' }] };
+  }
+
+  function validateCollectionEconomicCompletion({ totalCost, cards = [], allocation } = {}) {
+    const totalCents = moneyCents(totalCost);
+    const errors = [];
+    const sourceCards = Array.isArray(cards) ? cards : [];
+    const allocationLines = Array.isArray(allocation?.lines) ? allocation.lines : [];
+    const allocationById = new Map(allocationLines.map(line => [text(line.observationId), line]));
+    const seen = new Set();
+    if (totalCents === null || totalCents < 0) errors.push({ code: 'invalid_total_cost' });
+    if (!sourceCards.length) errors.push({ code: 'no_cards' });
+    for (const card of sourceCards) {
+      const observationId = text(card?.observationId || card?.id), quantity = Number(card?.quantity), privateQuantity = Number(card?.privateQuantity || 0);
+      if (!observationId || seen.has(observationId)) errors.push({ code: 'duplicate_or_missing_card', observationId });
+      seen.add(observationId);
+      if (!card?.completed || !card?.confirmed) errors.push({ code: 'card_unconfirmed', observationId });
+      if (!Number.isInteger(quantity) || quantity < 1) errors.push({ code: 'invalid_quantity', observationId });
+      if (!Number.isInteger(privateQuantity) || privateQuantity < 0 || privateQuantity > quantity) errors.push({ code: 'invalid_private_quantity', observationId });
+      const line = allocationById.get(observationId);
+      if (!line || Number(line.quantity) !== quantity || Number(line.privateQuantity || 0) !== privateQuantity || Number(line.businessQuantity) !== quantity - privateQuantity || !Array.isArray(line.unitCostsCents) || line.unitCostsCents.length !== quantity || line.unitCostsCents.some(value => !Number.isInteger(value) || value < 0)) errors.push({ code: 'invalid_or_missing_allocation', observationId });
+    }
+    if (allocationLines.some(line => !seen.has(text(line.observationId)))) errors.push({ code: 'allocation_contains_unknown_card' });
+    const allocatedCents = allocationLines.reduce((sum, line) => sum + (Array.isArray(line.unitCostsCents) ? line.unitCostsCents.reduce((subtotal, value) => subtotal + Number(value || 0), 0) : 0), 0);
+    if (totalCents !== null && allocatedCents !== totalCents) errors.push({ code: 'allocation_sum_mismatch' });
+    return { valid: errors.length === 0, totalCents: totalCents || 0, allocatedCents, errors };
+  }
+
   function choosePreferredRecognitionSource(analysis = {}, targetObservation = {}) {
     const photos = Array.isArray(analysis?.photos) ? analysis.photos : [];
     const observations = Array.isArray(analysis?.photoObservations) ? analysis.photoObservations : [];
@@ -492,6 +633,7 @@
     normalizeSetCodeSignal,
     normalizeReferenceCandidate,
     normalizePrintRecognition,
+    normalizeManualCapture,
     normalizePhoto,
     normalizeObservation,
     normalizePhysicalCard,
@@ -499,6 +641,9 @@
     boundingBoxIoU,
     mergeDetectionSuggestions,
     summarizePhotoEvidence,
+    summarizeCaptureProgress,
+    allocateCollectionPurchaseCosts,
+    validateCollectionEconomicCompletion,
     choosePreferredRecognitionSource,
     removePhotoEvidence,
     isPrintExplicitlyConfirmed,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Business Manager 6.13.6</title>
+  <title>TCG Business Manager 6.13.8</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
         <div class="brand-mark">TCG</div>
         <div>
           <div class="brand-title">Business Manager</div>
-          <div class="brand-subtitle">Analysecenter 6.13.6 · SQLite</div>
+          <div class="brand-subtitle">Analysecenter 6.13.8 · SQLite</div>
         </div>
       </div>
 
@@ -558,27 +558,29 @@
       </section>
 
       <section id="view-collectionpurchases" class="view">
-        <article class="panel collection-purchase-panel">
+        <article class="panel collection-purchase-panel collection-start-panel">
           <div class="panel-head">
-            <div><h2>Sammlungsankauf prüfen</h2><small>Regelbasierte Händlerentscheidung aus exakten Prints, gespeichertem Cardmarket Price Guide, Markttrend und eigener Verkaufserfahrung. Keine Live-Angebotsdaten.</small></div>
-            <div class="row-actions"><select id="collectionAnalysisSelect"><option value="">Neue Analyse</option></select><button id="newCollectionAnalysisBtn" class="secondary" type="button">Neu</button><button id="saveCollectionSnapshotBtn" class="secondary" type="button">Entscheidung speichern</button><button id="confirmCollectionPurchaseBtn" class="primary" type="button">Ankauf bestätigen</button></div>
+            <div><h2>Sammlungsankauf</h2><small>Neuen Ankauf beginnen oder eine offene Erfassung fortsetzen. Bestand und Einkauf werden dabei noch nicht verändert.</small></div>
+            <button id="newCollectionAnalysisBtn" class="primary" type="button">Neuen Sammlungsankauf starten</button>
           </div>
-          <div class="buying-input-grid collection-metadata-grid">
-            <label>Titel<input id="collectionTitle" placeholder="z. B. Kleinanzeigen-Sammlung August" /></label>
-            <label>Quelle<select id="collectionSourceType"><option>Kleinanzeigen</option><option>eBay</option><option>Privat</option><option>Cardmarket</option><option>Sonstige</option></select></label>
-            <label>Verkäufername<input id="collectionSellerName" placeholder="optional" /></label>
-            <label>URL<input id="collectionUrl" type="url" placeholder="optional" /></label>
-            <label>Datum<input id="collectionDate" type="date" /></label>
-            <label>Verkäuferpreis (€)<input id="collectionSellerPrice" type="number" min="0" step="0.01" /></label>
-            <label>Versand (€)<input id="collectionShipping" type="number" min="0" step="0.01" /></label>
-            <label>Sonstige Einkaufskosten (€)<input id="collectionExtra" type="number" min="0" step="0.01" /></label>
-          </div>
-          <label>Notizen<textarea id="collectionNotes" rows="2" placeholder="Eigene Einschätzung, fehlende Informationen oder Verhandlungsnotiz"></textarea></label>
+          <label class="collection-open-purchase">Offenen Ankauf fortsetzen<select id="collectionAnalysisSelect"><option value="">Kein offener Ankauf ausgewählt</option></select></label>
         </article>
 
-        <article class="panel collection-purchase-panel collection-photo-panel">
+        <article id="collectionActivePurchasePanel" class="panel collection-purchase-panel collection-active-purchase" hidden>
+          <div class="panel-head"><div><h2>Aktiver Ankauf</h2><small>Die Angaben werden im bestehenden Sammlungsankauf gespeichert.</small></div></div>
+          <div class="buying-input-grid collection-active-metadata-grid">
+            <label>Bezeichnung<input id="collectionTitle" placeholder="z. B. Sammlung September" /></label>
+            <label>Verkäufer (optional)<input id="collectionSellerName" placeholder="optional" /></label>
+            <label>Kaufdatum<input id="collectionDate" type="date" /></label>
+            <label>Gesamtkaufpreis (€)<input id="collectionSellerPrice" type="number" min="0" step="0.01" /></label>
+            <label>Direkte Ankaufskosten (€)<input id="collectionDirectCosts" type="number" min="0" step="0.01" value="0" /></label>
+            <label>Status<select id="collectionCaptureStatus"><option value="active">In Erfassung</option><option value="paused">Pausiert</option><option value="completed">Erfassung abgeschlossen</option><option value="economic_ready" disabled>Wirtschaftlich geprüft / bereit zur Übernahme</option><option value="transferred" disabled>Abgeschlossen / übernommen</option></select></label>
+          </div>
+        </article>
+
+        <article id="collectionCapturePanel" class="panel collection-purchase-panel collection-photo-panel" hidden>
           <div class="panel-head">
-            <div><h2>Sammlungsfotos & manuelle Prüfung</h2><small>Mehrere Fotos als Belege speichern, Kartenbereiche markieren und Kartenname sowie Print getrennt prüfen. Fotos verändern Bestand und Händlerentscheidung nie automatisch.</small></div>
+            <div><h2>Karten erfassen</h2><small>Fotos und erkannte Kartenflächen weiterverwenden. Danach jede Karte schnell über Setcode, Rarität, Version, Zustand, Edition und Menge abschließen.</small></div>
             <label class="primary file-label">Fotos hinzufügen<input id="collectionPhotoInput" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden /></label>
           </div>
           <div id="collectionPhotoEvidenceSummary" class="collection-summary compact-summary"></div>
@@ -610,7 +612,7 @@
               <div id="collectionObservationEditorFields" hidden>
                 <div id="collectionObservationDetection" class="collection-observation-detection"></div>
                 <div id="collectionDetectionActions" class="row-actions" hidden><button id="confirmCollectionDetectionBtn" class="primary" type="button">Vorschlag bestätigen</button><button id="rejectCollectionDetectionBtn" class="secondary" type="button">Vorschlag ignorieren</button></div>
-                <div class="bbox-grid">
+                <div class="bbox-grid collection-legacy-observation-fields" hidden>
                   <label>X<input id="collectionBBoxX" type="number" min="0" max="1" step="0.001" /></label>
                   <label>Y<input id="collectionBBoxY" type="number" min="0" max="1" step="0.001" /></label>
                   <label>Breite<input id="collectionBBoxWidth" type="number" min="0.001" max="1" step="0.001" /></label>
@@ -627,12 +629,13 @@
                 <label>Kartenname suchen<input id="collectionObservationNameSearch" placeholder="Deutsch oder Englisch …" autocomplete="off" /></label>
                 <div id="collectionObservationNameResults" class="collection-candidate-results"></div>
                 <div id="collectionObservationNameCandidates" class="collection-candidate-list"></div>
-                <label>Sicherheit Kartenname<select id="collectionObservationNameConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
+                <label hidden>Sicherheit Kartenname<select id="collectionObservationNameConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
                 <hr />
                 <div class="collection-print-reference">
                   <h4>Lokale Print-Referenz</h4>
+                  <p class="muted collection-manual-workflow-help">Schneller Ablauf: Setcode eingeben und mit Enter bestätigen. Danach führt Enter durch Rarität, Version, Zustand, Edition und Menge.</p>
                   <div class="bbox-grid">
-                    <label>Erkannter Setcode<input id="collectionObservationSetCode" readonly placeholder="nicht lesbar" /></label>
+                    <label>Setcode<input id="collectionObservationSetCode" placeholder="z. B. EEN-DE037" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label>
                     <label>Setcode-Confidence<input id="collectionObservationSetCodeConfidence" readonly placeholder="–" /></label>
                     <label>Rarität<select id="collectionObservationReferenceRarity"><option value="">Noch nicht bestimmbar</option></select></label>
                     <label>Version<select id="collectionObservationReferenceVersion"><option value="">Keine verifizierte Version gewählt</option></select></label>
@@ -641,61 +644,81 @@
                   </div>
                   <div id="collectionObservationPrintMappingStatus" class="collection-name-recognition-status muted">Noch kein Setcode geprüft.</div>
                   <div id="collectionObservationReferenceCandidates" class="collection-candidate-list"></div>
+                  <div class="collection-manual-card-fields">
+                    <label>Zustand<select id="collectionObservationManualCondition"><option value="UNBEKANNT">Unbekannt</option><option value="NM">NM</option><option value="EX">EX</option><option value="GD">GD</option><option value="LP">LP</option><option value="PL">PL</option><option value="POOR">POOR</option></select></label>
+                    <label>Edition<select id="collectionObservationManualEdition"><option value="">Nicht relevant / unbekannt</option><option value="1st">1st Edition</option><option value="Unlimited">Unlimited</option></select></label>
+                    <label>Menge<input id="collectionObservationManualQuantity" type="number" min="1" step="1" value="1" /></label>
+                  </div>
+                  <div id="collectionObservationManualCaptureStatus" class="collection-manual-capture-status muted">Noch nicht abgeschlossen.</div>
+                  <div class="row-actions collection-manual-actions"><button id="collectionObservationManualSearchBtn" class="secondary" type="button">Manuelle Kartensuche</button><button id="completeCollectionManualCardBtn" class="primary" type="button">Karte abschließen &amp; nächste</button></div>
                 </div>
                 <hr />
                 <label>Print suchen<input id="collectionObservationPrintSearch" placeholder="Set, Setnummer oder Produkt-ID …" autocomplete="off" /></label>
                 <div id="collectionObservationPrintResults" class="collection-candidate-results"></div>
                 <div id="collectionObservationPrintCandidates" class="collection-candidate-list"></div>
-                <label>Sicherheit Print<select id="collectionObservationPrintConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
+                <label hidden>Sicherheit Print<select id="collectionObservationPrintConfidence"><option value="unknown">Unbekannt</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option><option value="confirmed">Manuell bestätigt</option></select></label>
                 <p class="muted">Setcode, Rarität und Version bleiben Vorschläge. Erst „Diesen Print bestätigen“ setzt eine verifizierte Cardmarket-ID ausdrücklich auf bestätigt. Likely/unresolved: Ungeprüft - bitte selbst prüfen.</p>
-                <label>Erkennungssignale<textarea id="collectionObservationSignals" rows="2" placeholder="z. B. Setcode teilweise lesbar, Artwork passt"></textarea></label>
-                <label>Prüfstatus<select id="collectionObservationReviewStatus"><option value="unreviewed">Ungeprüft</option><option value="in_review">In Prüfung</option><option value="reviewed">Geprüft</option><option value="rejected">Verworfen</option></select></label>
-                <label class="switch-label"><input id="collectionObservationEconomicRelevant" type="checkbox" /> Wirtschaftlich relevant</label>
-                <label class="switch-label"><input id="collectionObservationDetailRequired" type="checkbox" /> Detailfoto erforderlich</label>
-                <hr />
-                <label>Physische Karte<select id="collectionObservationPhysicalCard"><option value="">Noch nicht verknüpft</option></select></label>
-                <div class="row-actions"><button id="createPhysicalCardBtn" class="secondary" type="button">Neue physische Karte</button><button id="unlinkPhysicalCardBtn" class="secondary" type="button">Verknüpfung lösen</button></div>
-                <label>Kartenposition in der Analyse<select id="collectionPhysicalCardItem"><option value="">Keine wirtschaftliche Position verknüpft</option></select></label>
-                <p class="muted">Mehrere Fotos dürfen bewusst dieselbe physische Karte zeigen. Nur die manuelle Verknüpfung verhindert eine doppelte Zählung; identische Prints können weiterhin verschiedene physische Karten sein.</p>
+                <div class="collection-legacy-observation-fields" hidden>
+                  <label>Erkennungssignale<textarea id="collectionObservationSignals" rows="2"></textarea></label>
+                  <label>Prüfstatus<select id="collectionObservationReviewStatus"><option value="unreviewed">Ungeprüft</option><option value="in_review">In Prüfung</option><option value="reviewed">Geprüft</option><option value="rejected">Verworfen</option></select></label>
+                  <label><input id="collectionObservationEconomicRelevant" type="checkbox" /> Wirtschaftlich relevant</label>
+                  <label><input id="collectionObservationDetailRequired" type="checkbox" /> Detailfoto erforderlich</label>
+                  <label>Physische Karte<select id="collectionObservationPhysicalCard"><option value="">Noch nicht verknüpft</option></select></label>
+                  <button id="createPhysicalCardBtn" type="button">Neue physische Karte</button>
+                  <button id="unlinkPhysicalCardBtn" type="button">Verknüpfung lösen</button>
+                  <label>Kartenposition in der Analyse<select id="collectionPhysicalCardItem"><option value="">Keine wirtschaftliche Position verknüpft</option></select></label>
+                </div>
               </div>
             </aside>
           </div>
         </article>
 
-        <article class="panel collection-purchase-panel">
-          <div class="panel-head"><div><h2>Schnelle Kartenerfassung</h2><small>Deutsch oder Englisch suchen, Print bewusst wählen und mit Enter zügig weiterarbeiten. Unsichere Zuordnungen werden nie als bestätigt gespeichert.</small></div><label class="secondary file-label">CSV importieren<input id="collectionCsvInput" type="file" accept=".csv,.txt" hidden /></label></div>
-          <div class="collection-quick-entry">
-            <label class="collection-search-field">Kartenname oder Setnummer<input id="collectionCardSearch" placeholder="Deutscher oder englischer Name …" autocomplete="off" /></label>
-            <label>Menge<input id="collectionCardQuantity" type="number" min="1" step="1" value="1" /></label>
-            <label>Zustand<select id="collectionCardCondition"><option>UNBEKANNT</option><option>NM</option><option>EX</option><option>GD</option><option>LP</option><option>PL</option><option>POOR</option></select></label>
-            <label>Sprache<select id="collectionCardLanguage"><option value="">Unbekannt</option><option>DE</option><option>EN</option><option>FR</option><option>IT</option><option>ES</option><option>PT</option></select></label>
-            <label>Print-Sicherheit<select id="collectionCardConfidence"><option value="confirmed">PRINT BESTÄTIGT</option><option value="likely">PRINT WAHRSCHEINLICH</option><option value="unknown">PRINT UNBEKANNT</option></select></label>
-            <button id="addCollectionCardBtn" class="primary" type="button" disabled>Position hinzufügen</button>
-          </div>
-          <div id="collectionCardSearchResults" class="inventory-card-results collection-search-results"></div>
-          <p class="muted">CSV-Felder: Name; Product-ID optional; Setcode optional; Menge; Zustand; Sprache. Ohne eindeutige Produkt-ID bleibt der Print unbekannt und muss geprüft werden.</p>
+        <article id="collectionProgressPanel" class="panel collection-purchase-panel" hidden>
+          <div class="panel-head"><div><h2>Fortschritt</h2><small>Übersicht über alle erkannten Kartenflächen des aktiven Ankaufs.</small></div></div>
+          <div id="collectionCaptureProgress" class="collection-summary collection-capture-progress"></div>
         </article>
 
-        <article class="panel collection-purchase-panel">
-          <div class="panel-head"><div><h2>Händlerentscheidung</h2><small>Nominalwert ist nur eine Referenzsumme. Entscheidend sind konservativer Handelswert, Risiken, Kapitalbindung und Max-EK.</small></div></div>
-          <div id="collectionDecisionSummary" class="collection-summary"></div>
-          <div class="two-col collection-analysis-columns">
-            <div><h3>Wertträger</h3><div id="collectionValueCarriers"></div></div>
-            <div><h3>Risikoverteilung</h3><div id="collectionRiskDistribution"></div></div>
-          </div>
-          <div id="collectionDecisionReasons" class="info"></div>
+        <article id="collectionCapturedCardsPanel" class="panel collection-purchase-panel" hidden>
+          <div class="panel-head"><div><h2>Erfasste Karten</h2><small>Bereits abgeschlossene und noch offene Karten kompakt prüfen und direkt weiterbearbeiten.</small></div></div>
+          <div class="table-wrap"><table class="collection-captured-cards-table"><thead><tr><th>Name</th><th>Setcode</th><th>Rarität</th><th>Version</th><th>Zustand</th><th>Edition</th><th>Menge</th><th>Prüfstatus</th><th></th></tr></thead><tbody id="collectionCapturedCardsTable"><tr><td colspan="9" class="empty">Noch keine Kartenflächen erfasst.</td></tr></tbody></table></div>
         </article>
 
-        <article class="panel collection-purchase-panel">
-          <div class="panel-head"><div><h2>Kartenpositionen</h2><small>Sortier- und filterbare Berechnungsgrundlage je Druckvariante.</small></div></div>
-          <div class="filter-panel">
-            <label>Suche<input id="collectionItemFilter" placeholder="Karte, Set, Produkt-ID" /></label>
-            <label>Preisklasse<select id="collectionClassFilter"><option value="">Alle Klassen</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></label>
-            <label>Print-Sicherheit<select id="collectionConfidenceFilter"><option value="">Alle</option><option value="confirmed">Bestätigt</option><option value="likely">Wahrscheinlich</option><option value="unknown">Unbekannt</option></select></label>
-            <label>Sortierung<select id="collectionSort"><option value="value">Konservativer Wert</option><option value="uncertainty">Unsicherheit</option><option value="max">Max-EK-Beitrag</option><option value="name">Kartenname</option></select></label>
+        <article id="collectionEconomicsPanel" class="panel collection-purchase-panel collection-economics-panel" hidden>
+          <div class="panel-head">
+            <div><h2>Wirtschaftlicher Abschluss</h2><small>Gesamt-EK centgenau auf die bestätigten physischen Karten verteilen. Bestand, Verkäufe und Inserate bleiben unverändert.</small></div>
+            <div class="row-actions"><button id="distributeCollectionCostsBtn" class="secondary" type="button">Restbetrag verteilen</button><button id="completeCollectionEconomicReviewBtn" class="primary" type="button">Wirtschaftlich prüfen</button><button id="transferCollectionInventoryBtn" class="primary" type="button" hidden>In Bestand übernehmen</button></div>
           </div>
-          <div class="table-wrap"><table class="collection-purchase-table"><thead><tr><th>Karte / Produkt-ID</th><th>Set / Rarität</th><th>Menge</th><th>Zustand / Sprache</th><th>Print-Sicherheit</th><th>Referenz</th><th>Konservativ</th><th>Faktor</th><th>Eigene Daten / Median</th><th>Markttrend</th><th>Unsicherheit</th><th>Relevanz</th><th>Max-EK-Beitrag</th><th></th></tr></thead><tbody id="collectionItemTable"><tr><td colspan="14" class="empty">Noch keine Karten erfasst.</td></tr></tbody></table></div>
+          <div id="collectionEconomicSummary" class="collection-summary collection-economic-summary"></div>
+          <div class="table-wrap"><table class="collection-economic-table"><thead><tr><th>Karte / Print</th><th>Menge</th><th>Markt-/Referenzwert</th><th>Privat</th><th>Geschäftlich</th><th>Manueller EK je Karte</th><th>Zugeteilter EK</th></tr></thead><tbody id="collectionEconomicTable"><tr><td colspan="7" class="empty">Noch keine bestätigten Karten vorhanden.</td></tr></tbody></table></div>
+          <div id="collectionEconomicValidation" class="collection-economic-validation muted">Noch nicht verteilt.</div>
         </article>
+
+        <div class="collection-legacy-compatibility" hidden aria-hidden="true">
+          <select id="collectionSourceType"><option>Kleinanzeigen</option><option>eBay</option><option>Privat</option><option>Cardmarket</option><option>Sonstige</option></select>
+          <input id="collectionUrl" type="url" />
+          <input id="collectionShipping" type="number" />
+          <input id="collectionExtra" type="number" />
+          <textarea id="collectionNotes"></textarea>
+          <button id="saveCollectionSnapshotBtn" type="button">Historische Entscheidung speichern</button>
+          <button id="confirmCollectionPurchaseBtn" type="button">Historischen Ankauf bestätigen</button>
+          <input id="collectionCsvInput" type="file" accept=".csv,.txt" />
+          <input id="collectionCardSearch" />
+          <input id="collectionCardQuantity" type="number" value="1" />
+          <select id="collectionCardCondition"><option>UNBEKANNT</option><option>NM</option><option>EX</option><option>GD</option><option>LP</option><option>PL</option><option>POOR</option></select>
+          <select id="collectionCardLanguage"><option value="">Unbekannt</option><option>DE</option><option>EN</option><option>FR</option><option>IT</option><option>ES</option><option>PT</option></select>
+          <select id="collectionCardConfidence"><option value="confirmed">PRINT BESTÄTIGT</option><option value="likely">PRINT WAHRSCHEINLICH</option><option value="unknown">PRINT UNBEKANNT</option></select>
+          <button id="addCollectionCardBtn" type="button" disabled>Position hinzufügen</button>
+          <div id="collectionCardSearchResults"></div>
+          <div id="collectionDecisionSummary"></div>
+          <div id="collectionValueCarriers"></div>
+          <div id="collectionRiskDistribution"></div>
+          <div id="collectionDecisionReasons"></div>
+          <input id="collectionItemFilter" />
+          <select id="collectionClassFilter"><option value="">Alle Klassen</option></select>
+          <select id="collectionConfidenceFilter"><option value="">Alle</option></select>
+          <select id="collectionSort"><option value="value">Wert</option></select>
+          <table><tbody id="collectionItemTable"></tbody></table>
+        </div>
       </section>
 
       <section id="view-cardmarket" class="view">

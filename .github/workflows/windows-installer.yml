@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Quellcode auschecken
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Node.js einrichten
         uses: actions/setup-node@v6
@@ -39,6 +41,33 @@ jobs:
       - name: Programmcode prüfen
         working-directory: desktop
         run: npm run check
+
+      - name: Konsistente Release-Version prüfen
+        working-directory: desktop
+        run: npm run release:verify
+
+      - name: Patch-Erhöhung gegenüber dem vorherigen Entwicklungsstand prüfen
+        shell: pwsh
+        run: |
+          $currentPackage = Get-Content -Raw -Encoding utf8 desktop/package.json | ConvertFrom-Json
+          $before = '${{ github.event.before }}'
+          if ([string]::IsNullOrWhiteSpace($before) -or $before -match '^0+$') {
+            $before = git rev-parse HEAD^
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Für die Patch-Prüfung ist kein vorheriger Entwicklungsstand verfügbar.'
+            }
+          }
+          $previousJson = git show "${before}:desktop/package.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Die vorherige package.json konnte nicht gelesen werden.'
+          }
+          $previousPackage = $previousJson | ConvertFrom-Json
+          $current = [version]$currentPackage.version
+          $previous = [version]$previousPackage.version
+          if ($current.Major -ne $previous.Major -or $current.Minor -ne $previous.Minor -or $current.Build -ne ($previous.Build + 1)) {
+            throw "Für einen neuen installierbaren Entwicklungsstand muss die Patch-Version genau um 1 steigen: vorher $previous, aktuell $current."
+          }
+          Write-Host "Patch-Version korrekt erhöht: $previous -> $current"
 
       - name: Windows-Installer bauen
         working-directory: desktop

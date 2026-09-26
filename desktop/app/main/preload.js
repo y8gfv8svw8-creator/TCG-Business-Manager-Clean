@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
   validateStartup: () => ipcRenderer.invoke('data:validate-startup'),
   saveState: state => ipcRenderer.invoke('data:save-state', state),
   resetState: state => ipcRenderer.invoke('data:reset-state', state),
+  transferCollectionPurchaseToInventory: payload => ipcRenderer.invoke('collection-purchase:transfer-to-inventory', payload),
   getDatabaseStatus: () => ipcRenderer.invoke('data:get-status'),
   getTradeDatabaseStatus: () => ipcRenderer.invoke('data:get-trade-database-status'),
   getBusinessEvents: payload => ipcRenderer.invoke('data:get-business-events', payload),

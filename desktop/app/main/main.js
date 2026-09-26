@@ -13,6 +13,8 @@ const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.6';
 const STARTUP_DIAGNOSTICS_ENABLED = process.env.TCG_STARTUP_DIAGNOSTICS === '1';
+const STARTUP_SQLITE_BUSY_TIMEOUT_MS = 750;
+const NORMAL_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const startupProcessStartedAt = performance.now();
 const startupTimings = [];
 function recordStartupTiming(entry = {}) {
@@ -99,11 +101,19 @@ function initializeDatabase() {
     onTiming: STARTUP_DIAGNOSTICS_ENABLED
       ? entry => recordStartupTiming({ ...entry, thread: 'main' })
       : null
-  }).open();
+  }).open({ busyTimeoutMs: STARTUP_SQLITE_BUSY_TIMEOUT_MS });
   startupValidation = database.validateStartup();
   if (!startupValidation?.valid) {
     throw new Error('SQLite wurde beim Start nicht vollständig validiert.');
   }
+  database.setBusyTimeout(NORMAL_SQLITE_BUSY_TIMEOUT_MS);
+  recordStartupTiming({
+    name: 'sqlite_normal_busy_timeout_restored',
+    detail: {
+      startupBusyTimeoutMs: STARTUP_SQLITE_BUSY_TIMEOUT_MS,
+      normalBusyTimeoutMs: NORMAL_SQLITE_BUSY_TIMEOUT_MS
+    }
+  });
   recordStartupTiming({ name: 'database_initialized_and_validated', durationMs: performance.now() - initializeStartedAt });
   return startupValidation;
 }

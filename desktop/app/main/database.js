@@ -8,6 +8,13 @@ const businessAutomation = require('../shared/business-automation');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const CURRENT_SCHEMA_VERSION = 12;
+const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
+
+function normalizedBusyTimeout(value, fallback = DEFAULT_SQLITE_BUSY_TIMEOUT_MS) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(50, Math.min(30000, Math.round(numeric)));
+}
 
 function isoNow() {
   return new Date().toISOString();
@@ -225,7 +232,7 @@ class TcgDatabase {
     this.onTiming({ name, durationMs: performance.now() - startedAt, detail });
   }
 
-  open() {
+  open({ busyTimeoutMs = DEFAULT_SQLITE_BUSY_TIMEOUT_MS } = {}) {
     if (this.db) return this;
 
     const openStartedAt = performance.now();
@@ -246,8 +253,9 @@ class TcgDatabase {
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
-    this.db.exec('PRAGMA busy_timeout = 5000;');
-    this.recordTiming('sqlite_pragmas_applied', stepStartedAt);
+    this.busyTimeoutMs = normalizedBusyTimeout(busyTimeoutMs);
+    this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
+    this.recordTiming('sqlite_pragmas_applied', stepStartedAt, { busyTimeoutMs: this.busyTimeoutMs });
 
     const existingVersion = this.existingSchemaVersion();
     let migrationBackupPrepared = false;
@@ -276,6 +284,16 @@ class TcgDatabase {
     this.recordTiming('sqlite_open_total', openStartedAt, { databasePath: this.databasePath });
 
     return this;
+  }
+
+  setBusyTimeout(busyTimeoutMs = DEFAULT_SQLITE_BUSY_TIMEOUT_MS) {
+    if (!this.db) throw new Error('SQLite ist noch nicht geöffnet.');
+    const next = normalizedBusyTimeout(busyTimeoutMs);
+    const startedAt = performance.now();
+    this.db.exec(`PRAGMA busy_timeout = ${next};`);
+    this.busyTimeoutMs = next;
+    this.recordTiming('sqlite_busy_timeout_changed', startedAt, { busyTimeoutMs: next });
+    return next;
   }
 
   tableColumns(tableName) {

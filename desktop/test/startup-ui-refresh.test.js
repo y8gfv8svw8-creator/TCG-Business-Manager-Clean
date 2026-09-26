@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const { renderPreservingFields } = require('../app/shared/renderer-field-state');
+const { TcgDatabase } = require('../app/main/database');
 
 class FakeField {
   constructor(document, { id = '', value = '', type = 'text', name = '', dataset = {}, checked = false } = {}) {
@@ -102,4 +104,25 @@ test('Große Markt-Zusammenfassungen laufen erst nach der UI-Freigabe', () => {
   assert.match(mainSource, /ipcMain\.on\('startup:ui-ready'/);
   assert.match(mainSource, /database\.ensureSnapshotSummaries\(\)/);
   assert.match(mainSource, /database\.ensureObservationSummaries\(\)/);
+});
+
+test('SQLite wartet beim Start kurz und verwendet danach wieder den vollständigen busy_timeout', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcg-startup-busy-timeout-'));
+  const database = new TcgDatabase({
+    databasePath: path.join(root, 'Daten', 'manager.sqlite'),
+    schemaPath: path.join(__dirname, '..', 'database', 'schema.sql'),
+    backupRoot: path.join(root, 'Backups')
+  }).open({ busyTimeoutMs: 750 });
+  t.after(() => {
+    database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.equal(Number(database.db.prepare('PRAGMA busy_timeout').get()?.timeout), 750);
+  assert.equal(database.setBusyTimeout(5000), 5000);
+  assert.equal(Number(database.db.prepare('PRAGMA busy_timeout').get()?.timeout), 5000);
+
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'main', 'main.js'), 'utf8');
+  assert.match(mainSource, /open\(\{ busyTimeoutMs: STARTUP_SQLITE_BUSY_TIMEOUT_MS \}\)/);
+  assert.match(mainSource, /database\.setBusyTimeout\(NORMAL_SQLITE_BUSY_TIMEOUT_MS\)/);
 });

@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { performance } = require('node:perf_hooks');
 const { TcgDatabase } = require('./database');
+const { DatabaseBackgroundRunner } = require('./database-background-runner');
 const { ScannerServer } = require('./scanner-server');
 const { CollectionCaptureServer } = require('./collection-capture-server');
 const { addMobileCardToState, findManualVariant } = require('./collection-mobile-capture');
@@ -44,6 +45,7 @@ startupEventLoopMonitor?.unref?.();
 // virtuelle Windows-Sitzung keinen Grafiktreiber benötigt. Normale Starts bleiben unverändert.
 if (process.env.TCG_MANAGER_DATA_ROOT) app.disableHardwareAcceleration();
 let database = null;
+let databaseBackgroundRunner = null;
 let dataRoot = '';
 let mainWindow = null;
 let scannerRecognizer = null;
@@ -147,7 +149,27 @@ function initializeDatabase() {
     }
   });
   recordStartupTiming({ name: 'database_initialized_and_validated', durationMs: performance.now() - initializeStartedAt });
+  databaseBackgroundRunner = new DatabaseBackgroundRunner({
+    databasePath: database.databasePath,
+    schemaPath: path.join(__dirname, '..', '..', 'database', 'schema.sql'),
+    backupRoot: path.join(dataRoot, 'Backups'),
+    busyTimeoutMs: NORMAL_SQLITE_BUSY_TIMEOUT_MS,
+    diagnostics: STARTUP_DIAGNOSTICS_ENABLED,
+    onTiming: entry => recordStartupTiming(entry)
+  });
   return startupValidation;
+}
+
+function runBackgroundDatabaseAction(action, payload = {}) {
+  if (!databaseBackgroundRunner) throw new Error('Der Datenbank-Hintergrundworker ist noch nicht bereit.');
+  const startedAt = performance.now();
+  return databaseBackgroundRunner.run(action, payload).finally(() => {
+    recordStartupTiming({
+      thread: 'main-async',
+      name: `background_database_result:${action}`,
+      durationMs: performance.now() - startedAt
+    });
+  });
 }
 
 function setupIpcHandlers() {
@@ -164,32 +186,15 @@ function setupIpcHandlers() {
     // Die UI ist bereits sichtbar und hat zwei Frames gezeichnet. Die beiden
     // großen Konsistenzzählungen laufen getrennt und nachgelagert, damit sie
     // den ersten benutzbaren Start nicht blockieren.
-    setTimeout(() => {
-      let snapshot;
+    setTimeout(async () => {
       try {
-        const snapshotStartedAt = performance.now();
-        snapshot = database.ensureSnapshotSummaries();
-        recordStartupTiming({ name: 'deferred_snapshot_summary_ready', durationMs: performance.now() - snapshotStartedAt, detail: snapshot });
+        const summaries = await runBackgroundDatabaseAction('refreshMarketSummaries');
+        if (summaries?.status) summaries.status.startupValidation = startupValidation;
+        deferredMarketSummaryPayload = summaries;
+        if (!sender.isDestroyed()) sender.send('data:market-summaries-refreshed', deferredMarketSummaryPayload);
       } catch (error) {
         console.error('Nachgelagerte Markt-Zusammenfassung fehlgeschlagen:', error);
-        return;
       }
-      setTimeout(() => {
-        try {
-          const observationStartedAt = performance.now();
-          const observation = database.ensureObservationSummaries();
-          recordStartupTiming({ name: 'deferred_observation_summary_ready', durationMs: performance.now() - observationStartedAt, detail: observation });
-          deferredMarketSummaryPayload = {
-            status: database.getStatus(),
-            snapshotDates: database.getSnapshotDates({ limit: 365 }),
-            snapshot,
-            observation
-          };
-          if (!sender.isDestroyed()) sender.send('data:market-summaries-refreshed', deferredMarketSummaryPayload);
-        } catch (error) {
-          console.error('Nachgelagerte Beobachtungs-Zusammenfassung fehlgeschlagen:', error);
-        }
-      }, 0);
     }, 750);
   });
   ipcMain.handle('app:get-info', () => ({
@@ -312,9 +317,9 @@ function setupIpcHandlers() {
   ipcMain.handle('data:reset-state', (_event, state) => database.saveState(state, { allowDestructiveReset: true }));
   ipcMain.handle('collection-purchase:transfer-to-inventory', (_event, payload = {}) => database.transferCollectionPurchaseToInventory({ analysisId: String(payload.analysisId || '') }));
   ipcMain.handle('data:get-status', () => database.getStatus());
-  ipcMain.handle('data:get-trade-database-status', () => database.getTradeDatabaseStatus());
+  ipcMain.handle('data:get-trade-database-status', () => runBackgroundDatabaseAction('getTradeDatabaseStatus'));
   ipcMain.handle('data:get-business-events', (_event, payload) => database.getBusinessEvents(payload));
-  ipcMain.handle('data:get-own-sales-experience', (_event, payload) => database.getOwnSalesExperience(payload));
+  ipcMain.handle('data:get-own-sales-experience', (_event, payload) => runBackgroundDatabaseAction('getOwnSalesExperience', payload));
   ipcMain.handle('data:get-trade-recommendations', (_event, payload) => database.getTradeRecommendations(payload));
   ipcMain.handle('data:get-data-sources', () => database.getDataSources());
   ipcMain.handle('data:begin-cardmarket-import', (_event, payload) => database.beginCardmarketImport(payload));
@@ -324,12 +329,12 @@ function setupIpcHandlers() {
   ipcMain.handle('data:upsert-products', (_event, rows) => database.upsertProducts(rows));
   ipcMain.handle('data:upsert-card-names', (_event, payload) => database.upsertCardNames(payload));
   ipcMain.handle('data:get-card-name-status', () => database.getCardNameStatus());
-  ipcMain.handle('data:get-card-names-for-products', (_event, payload) => database.getCardNamesForProducts(payload));
+  ipcMain.handle('data:get-card-names-for-products', (_event, payload) => runBackgroundDatabaseAction('getCardNamesForProducts', payload));
   ipcMain.handle('data:search-cards', (_event, payload) => database.searchCards(payload));
-  ipcMain.handle('data:get-card-name-backup', () => database.getCardNameBackup());
+  ipcMain.handle('data:get-card-name-backup', () => runBackgroundDatabaseAction('getCardNameBackup'));
   ipcMain.handle('data:upsert-market-prices', (_event, payload) => database.upsertMarketPrices(payload));
   ipcMain.handle('data:get-market-history', (_event, payload) => database.getMarketHistory(payload));
-  ipcMain.handle('data:get-market-decision-history', (_event, payload) => database.getMarketDecisionHistory(payload));
+  ipcMain.handle('data:get-market-decision-history', (_event, payload) => runBackgroundDatabaseAction('getMarketDecisionHistory', payload));
   ipcMain.handle('data:get-market-overview', (_event, payload) => database.getMarketOverview(payload));
   ipcMain.handle('data:get-snapshot-dates', (_event, payload) => database.getSnapshotDates(payload));
   ipcMain.handle('data:get-cardmarket-cache-seed', (_event, payload) => database.getCardmarketCacheSeed(payload));
@@ -487,6 +492,7 @@ app.on('before-quit', () => {
   scannerServer.stop().catch(error => console.error('Scanner-Server konnte nicht beendet werden:', error));
   collectionCaptureServer.stop().catch(error => console.error('Mobile Sammlungsankauf-Verbindung konnte nicht beendet werden:', error));
   scannerRecognizer?.terminate().catch(error => console.error('Scanner-OCR konnte nicht beendet werden:', error));
+  databaseBackgroundRunner?.close().catch(error => console.error('Datenbank-Hintergrundworker konnte nicht beendet werden:', error));
   try {
     database?.close();
   } catch (error) {

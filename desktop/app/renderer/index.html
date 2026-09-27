@@ -1426,6 +1426,8 @@
         requestAnimationFrame(() => requestAnimationFrame(() => {
           recordStartupTiming("first_page_fully_rendered", startupDiagnosticStartedAt);
           startupDiagnostics.complete = true;
+          window.__TCG_STARTUP_UI_READY__ = true;
+          window.dispatchEvent(new Event("tcg-startup-ui-ready"));
           window.desktopApp?.notifyUiReady?.();
         }));
         if (startupDiagnostics.enabled) setTimeout(() => {

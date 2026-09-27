@@ -7931,8 +7931,12 @@ initAutomation();
 window.__TCG_RECORD_STARTUP_TIMING__?.("ui_initialized",startupUiInitializationStartedAt,{view:currentViewName});
 window.__TCG_RECORD_STARTUP_TIMING__?.("app_script_executed",startupAppExecutionStartedAt);
 const scheduleStartupBackgroundWork = callback => {
-  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(callback,{timeout:1200});
-  else setTimeout(callback,250);
+  const schedule = () => {
+    if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(callback,{timeout:1200});
+    else setTimeout(callback,250);
+  };
+  if (window.__TCG_STARTUP_UI_READY__) schedule();
+  else window.addEventListener("tcg-startup-ui-ready",schedule,{once:true});
 };
 scheduleStartupBackgroundWork(()=>{
   const backgroundRefreshes=[

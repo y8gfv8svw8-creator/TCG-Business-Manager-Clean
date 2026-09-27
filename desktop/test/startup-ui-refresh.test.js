@@ -94,7 +94,7 @@ test('Nachlaufende Startabfragen lösen höchstens einen geschützten Vollrefres
   assert.doesNotMatch(start, /renderAll\(\)/);
 });
 
-test('Große Markt-Zusammenfassungen laufen erst nach der UI-Freigabe', () => {
+test('Große Markt-Zusammenfassungen laufen erst nach der UI-Freigabe und außerhalb des Main-Threads', () => {
   const databaseSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'main', 'database.js'), 'utf8');
   const open = databaseSource.slice(databaseSource.indexOf('  open() {'), databaseSource.indexOf('  tableColumns(', databaseSource.indexOf('  open() {')));
   assert.doesNotMatch(open, /ensureSnapshotSummaries\(\)/);
@@ -102,8 +102,9 @@ test('Große Markt-Zusammenfassungen laufen erst nach der UI-Freigabe', () => {
 
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'main', 'main.js'), 'utf8');
   assert.match(mainSource, /ipcMain\.on\('startup:ui-ready'/);
-  assert.match(mainSource, /database\.ensureSnapshotSummaries\(\)/);
-  assert.match(mainSource, /database\.ensureObservationSummaries\(\)/);
+  assert.match(mainSource, /runBackgroundDatabaseAction\('refreshMarketSummaries'\)/);
+  assert.doesNotMatch(mainSource, /database\.ensureSnapshotSummaries\(\)/);
+  assert.doesNotMatch(mainSource, /database\.ensureObservationSummaries\(\)/);
 });
 
 test('SQLite wartet beim Start kurz und verwendet danach wieder den vollständigen busy_timeout', t => {

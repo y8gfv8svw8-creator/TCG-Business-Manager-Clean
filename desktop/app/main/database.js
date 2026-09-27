@@ -232,7 +232,7 @@ class TcgDatabase {
     this.onTiming({ name, durationMs: performance.now() - startedAt, detail });
   }
 
-  open({ busyTimeoutMs = DEFAULT_SQLITE_BUSY_TIMEOUT_MS } = {}) {
+  open({ busyTimeoutMs = DEFAULT_SQLITE_BUSY_TIMEOUT_MS, initialize = true } = {}) {
     if (this.db) return this;
 
     const openStartedAt = performance.now();
@@ -251,11 +251,22 @@ class TcgDatabase {
     this.recordTiming('sqlite_connection_opened', stepStartedAt, { databasePath: this.databasePath });
     stepStartedAt = performance.now();
     this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec('PRAGMA journal_mode = WAL;');
+    if (initialize) this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.busyTimeoutMs = normalizedBusyTimeout(busyTimeoutMs);
     this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
-    this.recordTiming('sqlite_pragmas_applied', stepStartedAt, { busyTimeoutMs: this.busyTimeoutMs });
+    this.recordTiming('sqlite_pragmas_applied', stepStartedAt, { busyTimeoutMs: this.busyTimeoutMs, initialize });
+
+    // Ein Hintergrund-Worker wird erst nach der vollstaendigen Startpruefung
+    // geoeffnet. Er benoetigt nur eine zweite SQLite-Verbindung und darf beim
+    // Oeffnen weder Schema, Migrationen noch Datenquellen erneut anfassen.
+    if (!initialize) {
+      this.recordTiming('sqlite_open_total', openStartedAt, {
+        databasePath: this.databasePath,
+        backgroundConnection: true
+      });
+      return this;
+    }
 
     const existingVersion = this.existingSchemaVersion();
     let migrationBackupPrepared = false;

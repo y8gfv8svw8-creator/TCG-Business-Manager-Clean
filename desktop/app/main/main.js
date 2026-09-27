@@ -13,7 +13,7 @@ const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
 const { PrintReferenceDatabase, resolveBundledPrintReferencePath } = require('./print-reference-database');
 const collectionPhotoModel = require('../shared/collection-photo-model');
 
-const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.8';
+const APP_TITLE = 'TCG Business Manager – Analysecenter 6.13.9';
 const STARTUP_DIAGNOSTICS_ENABLED = process.env.TCG_STARTUP_DIAGNOSTICS === '1';
 const STARTUP_SQLITE_BUSY_TIMEOUT_MS = 750;
 const NORMAL_SQLITE_BUSY_TIMEOUT_MS = 5000;

@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const { performance } = require('node:perf_hooks');
 const { TcgDatabase } = require('./database');
 const { ScannerServer } = require('./scanner-server');
+const { CollectionCaptureServer } = require('./collection-capture-server');
+const { addMobileCardToState, findManualVariant } = require('./collection-mobile-capture');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
 const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
@@ -53,6 +55,36 @@ let deferredMarketSummaryPayload = null;
 const scannerServer = new ScannerServer({
   onSubmission: submission => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scanner:submission', submission);
+  }
+});
+const collectionCaptureServer = new CollectionCaptureServer({
+  onResolve: ({ session, setCode, rarity }) => {
+    const state = database.loadState().state || {};
+    const analysis = (state.collectionPurchaseAnalyses || []).find(row => String(row.id) === String(session.analysisId));
+    if (!analysis || String(analysis.captureStatus || 'active') !== 'active') throw new Error('Der verbundene Sammlungsankauf ist nicht mehr für die Erfassung geöffnet.');
+    return ensurePrintReferenceDatabase().resolveCollectionRecognition({ setCode, setCodeConfidence: null, rarity });
+  },
+  onSearch: ({ session, query }) => {
+    const state = database.loadState().state || {};
+    const analysis = (state.collectionPurchaseAnalyses || []).find(row => String(row.id) === String(session.analysisId));
+    if (!analysis || String(analysis.captureStatus || 'active') !== 'active') throw new Error('Der verbundene Sammlungsankauf ist nicht mehr für die Erfassung geöffnet.');
+    const result = database.searchCards({ query, limit: 20, offset: 0 });
+    return (result.cards || []).flatMap(card => (card.variants || []).map(variant => ({
+      productId: String(variant.productId || ''), metacardId: String(variant.metacardId || card.metacardId || ''),
+      germanName: String(variant.germanName || card.germanName || ''), englishName: String(variant.englishName || card.englishName || ''), officialName: String(variant.officialName || ''),
+      setName: String(variant.setName || ''), setCode: String(variant.setCode || ''), collectorNumber: String(variant.collectorNumber || ''), rarity: String(variant.rarity || ''), variant: String(variant.variant || variant.inferredVariant || ''),
+      language: String(variant.language || ''), productUrl: String(variant.productUrl || '')
+    }))).filter(row => /^\d+$/.test(row.productId)).slice(0, 40);
+  },
+  onCreateCard: ({ session, input }) => {
+    const loaded = database.loadState(), state = loaded.state || {};
+    const recognition = ensurePrintReferenceDatabase().resolveCollectionRecognition({ setCode: String(input.setCode || ''), setCodeConfidence: null, rarity: String(input.rarity || '') });
+    const manualProduct = input.manualProductId ? findManualVariant(database.searchCards({ query: String(input.manualProductId), limit: 1, offset: 0 }), input.manualProductId) : null;
+    const result = addMobileCardToState(state, { analysisId: session.analysisId, sessionId: session.sessionId, input, recognition, manualProduct });
+    const persistence = result.duplicate ? null : database.saveState(state);
+    const event = { analysisId: result.analysisId, analysisTitle: result.analysisTitle, observation: result.observation, duplicate: result.duplicate, count: result.count, updatedAt: persistence?.updatedAt || loaded.updatedAt || '' };
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('collection-mobile:card-added', event);
+    return event;
   }
 });
 
@@ -175,6 +207,15 @@ function setupIpcHandlers() {
   ipcMain.handle('scanner:stop', () => scannerServer.stop());
   ipcMain.handle('scanner:status', () => scannerServer.status());
   ipcMain.handle('scanner:recognize-card', (_event, payload) => scannerRecognizer.recognize(payload));
+  ipcMain.handle('collection-mobile:start', async (_event, payload = {}) => {
+    const loaded = database.loadState(), state = loaded.state || {}, analysisId = String(payload.analysisId || '');
+    const analysis = (state.collectionPurchaseAnalyses || []).find(row => String(row.id) === analysisId);
+    if (!analysis || String(state.activeCollectionAnalysisId || '') !== analysisId) throw new Error('Bitte zuerst den aktiven Sammlungsankauf auswählen.');
+    if (String(analysis.captureStatus || 'active') !== 'active') throw new Error('Der Sammlungsankauf muss für die Erfassung geöffnet sein.');
+    return collectionCaptureServer.start({ analysisId, analysisTitle: String(analysis.title || 'Aktiver Sammlungsankauf') });
+  });
+  ipcMain.handle('collection-mobile:stop', () => collectionCaptureServer.stop());
+  ipcMain.handle('collection-mobile:status', () => collectionCaptureServer.status());
   ipcMain.handle('scanner:recognize-collection-card-name', async (_event, payload = {}) => {
     const recognition = await scannerRecognizer.recognize(payload);
     const titleReadings = (recognition.regionResults || [])
@@ -444,6 +485,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   scannerServer.stop().catch(error => console.error('Scanner-Server konnte nicht beendet werden:', error));
+  collectionCaptureServer.stop().catch(error => console.error('Mobile Sammlungsankauf-Verbindung konnte nicht beendet werden:', error));
   scannerRecognizer?.terminate().catch(error => console.error('Scanner-OCR konnte nicht beendet werden:', error));
   try {
     database?.close();

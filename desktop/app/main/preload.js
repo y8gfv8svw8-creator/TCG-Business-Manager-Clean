@@ -25,6 +25,15 @@ contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
     ipcRenderer.on('scanner:submission', listener);
     return () => ipcRenderer.removeListener('scanner:submission', listener);
   },
+  startCollectionMobileCapture: payload => ipcRenderer.invoke('collection-mobile:start', payload),
+  stopCollectionMobileCapture: () => ipcRenderer.invoke('collection-mobile:stop'),
+  getCollectionMobileCaptureStatus: () => ipcRenderer.invoke('collection-mobile:status'),
+  onCollectionMobileCardAdded: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('collection-mobile:card-added', listener);
+    return () => ipcRenderer.removeListener('collection-mobile:card-added', listener);
+  },
   loadState: () => ipcRenderer.invoke('data:load-state'),
   validateStartup: () => ipcRenderer.invoke('data:validate-startup'),
   saveState: state => ipcRenderer.invoke('data:save-state', state),

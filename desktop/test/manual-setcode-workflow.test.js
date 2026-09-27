@@ -5,7 +5,7 @@ const path = require('node:path');
 const model = require('../app/shared/collection-photo-model');
 const { PrintReferenceDatabase } = require('../app/main/print-reference-database');
 
-test('manuelle Setcode-Erfassung bewahrt Zustand Edition und Menge ohne Bestandsposition', () => {
+test('manuelle Setcode-Erfassung bewahrt Zustand Edition Menge und Ziel-VK ohne Bestandsposition', () => {
   const observation = model.normalizeObservation({
     id: 'observation-1',
     photoId: 'photo-1',
@@ -16,6 +16,7 @@ test('manuelle Setcode-Erfassung bewahrt Zustand Edition und Menge ohne Bestands
       condition: 'nm',
       edition: '1ST',
       quantity: 2,
+      targetSell: 4.759,
       completedAt: '2026-09-26T10:00:00.000Z'
     }
   }, 'analysis-1');
@@ -25,6 +26,7 @@ test('manuelle Setcode-Erfassung bewahrt Zustand Edition und Menge ohne Bestands
     condition: 'NM',
     edition: '1st',
     quantity: 2,
+    targetSell: 4.76,
     completedAt: '2026-09-26T10:00:00.000Z',
     updatedAt: ''
   });
@@ -50,11 +52,12 @@ test('UI bietet Live-Setcode Eingabe Tastaturfolge und manuelle Suche ohne autom
   assert.match(html, /id="collectionObservationManualCondition"/);
   assert.match(html, /id="collectionObservationManualEdition"/);
   assert.match(html, /id="collectionObservationManualQuantity"/);
+  assert.match(html, /id="collectionObservationManualTargetSell"/);
   assert.match(html, /id="collectionObservationManualSearchBtn"/);
   assert.match(html, /id="completeCollectionManualCardBtn"/);
   assert.match(renderer, /lookupManualCollectionSetCode\(observation,value\)/);
   assert.match(renderer, /focusNextCollectionManualStep\(observation\)/);
-  assert.match(renderer, /collectionObservationManualQuantity[\s\S]*completeCollectionManualCard/);
+  assert.match(renderer, /collectionObservationManualQuantity[\s\S]*collectionObservationManualTargetSell[\s\S]*completeCollectionManualCard/);
   const completion = renderer.match(/function completeCollectionManualCard\(\)\{[\s\S]*?\n\}/)?.[0] || '';
   assert.doesNotMatch(completion, /analysis\.items\.push|addSelectedCollectionCard|confirmCollectionPurchase|linkedPurchaseId/);
 });

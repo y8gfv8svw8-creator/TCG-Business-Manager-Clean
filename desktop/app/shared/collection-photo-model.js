@@ -7,7 +7,7 @@
 
   const CONFIDENCE_VALUES = Object.freeze(['unknown', 'low', 'medium', 'high', 'confirmed']);
   const REVIEW_VALUES = Object.freeze(['unreviewed', 'in_review', 'reviewed', 'rejected']);
-  const OBSERVATION_SOURCE_VALUES = Object.freeze(['manual', 'automatic']);
+  const OBSERVATION_SOURCE_VALUES = Object.freeze(['manual', 'automatic', 'mobile']);
   const DETECTION_REVIEW_VALUES = Object.freeze(['manual', 'suggested', 'confirmed', 'rejected']);
   const SCENE_TYPE_VALUES = Object.freeze(['binder_grid', 'loose_cards', 'mixed_or_uncertain']);
   const COMPLEXITY_VALUES = Object.freeze(['low', 'medium', 'high']);
@@ -238,12 +238,16 @@
     const condition = text(value.condition).toUpperCase();
     const editionValue = text(value.edition).toLowerCase();
     const quantity = Math.max(1, Math.round(Number(value.quantity || 1)));
+    const rawTargetSell = value.targetSell;
+    const parsedTargetSell = rawTargetSell === null || rawTargetSell === undefined || text(rawTargetSell) === '' ? null : Number(rawTargetSell);
+    const targetSell = Number.isFinite(parsedTargetSell) && parsedTargetSell >= 0 ? Math.round(parsedTargetSell * 100) / 100 : null;
     return {
       setCode: text(value.setCode).toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9-]/g, '').slice(0, 40),
       setCodeConfirmed: Boolean(value.setCodeConfirmed),
       condition: ['NM', 'EX', 'GD', 'LP', 'PL', 'POOR', 'UNBEKANNT'].includes(condition) ? condition : 'UNBEKANNT',
       edition: editionValue === '1st' ? '1st' : editionValue === 'unlimited' ? 'Unlimited' : '',
       quantity: Number.isFinite(quantity) ? quantity : 1,
+      targetSell,
       completedAt: text(value.completedAt),
       updatedAt: text(value.updatedAt)
     };
@@ -420,7 +424,7 @@
     const linkedPhysicalIds = new Set(visibleObservations.map(row => row.physicalCardId).filter(Boolean));
     const linkedItemIds = new Set(normalized.physicalCards.map(row => row.linkedCollectionItemId).filter(Boolean));
     return {
-      photoCount: normalized.photos.length,
+      photoCount: normalized.photos.filter(row => row.captureSource !== 'mobile').length,
       observationCount: visibleObservations.length,
       automaticSuggestedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'suggested').length,
       automaticConfirmedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'confirmed').length,

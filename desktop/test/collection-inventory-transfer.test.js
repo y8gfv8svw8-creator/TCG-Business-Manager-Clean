@@ -34,13 +34,13 @@ function collectionState() {
       photoObservations: [
         {
           id: 'position-1', photoId: 'photo-1', boundingBox: { x: 0, y: 0, width: 0.4, height: 0.8 }, selectedProductId: '111111', selectedName: 'Erste Karte', printConfidence: 'confirmed', detectionReviewState: 'confirmed',
-          manualCapture: { setCode: 'TEST-DE001', setCodeConfirmed: true, condition: 'NM', edition: '1st', quantity: 2, completedAt: '2026-09-26T10:00:00.000Z' },
+          manualCapture: { setCode: 'TEST-DE001', setCodeConfirmed: true, condition: 'NM', edition: '1st', quantity: 2, targetSell: 7.5, completedAt: '2026-09-26T10:00:00.000Z' },
           printRecognition: { setCode: 'TEST-DE001', selectedRarity: 'Ultra Rare', selectedVersion: 'V.1', mappingStatus: 'exact' },
           printCandidates: [{ productId: '111111', germanName: 'Erste Karte', englishName: 'First Card', setName: 'Test Expansion', setCode: 'TEST-DE001', rarity: 'Ultra Rare', version: 'V.1', verified: true }]
         },
         {
           id: 'position-2', photoId: 'photo-1', boundingBox: { x: 0.5, y: 0, width: 0.4, height: 0.8 }, selectedProductId: '222222', selectedName: 'Zweite Karte', printConfidence: 'confirmed', detectionReviewState: 'confirmed',
-          manualCapture: { setCode: 'TEST-DE002', setCodeConfirmed: true, condition: 'EX', edition: 'Unlimited', quantity: 2, completedAt: '2026-09-26T10:01:00.000Z' },
+          manualCapture: { setCode: 'TEST-DE002', setCodeConfirmed: true, condition: 'EX', edition: 'Unlimited', quantity: 2, targetSell: 4.25, completedAt: '2026-09-26T10:01:00.000Z' },
           printRecognition: { setCode: 'TEST-DE002', selectedRarity: 'Super Rare', mappingStatus: 'exact' },
           printCandidates: [{ productId: '222222', germanName: 'Zweite Karte', englishName: 'Second Card', setName: 'Test Expansion', setCode: 'TEST-DE002', rarity: 'Super Rare', verified: true }]
         }
@@ -77,6 +77,8 @@ test('übernimmt normale und mehrfache Geschäftsexemplare mit exaktem Print und
   assert.equal(created[0].edition, '1st Edition');
   assert.equal(created[2].condition, 'EX');
   assert.equal(created[2].edition, 'Unlimited');
+  assert.deepEqual(created.map(item => item.targetSell), [7.5, 7.5, 4.25]);
+  assert.deepEqual(created.map(item => item.originalTargetSell), [7.5, 7.5, 4.25]);
   assert.equal(result.summary.businessQuantity, 3);
 });
 
@@ -89,6 +91,7 @@ test('trennt private Teilmengen ohne Kosten auf Geschäftskarten umzuverteilen',
   assert.equal(result.summary.privateCostCents + result.summary.businessCostCents, result.summary.totalCostCents);
   assert.equal(created.reduce((sum, item) => sum + Math.round(item.cost * 100), 0), 800);
   assert.equal(result.state.inventory.some(item => item.ownership === 'private'), false);
+  assert.equal(result.summary.positions.find(row => row.observationId === 'position-2').targetSell, 4.25);
 });
 
 test('bewahrt Herkunft, Ankaufposition sowie ursprünglichen und vollständigen EK', () => {
@@ -182,13 +185,13 @@ test('realistischer Sammlungsankauf läuft mit Print-Auswahl, EK, Privatanteilen
   t.after(() => { reference.close(); database?.close(); fs.rmSync(root, { recursive: true, force: true }); });
 
   const specs = [
-    { code: 'RA01-EN019', rarity: 'Super Rare', version: 'V.1', quantity: 1, condition: 'NM', edition: '1st', privateQuantity: 0, referenceValue: 12, manualUnitCost: 10 },
-    { code: 'CORI-EN081', rarity: 'Ultra Rare', version: 'V.1', quantity: 2, condition: 'EX', edition: 'Unlimited', privateQuantity: 1, referenceValue: 18 },
-    { code: 'MAMO-EN004', rarity: 'Ultra Rare', version: 'V.2', quantity: 1, condition: 'GD', edition: '1st', privateQuantity: 1, referenceValue: 9 },
-    { code: 'CORI-EN004', rarity: 'Ultra Rare', version: 'V.1', quantity: 1, condition: 'NM', edition: '1st', privateQuantity: 0, referenceValue: 8 },
-    { code: 'MAMO-EN004', rarity: 'Starlight Rare', version: 'V.3', quantity: 1, condition: 'NM', edition: 'Unlimited', privateQuantity: 0, referenceValue: 30 },
-    { code: 'CORI-EN081', rarity: 'Starlight Rare', version: 'V.3', quantity: 1, condition: 'EX', edition: '1st', privateQuantity: 0, referenceValue: 24 },
-    { code: 'CORI-EN004', rarity: 'Starlight Rare', version: 'V.2', quantity: 1, condition: 'GD', edition: 'Unlimited', privateQuantity: 0, referenceValue: 16 }
+    { code: 'RA01-EN019', rarity: 'Super Rare', version: 'V.1', quantity: 1, condition: 'NM', edition: '1st', targetSell: 14.9, privateQuantity: 0, referenceValue: 12, manualUnitCost: 10 },
+    { code: 'CORI-EN081', rarity: 'Ultra Rare', version: 'V.1', quantity: 2, condition: 'EX', edition: 'Unlimited', targetSell: 21, privateQuantity: 1, referenceValue: 18 },
+    { code: 'MAMO-EN004', rarity: 'Ultra Rare', version: 'V.2', quantity: 1, condition: 'GD', edition: '1st', targetSell: 10, privateQuantity: 1, referenceValue: 9 },
+    { code: 'CORI-EN004', rarity: 'Ultra Rare', version: 'V.1', quantity: 1, condition: 'NM', edition: '1st', targetSell: 9.5, privateQuantity: 0, referenceValue: 8 },
+    { code: 'MAMO-EN004', rarity: 'Starlight Rare', version: 'V.3', quantity: 1, condition: 'NM', edition: 'Unlimited', targetSell: 36, privateQuantity: 0, referenceValue: 30 },
+    { code: 'CORI-EN081', rarity: 'Starlight Rare', version: 'V.3', quantity: 1, condition: 'EX', edition: '1st', targetSell: 28.5, privateQuantity: 0, referenceValue: 24 },
+    { code: 'CORI-EN004', rarity: 'Starlight Rare', version: 'V.2', quantity: 1, condition: 'GD', edition: 'Unlimited', targetSell: 19, privateQuantity: 0, referenceValue: 16 }
   ];
   const observations = [], cards = [], productCatalog = {};
   let requiredRaritySelections = 0, requiredVersionSelections = 0;
@@ -204,7 +207,7 @@ test('realistischer Sammlungsankauf läuft mit Print-Auswahl, EK, Privatanteilen
       id: observationId, photoId: 'e2e-photo', boundingBox: { x: (index % 4) * 0.24, y: Math.floor(index / 4) * 0.48, width: 0.22, height: 0.44 },
       selectedProductId: candidate.cardmarketProductId, selectedName: candidate.germanName || candidate.englishName,
       printConfidence: 'confirmed', detectionReviewState: 'confirmed',
-      manualCapture: { setCode: spec.code, setCodeConfirmed: true, condition: spec.condition, edition: spec.edition, quantity: spec.quantity, completedAt: '2026-09-26T15:00:00.000Z' },
+      manualCapture: { setCode: spec.code, setCodeConfirmed: true, condition: spec.condition, edition: spec.edition, quantity: spec.quantity, targetSell: spec.targetSell, completedAt: '2026-09-26T15:00:00.000Z' },
       printRecognition: { ...recognition, selectedRarity: spec.rarity, selectedVersion: spec.version, selectedCandidateId: candidate.id, mappingStatus: 'exact' },
       printCandidates: []
     });
@@ -264,6 +267,10 @@ test('realistischer Sammlungsankauf läuft mit Print-Auswahl, EK, Privatanteilen
   assert.ok(transferredBusiness.every(row => row.acquisitionCostOrigin?.fullCostCents === Math.round(row.cost * 100)));
   assert.ok(transferredBusiness.every(row => Math.round((row.originalAcquisitionCost + row.allocatedPurchaseExtra) * 100) === Math.round(row.fullAcquisitionCost * 100)));
   assert.ok(transferredBusiness.every(row => row.sourceCollectionPositionId && row.purchaseLineKey.startsWith('COLLECTION:e2e-collection:')));
+  assert.ok(transferredBusiness.every(row => {
+    const source = specs[Number(row.sourceCollectionPositionId.replace('e2e-position-', '')) - 1];
+    return row.targetSell === source.targetSell && row.originalTargetSell === source.targetSell;
+  }));
   const persistedAllocation = transferred.state.collectionPurchaseAnalyses[0].economicReview.allocation;
   assert.equal(persistedAllocation.lines.reduce((sum, row) => sum + row.unitOriginalCostCents.reduce((part, value) => part + value, 0), 0), 7500);
   assert.equal(persistedAllocation.lines.reduce((sum, row) => sum + row.unitDirectCostCents.reduce((part, value) => part + value, 0), 0), 500);

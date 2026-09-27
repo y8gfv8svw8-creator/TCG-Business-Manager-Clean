@@ -578,6 +578,15 @@
           </div>
         </article>
 
+        <article id="collectionMobileCapturePanel" class="panel collection-purchase-panel collection-mobile-capture" hidden>
+          <div class="panel-head">
+            <div><h2>Mobile Erfassung</h2><small>Handy und PC verbinden sich ausschließlich im lokalen Netzwerk. Die Erfassung verändert noch keinen Bestand.</small></div>
+            <div class="row-actions"><button id="startCollectionMobileCaptureBtn" class="primary" type="button">Handy verbinden</button><button id="stopCollectionMobileCaptureBtn" class="secondary" type="button" hidden>Verbindung beenden</button></div>
+          </div>
+          <div id="collectionMobileCaptureStatus" class="collection-mobile-status muted">Noch keine mobile Verbindung aktiv.</div>
+          <div id="collectionMobileCapturePairing" class="collection-mobile-pairing" hidden><img id="collectionMobileCaptureQr" alt="QR-Code für die mobile Sammlungsankauf-Erfassung"><div><strong id="collectionMobileCapturePurchase"></strong><span id="collectionMobileCaptureConnection"></span><code id="collectionMobileCaptureUrl"></code><small>Der QR-Code enthält ein zufälliges, kurzlebiges Sitzungstoken. Beim Beenden oder Neustart des Managers wird es ungültig.</small></div></div>
+        </article>
+
         <article id="collectionCapturePanel" class="panel collection-purchase-panel collection-photo-panel" hidden>
           <div class="panel-head">
             <div><h2>Karten erfassen</h2><small>Fotos und erkannte Kartenflächen weiterverwenden. Danach jede Karte schnell über Setcode, Rarität, Version, Zustand, Edition und Menge abschließen.</small></div>
@@ -648,6 +657,7 @@
                     <label>Zustand<select id="collectionObservationManualCondition"><option value="UNBEKANNT">Unbekannt</option><option value="NM">NM</option><option value="EX">EX</option><option value="GD">GD</option><option value="LP">LP</option><option value="PL">PL</option><option value="POOR">POOR</option></select></label>
                     <label>Edition<select id="collectionObservationManualEdition"><option value="">Nicht relevant / unbekannt</option><option value="1st">1st Edition</option><option value="Unlimited">Unlimited</option></select></label>
                     <label>Menge<input id="collectionObservationManualQuantity" type="number" min="1" step="1" value="1" /></label>
+                    <label>Ziel-/Verkaufspreis (VK €)<input id="collectionObservationManualTargetSell" type="number" min="0" step="0.01" placeholder="optional" /></label>
                   </div>
                   <div id="collectionObservationManualCaptureStatus" class="collection-manual-capture-status muted">Noch nicht abgeschlossen.</div>
                   <div class="row-actions collection-manual-actions"><button id="collectionObservationManualSearchBtn" class="secondary" type="button">Manuelle Kartensuche</button><button id="completeCollectionManualCardBtn" class="primary" type="button">Karte abschließen &amp; nächste</button></div>
@@ -680,7 +690,7 @@
 
         <article id="collectionCapturedCardsPanel" class="panel collection-purchase-panel" hidden>
           <div class="panel-head"><div><h2>Erfasste Karten</h2><small>Bereits abgeschlossene und noch offene Karten kompakt prüfen und direkt weiterbearbeiten.</small></div></div>
-          <div class="table-wrap"><table class="collection-captured-cards-table"><thead><tr><th>Name</th><th>Setcode</th><th>Rarität</th><th>Version</th><th>Zustand</th><th>Edition</th><th>Menge</th><th>Prüfstatus</th><th></th></tr></thead><tbody id="collectionCapturedCardsTable"><tr><td colspan="9" class="empty">Noch keine Kartenflächen erfasst.</td></tr></tbody></table></div>
+          <div class="table-wrap"><table class="collection-captured-cards-table"><thead><tr><th>Name</th><th>Setcode</th><th>Rarität</th><th>Version</th><th>Zustand</th><th>Edition</th><th>Menge</th><th>Ziel-VK</th><th>Prüfstatus</th><th></th></tr></thead><tbody id="collectionCapturedCardsTable"><tr><td colspan="10" class="empty">Noch keine Kartenflächen erfasst.</td></tr></tbody></table></div>
         </article>
 
         <article id="collectionEconomicsPanel" class="panel collection-purchase-panel collection-economics-panel" hidden>

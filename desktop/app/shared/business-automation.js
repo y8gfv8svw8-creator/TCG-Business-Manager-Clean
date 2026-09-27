@@ -2950,8 +2950,10 @@
     for (const observation of observations) {
       const capture = observation.manualCapture || {}, quantity = Number(capture.quantity), productId = String(observation.selectedProductId || '').replace(/\D/g, ''), line = linesById.get(String(observation.id));
       const privateQuantity = Number(line?.privateQuantity || 0);
+      const rawTargetSell = capture.targetSell;
       if (!capture.completedAt || observation.printConfidence !== 'confirmed' || !productId) throw new Error('Mindestens eine Karte ist nicht vollständig und eindeutig bestätigt.');
       if (!Number.isInteger(quantity) || quantity < 1 || !line || Number(line.quantity) !== quantity || !Number.isInteger(privateQuantity) || privateQuantity < 0 || privateQuantity > quantity) throw new Error('Mindestens eine Menge oder Privatentnahme ist ungültig.');
+      if (rawTargetSell !== null && rawTargetSell !== undefined && String(rawTargetSell).trim() !== '' && (!Number.isFinite(Number(rawTargetSell)) || Number(rawTargetSell) < 0)) throw new Error('Mindestens eine Karte besitzt keinen gültigen Ziel-/Verkaufspreis.');
       if (!Array.isArray(line.unitCostsCents) || line.unitCostsCents.length !== quantity || line.unitCostsCents.some(value => !Number.isInteger(value) || value < 0)) throw new Error('Mindestens eine Karte besitzt keine gültige EK-Zuteilung.');
       if (Number(line.businessQuantity) !== quantity - privateQuantity) throw new Error('Privat- und Geschäftsmenge sind widersprüchlich.');
     }
@@ -2975,6 +2977,7 @@
       const name = String(observation.selectedName || candidate.germanName || candidate.name || product.germanName || product.name || `CM ${productId}`);
       const edition = capture.edition === '1st' ? '1st Edition' : capture.edition === 'Unlimited' ? 'Unlimited' : 'Unbekannt';
       const condition = String(capture.condition || 'UNBEKANNT');
+      const targetSell = capture.targetSell === null || capture.targetSell === undefined || String(capture.targetSell).trim() === '' ? null : roundMoney(Math.max(0, Number(capture.targetSell)));
       const source = `Sammlungsankauf · ${String(collection.title || collection.id)}`;
       const lineKey = `COLLECTION:${String(collection.id)}:${String(observation.id)}`;
       const base = {
@@ -2986,7 +2989,7 @@
         language:collectorNumberLanguage(setCode) || normalizeCardLanguage(candidate.language || product.language), condition, edition,
         productUrl:String(candidate.productUrl || product.productUrl || ''), purchaseDate:String(collection.date || now.slice(0, 10)), receivedDate:now.slice(0, 10),
         source, lotId:`SAMMLUNG:${String(collection.id)}`, importKey:`COLLECTION:${String(collection.id)}`, purchaseLineKey:lineKey,
-        ownership:'business', holdingProfile:'UNKLASSIFIZIERT', longTermHold:false, originalTargetSell:null, targetSell:null,
+        ownership:'business', holdingProfile:'UNKLASSIFIZIERT', longTermHold:false, originalTargetSell:targetSell, targetSell,
         listed:false, listingPrice:0, listingHistory:[], location:'', status:'Im Bestand', costConfirmed:true,movementRecorded:true,
         sourceCollectionPurchaseId:String(collection.id), sourceCollectionPositionId:String(observation.id), sourceCollectionTransferId:transferId,
         sourceCollectionSplit:privateQuantity > 0 && business > 0
@@ -3005,7 +3008,7 @@
       privateQuantityTotal += privateQuantity;privateCostCents += privateLineCostCents;
       line.unitOriginalCostCents = [...component.original];line.unitDirectCostCents = [...component.direct];
       line.businessInventoryIds = createdIds.slice(createdIds.length - business);line.privateRetainedQuantity = privateQuantity;
-      transferPositions.push({observationId:String(observation.id),purchaseLineKey:lineKey,productId,quantity,businessQuantity:business,privateQuantity,businessCostCents:line.unitCostsCents.slice(privateQuantity).reduce((sum,value)=>sum+Number(value||0),0),privateCostCents:privateLineCostCents,inventoryIds:[...line.businessInventoryIds]});
+      transferPositions.push({observationId:String(observation.id),purchaseLineKey:lineKey,productId,quantity,businessQuantity:business,privateQuantity,targetSell,businessCostCents:line.unitCostsCents.slice(privateQuantity).reduce((sum,value)=>sum+Number(value||0),0),privateCostCents:privateLineCostCents,inventoryIds:[...line.businessInventoryIds]});
       if (business > 0) next.movements.push({id:String(makeId()),timestamp:now,type:'Sammlungsankauf / Geschäftsbestand',quantity:business,productId,inventoryIds:[...line.businessInventoryIds],reference:String(collection.title || collection.id),note:`Ankaufposition ${String(observation.id)} · ${name}`,sourceCollectionPurchaseId:String(collection.id),sourceCollectionPositionId:String(observation.id),movementRecorded:true});
     }
     if (businessCostCents + privateCostCents !== totalCents) throw new Error('Geschäftlicher und privater EK ergeben nicht den Gesamt-EK des Ankaufs.');

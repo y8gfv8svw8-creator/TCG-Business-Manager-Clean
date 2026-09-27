@@ -105,6 +105,7 @@
       germanName: text(candidate.germanName),
       englishName: text(candidate.englishName),
       metacardId: text(candidate.metacardId),
+      internalMetacardId: text(candidate.internalMetacardId),
       source: text(candidate.source) || 'manual',
       signal: text(candidate.signal),
       confidence: normalizeConfidence(candidate.confidence),
@@ -137,6 +138,7 @@
     return {
       id: text(candidate.id) || `print-candidate-${productId}-${index}`,
       productId,
+      metacardId: text(candidate.metacardId),
       name: text(candidate.name),
       germanName: text(candidate.germanName),
       englishName: text(candidate.englishName),
@@ -179,6 +181,8 @@
       printId: text(candidate.printId),
       variantId: text(candidate.variantId),
       internalMetacardId: text(candidate.internalMetacardId),
+      cardmarketMetacardId: text(candidate.cardmarketMetacardId),
+      metacardId: text(candidate.metacardId || candidate.cardmarketMetacardId || candidate.internalMetacardId),
       germanName: text(candidate.germanName),
       englishName: text(candidate.englishName),
       setName: text(candidate.setName),
@@ -198,6 +202,65 @@
       exactSetCodeMatch: Boolean(candidate.exactSetCodeMatch),
       verified: Boolean(candidate.verified && cleanProductId(candidate.cardmarketProductId))
     };
+  }
+
+  function uniqueRecognitionMetacard(value = {}) {
+    const recognition = normalizePrintRecognition(value) || {};
+    const candidates = [...(recognition.variantCandidates || []), ...(recognition.referenceCandidates || [])];
+    const groups = new Map();
+    for (const candidate of candidates) {
+      const identity = text(candidate.internalMetacardId || candidate.metacardId || candidate.cardmarketMetacardId);
+      if (!identity) continue;
+      if (!groups.has(identity)) groups.set(identity, []);
+      groups.get(identity).push(candidate);
+    }
+    if (groups.size !== 1) return null;
+    const [identity, rows] = groups.entries().next().value;
+    const germanName = rows.map(row => text(row.germanName)).find(Boolean) || '';
+    const englishName = rows.map(row => text(row.englishName)).find(Boolean) || '';
+    return {
+      metacardId: rows.map(row => text(row.metacardId || row.cardmarketMetacardId || row.internalMetacardId)).find(Boolean) || identity,
+      internalMetacardId: rows.map(row => text(row.internalMetacardId)).find(Boolean) || identity,
+      cardmarketMetacardId: rows.map(row => text(row.cardmarketMetacardId)).find(Boolean) || '',
+      germanName,
+      englishName,
+      name: germanName || englishName,
+      candidates: rows
+    };
+  }
+
+  function applyRecognitionMetacardIdentity(observation = {}, recognition = observation?.printRecognition) {
+    if (!observation || typeof observation !== 'object') return null;
+    const identity = uniqueRecognitionMetacard(recognition || {});
+    if (!identity?.name) return identity;
+    observation.metacardId = identity.metacardId;
+    observation.internalMetacardId = identity.internalMetacardId;
+    observation.cardmarketMetacardId = identity.cardmarketMetacardId;
+    observation.germanName = identity.germanName;
+    observation.englishName = identity.englishName;
+    const protectedName = normalizeConfidence(observation.nameConfidence) === 'confirmed' && text(observation.selectedName);
+    if (!protectedName) observation.selectedName = identity.name;
+    observation.nameCandidates = Array.isArray(observation.nameCandidates) ? observation.nameCandidates : [];
+    const existing = observation.nameCandidates.find(row => text(row.metacardId) === identity.metacardId || (text(row.internalMetacardId) && text(row.internalMetacardId) === identity.internalMetacardId));
+    if (existing) {
+      existing.name = existing.germanName || identity.germanName || existing.englishName || identity.englishName;
+      existing.germanName = existing.germanName || identity.germanName;
+      existing.englishName = existing.englishName || identity.englishName;
+      existing.metacardId = existing.metacardId || identity.metacardId;
+      existing.internalMetacardId = existing.internalMetacardId || identity.internalMetacardId;
+    } else {
+      observation.nameCandidates.push({
+        id: `reference-metacard:${identity.internalMetacardId}`,
+        name: identity.name,
+        germanName: identity.germanName,
+        englishName: identity.englishName,
+        metacardId: identity.metacardId,
+        internalMetacardId: identity.internalMetacardId,
+        source: 'local_print_reference',
+        confidence: 'unknown'
+      });
+    }
+    return identity;
   }
 
   function normalizePrintRecognition(value) {
@@ -299,6 +362,11 @@
       row: text(observation?.row),
       column: text(observation?.column),
       selectedName: text(observation?.selectedName),
+      metacardId: text(observation?.metacardId),
+      internalMetacardId: text(observation?.internalMetacardId),
+      cardmarketMetacardId: text(observation?.cardmarketMetacardId),
+      germanName: text(observation?.germanName),
+      englishName: text(observation?.englishName),
       nameCandidates,
       nameConfidence: normalizeConfidence(observation?.nameConfidence),
       selectedProductId,
@@ -424,7 +492,7 @@
     const linkedPhysicalIds = new Set(visibleObservations.map(row => row.physicalCardId).filter(Boolean));
     const linkedItemIds = new Set(normalized.physicalCards.map(row => row.linkedCollectionItemId).filter(Boolean));
     return {
-      photoCount: normalized.photos.filter(row => row.captureSource !== 'mobile').length,
+      photoCount: normalized.photos.filter(row => !['mobile', 'manual-entry'].includes(row.captureSource)).length,
       observationCount: visibleObservations.length,
       automaticSuggestedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'suggested').length,
       automaticConfirmedCount: visibleObservations.filter(row => row.observationSource === 'automatic' && row.detectionReviewState === 'confirmed').length,
@@ -637,6 +705,8 @@
     normalizeSetCodeSignal,
     normalizeReferenceCandidate,
     normalizePrintRecognition,
+    uniqueRecognitionMetacard,
+    applyRecognitionMetacardIdentity,
     normalizeManualCapture,
     normalizePhoto,
     normalizeObservation,

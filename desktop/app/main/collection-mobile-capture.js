@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const collectionPhotoModel = require('../shared/collection-photo-model');
 
 const text = (value, max = 240) => String(value == null ? '' : value).trim().slice(0, max);
 const productId = value => /^\d+$/.test(text(value, 40)) ? text(value, 40) : '';
@@ -57,6 +58,30 @@ function invalidateEconomicReview(analysis) {
   analysis.economicReview.lastErrors = [];
 }
 
+function resolveMobileSetCodeScan({ ocr = {}, printReference } = {}) {
+  if (!printReference || typeof printReference.validateOcrSetCodeReadings !== 'function' || typeof printReference.resolveCollectionRecognition !== 'function') {
+    throw new Error('Die lokale Print-Referenz ist nicht verfügbar.');
+  }
+  const readings = Array.isArray(ocr.setCodeReadings) ? ocr.setCodeReadings : [];
+  const validation = printReference.validateOcrSetCodeReadings(readings);
+  const acceptedSetCode = validation.accepted ? text(validation.setCode, 40).toUpperCase() : '';
+  const recognition = acceptedSetCode
+    ? printReference.resolveCollectionRecognition({ setCode: acceptedSetCode, setCodeConfidence: validation.confidence })
+    : null;
+  return {
+    ocr: {
+      status: text(validation.status, 80) || 'setcode_unreadable',
+      accepted: Boolean(validation.accepted),
+      setCode: acceptedSetCode,
+      confidence: validation.accepted && Number.isFinite(Number(validation.confidence)) ? Math.max(0, Math.min(100, Number(validation.confidence))) : null,
+      method: text(validation.method, 120),
+      candidates: (Array.isArray(validation.candidates) ? validation.candidates : []).map(value => text(value, 40).toUpperCase()).filter(Boolean),
+      readings: readings.slice(0, 60).map(row => ({ text: text(row?.text, 120), confidence: Math.max(0, Math.min(100, Number(row?.confidence || 0))), variant: text(row?.variant, 120) })).filter(row => row.text)
+    },
+    recognition
+  };
+}
+
 function addMobileCardToState(state = {}, options = {}) {
   const analysisId = text(options.analysisId, 100);
   const sessionId = text(options.sessionId, 100);
@@ -78,6 +103,7 @@ function addMobileCardToState(state = {}, options = {}) {
   if (duplicate) return { observation: duplicate, duplicate: true, analysisId, analysisTitle: text(analysis.title) };
 
   const recognition = options.recognition && typeof options.recognition === 'object' ? options.recognition : { mappingStatus: 'unresolved', resolutionStatus: 'no_reference_match', referenceCandidates: [], variantCandidates: [], rarityOptions: [] };
+  const metacardIdentity = collectionPhotoModel.uniqueRecognitionMetacard(recognition);
   const candidates = referenceCandidates(recognition);
   const rarityOptions = [...new Set((Array.isArray(recognition.rarityOptions) ? recognition.rarityOptions : []).map(value => text(value?.value ?? value, 120)).filter(Boolean))];
   if (rarityOptions.length > 1 && !input.rarity && !input.manualProductId) throw new Error('Bitte zuerst die Rarität auswählen.');
@@ -91,9 +117,9 @@ function addMobileCardToState(state = {}, options = {}) {
   const manualProduct = options.manualProduct || null;
   if (input.manualProductId && (!manualProduct || productId(manualProduct.productId) !== input.manualProductId)) throw new Error('Die manuell gewählte Cardmarket-Karte wurde nicht eindeutig gefunden.');
   const confirmedReference = candidate && safeReferenceCandidate(candidate) ? candidate : null;
-  const confirmedProduct = manualProduct || confirmedReference;
+  const confirmedProduct = manualProduct || confirmedReference || metacardIdentity || {};
   const selectedProductId = productId(manualProduct?.productId || confirmedReference?.cardmarketProductId);
-  const selectedName = text(manualProduct?.germanName || manualProduct?.englishName || confirmedReference?.germanName || confirmedReference?.englishName || candidate?.germanName || candidate?.englishName || 'Unbekannte Karte');
+  const selectedName = text(manualProduct?.germanName || manualProduct?.englishName || confirmedReference?.germanName || confirmedReference?.englishName || candidate?.germanName || candidate?.englishName || metacardIdentity?.name || 'Unbekannte Karte');
   const finalSetCode = text(manualProduct?.setCode || manualProduct?.collectorNumber || input.setCode, 40).toUpperCase();
   const finalRarity = text(manualProduct?.rarity || manualProduct?.variant || confirmedReference?.rarity || candidate?.rarity || input.rarity, 120);
   const selectedVersion = text(confirmedReference?.version || candidate?.version || manualProduct?.inferredVariant || manualProduct?.variant, 80);
@@ -133,7 +159,9 @@ function addMobileCardToState(state = {}, options = {}) {
   const observation = {
     id, analysisId, photoId: mobilePhotoId, boundingBox: { x: 0, y: 0, width: 1, height: 1 }, observationSource: 'mobile', detectionConfidence: 'unknown', detectionScore: null,
     detectionSignals: {}, detectionReviewState: 'manual', row: '', column: '', selectedName,
-    nameCandidates: selectedName === 'Unbekannte Karte' ? [] : [{ id: `${id}:name`, name: selectedName, germanName: text(confirmedProduct?.germanName || candidate?.germanName), englishName: text(confirmedProduct?.englishName || candidate?.englishName), source: manualProduct ? 'mobile_manual_catalog_search' : 'local_print_reference', confidence: selectedProductId ? 'confirmed' : 'unknown' }],
+    metacardId: text(confirmedProduct.metacardId || confirmedProduct.cardmarketMetacardId || confirmedProduct.internalMetacardId), internalMetacardId: text(confirmedProduct.internalMetacardId), cardmarketMetacardId: text(confirmedProduct.cardmarketMetacardId),
+    germanName: text(confirmedProduct.germanName || candidate?.germanName), englishName: text(confirmedProduct.englishName || candidate?.englishName),
+    nameCandidates: selectedName === 'Unbekannte Karte' ? [] : [{ id: `${id}:name`, name: selectedName, germanName: text(confirmedProduct.germanName || candidate?.germanName), englishName: text(confirmedProduct.englishName || candidate?.englishName), metacardId: text(confirmedProduct.metacardId || confirmedProduct.cardmarketMetacardId || confirmedProduct.internalMetacardId), internalMetacardId: text(confirmedProduct.internalMetacardId), source: manualProduct ? 'mobile_manual_catalog_search' : 'local_print_reference', confidence: selectedProductId ? 'confirmed' : 'unknown' }],
     nameConfidence: selectedProductId ? 'confirmed' : 'unknown', selectedProductId, printCandidates: printCandidate ? [printCandidate] : [], printConfidence: selectedProductId ? 'confirmed' : 'unknown',
     recognitionSignals: [`Mobile Erfassung · Setcode ${finalSetCode || 'unbekannt'}`, selectedProductId ? `Cardmarket-Produkt ${selectedProductId} ausdrücklich ausgewählt` : 'Ungeprüft - bitte selbst prüfen'],
     printRecognition: normalizedRecognition,
@@ -141,10 +169,11 @@ function addMobileCardToState(state = {}, options = {}) {
     economicRelevant: false, detailPhotoRequired: false, reviewStatus: selectedProductId ? 'reviewed' : 'unreviewed', physicalCardId: '', linkedCollectionItemId: '',
     sourceMobileSessionId: sessionId, mobileRequestId: input.requestId, createdAt: now, updatedAt: now
   };
+  collectionPhotoModel.applyRecognitionMetacardIdentity(observation, normalizedRecognition);
   invalidateEconomicReview(analysis);
   analysis.photoObservations.push(observation);
   analysis.updatedAt = now;
   return { observation, duplicate: false, analysisId, analysisTitle: text(analysis.title), count: analysis.photoObservations.filter(row => row.detectionReviewState !== 'rejected').length };
 }
 
-module.exports = { normalizeMobileCardInput, referenceCandidates, safeReferenceCandidate, findManualVariant, addMobileCardToState };
+module.exports = { normalizeMobileCardInput, referenceCandidates, safeReferenceCandidate, findManualVariant, resolveMobileSetCodeScan, addMobileCardToState };

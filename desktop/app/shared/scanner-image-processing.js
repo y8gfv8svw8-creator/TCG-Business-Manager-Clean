@@ -2652,6 +2652,31 @@
     };
   }
 
+  async function prepareMobileSetCodeRecognitionPayload(imageDataUrl) {
+    const image = await loadImage(imageDataUrl);
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = image.naturalWidth;
+    sourceCanvas.height = image.naturalHeight;
+    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    sourceContext.drawImage(image, 0, 0);
+    const source = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+    const corners = refinedObservationCorners(source, { boundingBox: { x: 0, y: 0, width: 1, height: 1 }, observationSource: "manual" });
+    if (corners.length !== 4) throw new Error("Das Kartenfoto konnte nicht als einzelne Karte verarbeitet werden.");
+    const rectifiedCard = rectifyObservationCard(source, corners, 0);
+    const passes = setCodeRegionPasses(rectifiedCard, 0);
+    return {
+      imageDataUrl: passes[0]?.imageDataUrl || imageDataUrl,
+      passes,
+      cropInfo: {
+        sourceWidth: source.width,
+        sourceHeight: source.height,
+        perspectiveCorrected: true,
+        setCodeRoiCount: SET_CODE_REGION_LAYOUTS.length,
+        corners: corners.map(point => ({ x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 }))
+      }
+    };
+  }
+
   async function prepareRecognitionPayload(imageDataUrl) {
     const image = await loadImage(imageDataUrl);
     const detectionCanvas = document.createElement("canvas");
@@ -2700,6 +2725,7 @@
     rectifyObservationCard,
     artworkFingerprint,
     prepareCollectionObservationRecognitionPayload,
+    prepareMobileSetCodeRecognitionPayload,
     prepareRecognitionPayload
   });
 });

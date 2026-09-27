@@ -7,7 +7,7 @@ const { TcgDatabase } = require('./database');
 const { DatabaseBackgroundRunner } = require('./database-background-runner');
 const { ScannerServer } = require('./scanner-server');
 const { CollectionCaptureServer } = require('./collection-capture-server');
-const { addMobileCardToState, findManualVariant } = require('./collection-mobile-capture');
+const { addMobileCardToState, findManualVariant, resolveMobileSetCodeScan } = require('./collection-mobile-capture');
 const { CardScannerRecognizer } = require('./card-scanner-recognizer');
 const { CollectionPhotoStore } = require('./collection-photo-store');
 const { parseSpreadsheetFile } = require('./spreadsheet-import-parser');
@@ -77,6 +77,13 @@ const collectionCaptureServer = new CollectionCaptureServer({
       setName: String(variant.setName || ''), setCode: String(variant.setCode || ''), collectorNumber: String(variant.collectorNumber || ''), rarity: String(variant.rarity || ''), variant: String(variant.variant || variant.inferredVariant || ''),
       language: String(variant.language || ''), productUrl: String(variant.productUrl || '')
     }))).filter(row => /^\d+$/.test(row.productId)).slice(0, 40);
+  },
+  onScan: async ({ session, payload }) => {
+    const state = database.loadState().state || {};
+    const analysis = (state.collectionPurchaseAnalyses || []).find(row => String(row.id) === String(session.analysisId));
+    if (!analysis || String(analysis.captureStatus || 'active') !== 'active') throw new Error('Der verbundene Sammlungsankauf ist nicht mehr für die Erfassung geöffnet.');
+    const ocr = await scannerRecognizer.recognize({ imageDataUrl: payload.imageDataUrl, passes: payload.passes });
+    return resolveMobileSetCodeScan({ ocr, printReference: ensurePrintReferenceDatabase() });
   },
   onCreateCard: ({ session, input }) => {
     const loaded = database.loadState(), state = loaded.state || {};
